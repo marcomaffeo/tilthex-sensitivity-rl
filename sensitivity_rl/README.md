@@ -59,18 +59,23 @@ Package/build (optional):
 
 ## Quickstart
 
+### Training
 CPU:
 1) `pixi install`
 2) `pixi run train`
-3) `pixi run analyze -- runs/latest`
-4) `pixi run rollouts -- --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`
 
 CUDA (Linux, CUDA 12):
 1) `pixi install -e cuda`
-2) `pixi run -e cuda python -- -c "import jax; print(jax.devices())"`  (confirm GPU)
+2) `pixi run -e cuda python -c "import jax; print(jax.devices())"`  (confirm GPU)
 3) `pixi run -e cuda train`
-4) `pixi run analyze -- runs/latest`
-5) `pixi run rollouts -- --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`
+
+### Testing
+
+1) `pixi run analyze --run_dirs runs/latest`
+2) `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`
+
+3) `pixi run clean` (deletes all training results)
+
 
 ## Notes
 

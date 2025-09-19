@@ -56,6 +56,9 @@ rollouts = "python sensitivity_rl/rollouts.py"
 # Quick Jacobian/sensitivity checks
 test-sensitivity = "python sensitivity_rl/test_sensitivity.py"
 
+# Deletes all results
+clean = "rm -r ./runs/*"
+
 # Build wheel/sdist into dist/
 build = "python -m build"
 # Install in editable mode

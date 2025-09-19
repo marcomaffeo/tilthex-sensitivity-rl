@@ -23,6 +23,7 @@ Install dependencies:
 
 Install dependencies for the `cuda` env:
 `pixi install -e cuda`
+
 Verify JAX sees your GPU:
 `pixi run -e cuda python -- -c "import jax; print(jax.devices())"`
 

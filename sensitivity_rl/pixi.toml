@@ -46,7 +46,7 @@ cuda = { features = ["cuda12"], solve-group = "default" }
 train = "python sensitivity_rl/ppo.py"
 
 # Analyze run artifacts. Pass additional args after `--`, e.g.:
-#   pixi run analyze -- runs/latest --smooth 21 --compare
+#   pixi run analyze --run_dirs runs/latest --smooth 21 --compare
 analyze = "python sensitivity_rl/analyze_runs.py"
 
 # Generate evaluation rollouts from a trained policy. Example:

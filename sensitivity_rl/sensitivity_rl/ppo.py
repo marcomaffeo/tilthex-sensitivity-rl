@@ -20,6 +20,11 @@ from envs.wrappers import (
     ClipAction,
 )
 
+jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+
 
 class ActorCritic(nn.Module):
     action_dim: int
@@ -32,11 +37,11 @@ class ActorCritic(nn.Module):
         else:
             activation = nn.tanh
         actor_mean = nn.Dense(
-            32, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            32, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
@@ -46,11 +51,11 @@ class ActorCritic(nn.Module):
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
         critic = nn.Dense(
-            32, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(x)
         critic = activation(critic)
         critic = nn.Dense(
-            32, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
         )(critic)
         critic = activation(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
@@ -296,14 +301,14 @@ def make_train(config):
 
 if __name__ == "__main__":
     config = {
-        "LR": 5e-4,
-        "NUM_ENVS": 2048,
-        "NUM_STEPS": 10,
-        "TOTAL_TIMESTEPS": 5e6,
-        "UPDATE_EPOCHS": 4,
-        "NUM_MINIBATCHES": 32,
-        "GAMMA": 0.99,
-        "GAE_LAMBDA": 0.95,
+        "LR": 5e-5,
+        "NUM_ENVS": 1024,
+        "NUM_STEPS": 200,
+        "TOTAL_TIMESTEPS": 1e7,
+        "UPDATE_EPOCHS": 10,
+        "NUM_MINIBATCHES": 64,
+        "GAMMA": 0.95,
+        "GAE_LAMBDA": 0.99,
         "CLIP_EPS": 0.2,
         "ENT_COEF": 0.0,
         "VF_COEF": 0.5,

@@ -214,36 +214,6 @@ def analyze_run(run_dir: Path, out_dir: Optional[Path], smooth: int) -> Path:
         out_path=save_dir / "returns.png",
         smooth_window=smooth,
     )
-    _plot_series(
-        ep_idx,
-        run.episode_lengths,
-        xlabel="Episode",
-        ylabel="Length (steps)",
-        title=f"Episode Lengths ({run.run_dir.name})",
-        out_path=save_dir / "lengths.png",
-        smooth_window=smooth,
-    )
-
-    # Plots vs global step
-    _plot_series(
-        run.episode_steps,
-        run.episode_returns,
-        xlabel="Global step",
-        ylabel="Return",
-        title=f"Returns vs Global Step ({run.run_dir.name})",
-        out_path=save_dir / "returns_vs_steps.png",
-        smooth_window=0,  # smoothing over irregular x is less meaningful
-    )
-    _plot_series(
-        run.episode_steps,
-        run.episode_lengths,
-        xlabel="Global step",
-        ylabel="Length (steps)",
-        title=f"Lengths vs Global Step ({run.run_dir.name})",
-        out_path=save_dir / "lengths_vs_steps.png",
-        smooth_window=0,
-    )
-
     print(f"[analyze] Saved artifacts to: {save_dir}")
     return save_dir
 
@@ -272,38 +242,6 @@ def compare_runs(run_dirs: List[Path], out_dir: Path, smooth: int) -> Path:
         out_path=out_dir / "returns_compare.png",
         smooth_window=smooth,
     )
-    _plot_compare(
-        runs,
-        xs_accessor=lambda r: np.arange(1, r.episode_lengths.size + 1),
-        ys_accessor=lambda r: r.episode_lengths,
-        xlabel="Episode",
-        ylabel="Length (steps)",
-        title="Episode Lengths (per-episode comparison)",
-        out_path=out_dir / "lengths_compare.png",
-        smooth_window=smooth,
-    )
-
-    # Compare by global steps
-    _plot_compare(
-        runs,
-        xs_accessor=lambda r: r.episode_steps,
-        ys_accessor=lambda r: r.episode_returns,
-        xlabel="Global step",
-        ylabel="Return",
-        title="Returns vs Global Step (comparison)",
-        out_path=out_dir / "returns_vs_steps_compare.png",
-        smooth_window=0,
-    )
-    _plot_compare(
-        runs,
-        xs_accessor=lambda r: r.episode_steps,
-        ys_accessor=lambda r: r.episode_lengths,
-        xlabel="Global step",
-        ylabel="Length (steps)",
-        title="Lengths vs Global Step (comparison)",
-        out_path=out_dir / "lengths_vs_steps_compare.png",
-        smooth_window=0,
-    )
     print(f"[compare] Saved comparison artifacts to: {out_dir}")
     return out_dir
 
@@ -311,7 +249,7 @@ def compare_runs(run_dirs: List[Path], out_dir: Path, smooth: int) -> Path:
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Analyze PPO JAX runs and generate plots/CSVs.")
     p.add_argument(
-        "run_dirs",
+        "--run_dirs",
         nargs="+",
         default=["runs/latest"],
         help="One or more run directories (each containing metrics_raw.npz and config.json)",

@@ -88,8 +88,6 @@ class Pendulum(EnvSensitivity):
         #     reward
         # )
 
-        reward = jax.lax.select(reward < -1e2, jnp.array([-1e2]), reward)
-
         reward = reward.squeeze()
 
         state_next = self.step_dynamics(key, state, action, params)

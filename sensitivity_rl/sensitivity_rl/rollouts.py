@@ -10,8 +10,7 @@ This script:
 - Builds an evaluation environment that mirrors training wrappers (incl. normalization).
 - Generates multiple episodes (rollouts) from random initial conditions
   by using different PRNG keys for env.reset.
-- Saves each trajectory (obs, action, reward, value, theta, theta_dot) as an .npz
-  and writes a summary CSV, under <run_dir>/rollouts/<timestamp>/.
+  Writes a summary CSV, under <run_dir>/rollouts/<timestamp>/.
 
 Usage:
   python -m sensitivity_rl.sensitivity_rl.rollouts \
@@ -199,6 +198,7 @@ def _plot_all_trajectories(
 
     fig.suptitle("Trajectories")
     fig.savefig(out_dir / f"trajectories.{fmt}", dpi=150)
+    plt.show()
     plt.close(fig)
 
 def _rollout_batch(
@@ -251,7 +251,7 @@ def _rollout_batch(
     steps = 0
 
     rng = rng_key
-    while steps < max_steps and not bool(done_mask.all()):
+    while steps < (max_steps-1) and not bool(done_mask.all()):
         # Policy forward
         pi, value = model.apply(params, obs)
         if deterministic:
@@ -311,15 +311,15 @@ def _rollout_batch(
         theta_arr = np.array(per_env_theta[i], dtype=float)
         theta_dot_arr = np.array(per_env_theta_dot[i], dtype=float)
 
-        np.savez_compressed(
-            traj_path,
-            obs=obs_arr,
-            action=act_arr,
-            reward=rew_arr,
-            value=val_arr,
-            theta=theta_arr,
-            theta_dot=theta_dot_arr,
-        )
+        # np.savez_compressed(
+        #     traj_path,
+        #     obs=obs_arr,
+        #     action=act_arr,
+        #     reward=rew_arr,
+        #     value=val_arr,
+        #     theta=theta_arr,
+        #     theta_dot=theta_dot_arr,
+        # )
         # Accumulate for combined plot
         all_theta.append(theta_arr)
         all_theta_dot.append(theta_dot_arr)
@@ -418,7 +418,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             traj_id, ep_ret, ep_len, th0, thd0, thN, thdN = s
             f.write(f"{traj_id},{ep_ret},{ep_len},{th0},{thd0},{thN},{thdN}\n")
 
-    if rcfg.plot and len(all_theta) > 0:
+    if rcfg.plot:
         _plot_all_trajectories(rollouts_dir, all_theta, all_theta_dot, all_action, all_reward, all_value, rcfg.plot_format)
     print(f"[rollouts] Done. Saved {saved_total} trajectories to {rollouts_dir}")
 

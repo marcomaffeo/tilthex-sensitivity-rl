@@ -1,15 +1,5 @@
 # sensitivity-rl
 
-PPO in JAX with a pendulum environment and tools for analyzing training and running large batches of rollouts. This repository uses Pixi for environment management and tasks, with a CPU-first default and an optional CUDA-enabled environment.
-
-## Contents
-
-- PPO training (`train`) that writes artifacts to `runs/latest`
-- Post-hoc analysis (`analyze`) and comparisons across runs
-- Batched rollouts from saved models (`rollouts`)
-- Sensitivity/Jacobian checks for the environment (`test-sensitivity`)
-- Optional packaging tasks (`build`, `install`)
-
 ## Requirements
 
 Install `pixi` following [https://pixi.sh/latest/installation/](https://pixi.sh/latest/installation/)
@@ -63,9 +53,6 @@ Pixi tasks are defined in `pixi.toml`. Use `pixi run <task>` to execute them, op
 - Package/build (optional):
   - Build wheel/sdist: `pixi run build`
   - Editable install of this package: `pixi run install`
-
-
-### test-sensitivity
 
 
 

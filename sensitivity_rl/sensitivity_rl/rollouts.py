@@ -102,7 +102,7 @@ def _build_env_from_config(config: Dict) -> Tuple[GymnaxWrapper, object]:
     env = VecEnv(env)
     # Apply normalization wrappers if used during training
     if bool(config.get("NORMALIZE_ENV", False)):
-        env = NormalizeVecObservation(env)
+        # env = NormalizeVecObservation(env)
         env = NormalizeVecReward(env, float(config.get("GAMMA", 0.99)))
     return env, env_params
 

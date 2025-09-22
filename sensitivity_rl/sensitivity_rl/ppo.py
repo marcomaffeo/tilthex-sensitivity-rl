@@ -4,7 +4,7 @@ import flax.linen as nn
 import numpy as np
 import optax
 from flax.linen.initializers import constant, orthogonal
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 from flax.training.train_state import TrainState
 import distrax
 from pathlib import Path
@@ -18,6 +18,7 @@ from envs.wrappers import (
     NormalizeVecObservation,
     NormalizeVecReward,
     ClipAction,
+    SensitivityWrapper,
 )
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
@@ -65,6 +66,83 @@ class ActorCritic(nn.Module):
         return pi, jnp.squeeze(critic, axis=-1)
 
 
+def load_params_from_file(params_path: str):
+    """Load network parameters from a msgpack file.
+    
+    Args:
+        params_path: Path to the params.msgpack file
+        
+    Returns:
+        Loaded parameters dictionary
+        
+    Raises:
+        FileNotFoundError: If the params file doesn't exist
+        ValueError: If the params file is corrupted or invalid
+    """
+    params_file = Path(params_path)
+    if not params_file.exists():
+        raise FileNotFoundError(f"Parameters file not found: {params_path}")
+    
+    try:
+        params_bytes = params_file.read_bytes()
+        params = serialization.from_bytes(None, params_bytes)
+        return params
+    except Exception as e:
+        raise ValueError(f"Failed to load parameters from {params_path}: {e}")
+
+
+def validate_params_compatibility(loaded_params, expected_params):
+    """Validate that loaded parameters are compatible with the expected network structure.
+    
+    Args:
+        loaded_params: Parameters loaded from file
+        expected_params: Parameters from fresh network initialization
+        
+    Returns:
+        bool: True if compatible, False otherwise
+    """
+    try:
+        # Check if parameter structure matches
+        def check_structure(loaded, expected, path=""):
+            # For JAX arrays, we only care about shapes, not exact types
+            # (since one might be a tracer and the other a concrete array)
+            if isinstance(loaded, dict) and isinstance(expected, dict):
+                if set(loaded.keys()) != set(expected.keys()):
+                    print(f"Key mismatch at {path}: {set(loaded.keys())} vs {set(expected.keys())}")
+                    return False
+                for key in loaded.keys():
+                    if not check_structure(loaded[key], expected[key], f"{path}.{key}"):
+                        return False
+            elif hasattr(loaded, 'shape') and hasattr(expected, 'shape'):
+                # Both have shapes - compare them
+                if loaded.shape != expected.shape:
+                    print(f"Shape mismatch at {path}: {loaded.shape} vs {expected.shape}")
+                    return False
+            elif isinstance(loaded, (int, float)) and isinstance(expected, (int, float)):
+                # Both are scalars - this is fine
+                pass
+            else:
+                # Check if both are array-like but different types (tracer vs concrete)
+                if (hasattr(loaded, 'shape') or hasattr(expected, 'shape')):
+                    # One has shape, other doesn't - incompatible
+                    if not (hasattr(loaded, 'shape') and hasattr(expected, 'shape')):
+                        print(f"Type incompatibility at {path}: one is array-like, other is not")
+                        return False
+                else:
+                    # Neither has shape, check if types are fundamentally different
+                    if type(loaded).__name__ != type(expected).__name__ and \
+                       not (isinstance(loaded, (int, float)) and isinstance(expected, (int, float))):
+                        print(f"Type mismatch at {path}: {type(loaded)} vs {type(expected)}")
+                        return False
+            
+            return True
+        
+        return check_structure(loaded_params, expected_params)
+    except Exception as e:
+        print(f"Error during parameter validation: {e}")
+        return False
+
+
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -87,9 +165,11 @@ def make_train(config):
     env = GymnaxWrapper(env)
     env = LogWrapper(env)
     env = ClipAction(env)
+    if config["SENSITIVITY"]:
+        env = SensitivityWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        env = NormalizeVecObservation(env)
+        # env = NormalizeVecObservation(env)
         env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
@@ -107,7 +187,29 @@ def make_train(config):
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
-        network_params = network.init(_rng, init_x)
+        
+        # Load parameters from file if specified, otherwise initialize randomly
+        if config.get("LOAD_PARAMS_PATH"):
+            print(f"Loading parameters from: {config['LOAD_PARAMS_PATH']}")
+            try:
+                loaded_params = load_params_from_file(config["LOAD_PARAMS_PATH"])
+
+                # We expect a nested dict with 'params' as the top-level key
+                if isinstance(loaded_params, dict) and 'params' in loaded_params:
+                    network_params = loaded_params
+                    print("Successfully loaded pre-trained parameters")
+                else:
+                    print("Warning: Invalid parameter structure in loaded file")
+                    print("Falling back to random initialization")
+                    network_params = network.init(_rng, init_x)
+                    
+            except (FileNotFoundError, ValueError) as e:
+                print(f"Warning: {e}")
+                print("Falling back to random initialization")
+                network_params = network.init(_rng, init_x)
+        else:
+            network_params = network.init(_rng, init_x)
+
         if config["ANNEAL_LR"]:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -123,6 +225,8 @@ def make_train(config):
             params=network_params,
             tx=tx,
         )
+        if config["SENSITIVITY"]:
+            env.set_actor(network, network_params)
 
         # INIT ENV
         rng, _rng = jax.random.split(rng)
@@ -140,6 +244,9 @@ def make_train(config):
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
+
+                if config["SENSITIVITY"]:
+                    env.update_network_params(train_state.params)
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
@@ -317,6 +424,8 @@ if __name__ == "__main__":
         "ANNEAL_LR": False,
         "NORMALIZE_ENV": True,
         "DEBUG": True,
+        "SENSITIVITY": False,
+        # "LOAD_PARAMS_PATH": "runs/latest/params.msgpack",  # Uncomment to load pre-trained parameters
     }
     rng = jax.random.PRNGKey(30)
     train_jit = jax.jit(make_train(config))

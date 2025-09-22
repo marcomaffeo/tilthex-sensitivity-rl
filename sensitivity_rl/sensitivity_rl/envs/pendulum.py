@@ -15,6 +15,8 @@ from gymnax.environments import environment, spaces
 
 from envs.base import EnvSensitivity, Sensitivity
 
+from utils import angle_normalize
+
 @struct.dataclass
 class ModelState():
     theta: jax.Array
@@ -25,9 +27,11 @@ class ModelState():
 @struct.dataclass
 class EnvState(environment.EnvState):
     state: ModelState
-    sensitivity: Sensitivity
     last_u: jax.Array # Only needed for rendering
     time: int
+    # provide proxy access to regular attributes of wrapped object
+    def __getattr__(self, name):
+        return getattr(self.state, name)
 
 
 @struct.dataclass
@@ -80,23 +84,15 @@ class Pendulum(EnvSensitivity):
             angle_normalize(state.theta) ** 2
             + 0.1 * state.theta_dot**2
             + 0.001 * (u**2)
-            #+ 0.1*jnp.linalg.matrix_norm(env_state.sensitivity.action, ord='fro')
         )
-        # reward = jax.lax.select(
-        #     jnp.abs(angle_normalize(state.theta) < 0.1),
-        #     reward - 0.1*jnp.linalg.matrix_norm(env_state.sensitivity.state, ord='fro'),
-        #     reward
-        # )
+
 
         reward = reward.squeeze()
 
         state_next = self.step_dynamics(key, state, action, params)
 
-        sens_next = self.step_sensitivity(key, env_state, action, params)
-
         env_state = EnvState(
             state=state_next,
-            sensitivity=sens_next, # Placeholder, to be implemented
             last_u=u.reshape(),
             time=env_state.time + 1,
         )
@@ -146,7 +142,9 @@ class Pendulum(EnvSensitivity):
         state = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
         state = ModelState(theta=state[0], theta_dot=state[1])
         env_state = EnvState(
-            state=state, sensitivity=self.default_sensitivity(), last_u=jnp.array(0.0), time=0
+            state=state, 
+            last_u=jnp.array(0.0), 
+            time=0
         )
         return self.get_obs(state), env_state
 
@@ -212,7 +210,3 @@ class Pendulum(EnvSensitivity):
             }
         )
 
-
-def angle_normalize(x: jax.Array) -> jax.Array:
-    """Normalize the angle - radians."""
-    return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi

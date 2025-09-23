@@ -4,7 +4,6 @@ import jax.flatten_util
 import chex
 import numpy as np
 from flax import struct
-from functools import partial
 from typing import Optional, Tuple, Union
 from gymnax.environments import environment, spaces
 from .base import Sensitivity, EnvSensitivity
@@ -39,7 +38,6 @@ class FlattenObservationWrapper(GymnaxWrapper):
             dtype=self._env.observation_space(params).dtype,
         )
 
-    @partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
@@ -47,7 +45,6 @@ class FlattenObservationWrapper(GymnaxWrapper):
         obs = jnp.reshape(obs, (-1,))
         return obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
     def step(
         self,
         key: chex.PRNGKey,
@@ -80,7 +77,6 @@ class LogWrapper(GymnaxWrapper):
     def __init__(self, env: environment.Environment):
         super().__init__(env)
 
-    @partial(jax.jit, static_argnums=(0,))
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
@@ -88,7 +84,6 @@ class LogWrapper(GymnaxWrapper):
         state = LogEnvState(env_state, 0, 0, 0, 0, 0)
         return obs, state
 
-    @partial(jax.jit, static_argnums=(0,))
     def step(
             self,
             key: chex.PRNGKey,
@@ -327,8 +322,8 @@ class SensitivityWrapper(GymnaxWrapper):
     def update_network_params(self, network_params):
         self.network_params = network_params
 
-    def compute_action(self, rng, obs):
-        pi, _ = self._actor.apply(self.network_params, obs)
+    def compute_action(self, rng, obs, network_params):
+        pi, _ = self._actor.apply(network_params, obs)
         action = pi.sample(seed=rng)
         return action
 
@@ -351,7 +346,7 @@ class SensitivityWrapper(GymnaxWrapper):
         # Unpack sensitivities
         sens = env_state.sensitivity
         sens_s = sens.state  # ds/dp
-        dmu_dobs = self.action_gains(key, obs)  # dmu/dobs
+        dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
@@ -367,8 +362,8 @@ class SensitivityWrapper(GymnaxWrapper):
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
         sensitivity = self._env.default_sensitivity()
-        env_state = SensitivityEnvState(env_state=env_state, sensitivity=sensitivity)
-        return obs, env_state
+        state = SensitivityEnvState(env_state=env_state, sensitivity=sensitivity)
+        return obs, state
 
     def step(
         self,
@@ -386,7 +381,7 @@ class SensitivityWrapper(GymnaxWrapper):
 
         reward = jax.lax.select(
             jnp.abs(angle_normalize(state.theta) < 0.1),
-            reward - 0.01*jnp.linalg.matrix_norm(sensitivity.state, ord='fro'),
+            reward - 1e-1*jnp.linalg.matrix_norm(sensitivity.state, ord='fro'),
             reward
         )
 

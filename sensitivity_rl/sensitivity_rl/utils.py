@@ -1,6 +1,77 @@
 import jax
 import jax.numpy as jnp
+from pathlib import Path
+from flax import serialization
 
 def angle_normalize(x: jax.Array) -> jax.Array:
     """Normalize the angle - radians."""
     return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
+
+
+def load_actor_params_from_file(params_path: str):
+    """Load actor parameters from a msgpack file and merge with fresh critic params.
+    
+    Args:
+        params_path: Path to the params.msgpack file
+        
+    Returns:
+        Loaded parameters dictionary containing only actor parameters
+        
+    Raises:
+        FileNotFoundError: If the params file doesn't exist
+        ValueError: If the params file is corrupted or invalid
+    """
+    params_file = Path(params_path)
+    if not params_file.exists():
+        raise FileNotFoundError(f"Parameters file not found: {params_path}")
+    
+    try:
+        params_bytes = params_file.read_bytes()
+        full_params = serialization.from_bytes(None, params_bytes)
+        
+        if not (isinstance(full_params, dict) and 'params' in full_params):
+            raise ValueError("Invalid parameter structure: expected dict with 'params' key")
+        
+        # Extract only actor parameters
+        all_params = full_params['params']
+        actor_params = {}
+        
+        actor_layer_names = ['actor_dense1', 'actor_dense2', 'actor_output', 'actor_log_std']
+        
+        for layer_name in actor_layer_names:
+            if layer_name in all_params:
+                actor_params[layer_name] = all_params[layer_name]
+                print(f"Loaded actor layer: {layer_name}")
+            else:
+                print(f"Warning: Actor layer {layer_name} not found in saved parameters")
+        
+        return {'params': actor_params}
+        
+    except Exception as e:
+        raise ValueError(f"Failed to load parameters from {params_path}: {e}")
+
+
+def merge_actor_params_with_fresh_critic(actor_params, fresh_params):
+    """Merge loaded actor parameters with freshly initialized critic parameters.
+    
+    Args:
+        actor_params: Dictionary containing only actor parameters
+        fresh_params: Freshly initialized full network parameters
+        
+    Returns:
+        Merged parameters dictionary
+    """
+    merged_params = fresh_params.copy()
+    
+    if 'params' in actor_params and 'params' in fresh_params:
+        # Start with fresh parameters
+        merged_layer_params = fresh_params['params'].copy()
+        
+        # Override with loaded actor parameters
+        for layer_name, layer_params in actor_params['params'].items():
+            if layer_name.startswith('actor_'):
+                merged_layer_params[layer_name] = layer_params
+        
+        merged_params['params'] = merged_layer_params
+    
+    return merged_params

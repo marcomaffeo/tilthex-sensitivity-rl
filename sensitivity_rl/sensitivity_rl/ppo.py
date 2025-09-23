@@ -20,6 +20,7 @@ from envs.wrappers import (
     ClipAction,
     SensitivityWrapper,
 )
+from utils import load_actor_params_from_file, merge_actor_params_with_fresh_critic
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
@@ -37,110 +38,40 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
+            
+        # Actor network with explicit names
         actor_mean = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+            name="actor_dense1"
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+            name="actor_dense2"
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0)
+            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
+            name="actor_output"
         )(actor_mean)
-        actor_logtstd = self.param("log_std", nn.initializers.zeros, (self.action_dim,))
+        actor_logtstd = self.param("actor_log_std", nn.initializers.zeros, (self.action_dim,))
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
+        # Critic network with explicit names
         critic = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+            name="critic_dense1"
         )(x)
         critic = activation(critic)
         critic = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0)
+            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
+            name="critic_dense2"
         )(critic)
         critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(
-            critic
-        )
+        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0),
+            name="critic_output")(critic)
 
         return pi, jnp.squeeze(critic, axis=-1)
-
-
-def load_params_from_file(params_path: str):
-    """Load network parameters from a msgpack file.
-    
-    Args:
-        params_path: Path to the params.msgpack file
-        
-    Returns:
-        Loaded parameters dictionary
-        
-    Raises:
-        FileNotFoundError: If the params file doesn't exist
-        ValueError: If the params file is corrupted or invalid
-    """
-    params_file = Path(params_path)
-    if not params_file.exists():
-        raise FileNotFoundError(f"Parameters file not found: {params_path}")
-    
-    try:
-        params_bytes = params_file.read_bytes()
-        params = serialization.from_bytes(None, params_bytes)
-        return params
-    except Exception as e:
-        raise ValueError(f"Failed to load parameters from {params_path}: {e}")
-
-
-def validate_params_compatibility(loaded_params, expected_params):
-    """Validate that loaded parameters are compatible with the expected network structure.
-    
-    Args:
-        loaded_params: Parameters loaded from file
-        expected_params: Parameters from fresh network initialization
-        
-    Returns:
-        bool: True if compatible, False otherwise
-    """
-    try:
-        # Check if parameter structure matches
-        def check_structure(loaded, expected, path=""):
-            # For JAX arrays, we only care about shapes, not exact types
-            # (since one might be a tracer and the other a concrete array)
-            if isinstance(loaded, dict) and isinstance(expected, dict):
-                if set(loaded.keys()) != set(expected.keys()):
-                    print(f"Key mismatch at {path}: {set(loaded.keys())} vs {set(expected.keys())}")
-                    return False
-                for key in loaded.keys():
-                    if not check_structure(loaded[key], expected[key], f"{path}.{key}"):
-                        return False
-            elif hasattr(loaded, 'shape') and hasattr(expected, 'shape'):
-                # Both have shapes - compare them
-                if loaded.shape != expected.shape:
-                    print(f"Shape mismatch at {path}: {loaded.shape} vs {expected.shape}")
-                    return False
-            elif isinstance(loaded, (int, float)) and isinstance(expected, (int, float)):
-                # Both are scalars - this is fine
-                pass
-            else:
-                # Check if both are array-like but different types (tracer vs concrete)
-                if (hasattr(loaded, 'shape') or hasattr(expected, 'shape')):
-                    # One has shape, other doesn't - incompatible
-                    if not (hasattr(loaded, 'shape') and hasattr(expected, 'shape')):
-                        print(f"Type incompatibility at {path}: one is array-like, other is not")
-                        return False
-                else:
-                    # Neither has shape, check if types are fundamentally different
-                    if type(loaded).__name__ != type(expected).__name__ and \
-                       not (isinstance(loaded, (int, float)) and isinstance(expected, (int, float))):
-                        print(f"Type mismatch at {path}: {type(loaded)} vs {type(expected)}")
-                        return False
-            
-            return True
-        
-        return check_structure(loaded_params, expected_params)
-    except Exception as e:
-        print(f"Error during parameter validation: {e}")
-        return False
 
 
 class Transition(NamedTuple):
@@ -163,10 +94,10 @@ def make_train(config):
     env = Pendulum()
     env_params = env.default_params
     env = GymnaxWrapper(env)
-    env = LogWrapper(env)
     env = ClipAction(env)
     if config["SENSITIVITY"]:
         env = SensitivityWrapper(env)
+    env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
         # env = NormalizeVecObservation(env)
@@ -188,24 +119,25 @@ def make_train(config):
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
         
-        # Load parameters from file if specified, otherwise initialize randomly
-        if config.get("LOAD_PARAMS_PATH"):
-            print(f"Loading parameters from: {config['LOAD_PARAMS_PATH']}")
+        # Load actor parameters from file if specified, otherwise initialize randomly
+        if config.get("LOAD_ACTOR_PARAMS_PATH"):
+            print(f"Loading actor parameters from: {config['LOAD_ACTOR_PARAMS_PATH']}")
+            print("Critic parameters will be randomly initialized")
+            
             try:
-                loaded_params = load_params_from_file(config["LOAD_PARAMS_PATH"])
-
-                # We expect a nested dict with 'params' as the top-level key
-                if isinstance(loaded_params, dict) and 'params' in loaded_params:
-                    network_params = loaded_params
-                    print("Successfully loaded pre-trained parameters")
-                else:
-                    print("Warning: Invalid parameter structure in loaded file")
-                    print("Falling back to random initialization")
-                    network_params = network.init(_rng, init_x)
+                # Always initialize fresh parameters first
+                fresh_params = network.init(_rng, init_x)
+                
+                # Load only actor parameters
+                actor_params = load_actor_params_from_file(config["LOAD_ACTOR_PARAMS_PATH"])
+                
+                # Merge actor params with fresh critic params
+                network_params = merge_actor_params_with_fresh_critic(actor_params, fresh_params)
+                print("Successfully loaded actor parameters (critic randomly initialized)")
                     
             except (FileNotFoundError, ValueError) as e:
                 print(f"Warning: {e}")
-                print("Falling back to random initialization")
+                print("Falling back to random initialization for all parameters")
                 network_params = network.init(_rng, init_x)
         else:
             network_params = network.init(_rng, init_x)
@@ -235,6 +167,12 @@ def make_train(config):
 
         # TRAIN LOOP
         def _update_step(runner_state, unused):
+
+            if config["SENSITIVITY"]:
+                train_state, env_state, last_obs, rng = runner_state
+                env.update_network_params(train_state.params)
+                runner_state = (train_state, env_state, last_obs, rng)
+
             # COLLECT TRAJECTORIES
             def _env_step(runner_state, unused):
                 train_state, env_state, last_obs, rng = runner_state
@@ -244,9 +182,6 @@ def make_train(config):
                 pi, value = network.apply(train_state.params, last_obs)
                 action = pi.sample(seed=_rng)
                 log_prob = pi.log_prob(action)
-
-                if config["SENSITIVITY"]:
-                    env.update_network_params(train_state.params)
 
                 # STEP ENV
                 rng, _rng = jax.random.split(rng)
@@ -425,7 +360,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": False,
-        # "LOAD_PARAMS_PATH": "runs/latest/params.msgpack",  # Uncomment to load pre-trained parameters
+        # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
     rng = jax.random.PRNGKey(30)
     train_jit = jax.jit(make_train(config))

@@ -13,7 +13,7 @@ from flax import struct
 
 from gymnax.environments import environment, spaces
 
-from envs.base import EnvSensitivity, Sensitivity
+from envs.base import Sensitivity
 
 from utils import angle_normalize
 
@@ -21,8 +21,6 @@ from utils import angle_normalize
 class ModelState():
     theta: jax.Array
     theta_dot: jax.Array
-
-
 
 @struct.dataclass
 class EnvState(environment.EnvState):
@@ -45,7 +43,7 @@ class EnvParams(environment.EnvParams):
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
 
 
-class Pendulum(EnvSensitivity):
+class Pendulum(environment.Environment):
     """JAX Compatible version of Pendulum-v0 OpenAI gym environment."""
     def __init__(self):
         self.state_dim = 2
@@ -59,13 +57,6 @@ class Pendulum(EnvSensitivity):
         """Default environment parameters for Pendulum-v0."""
         return EnvParams()
 
-    def default_sensitivity(self) -> Sensitivity:
-        """Default sensitivity parameters."""
-        return Sensitivity(
-            state=jnp.zeros((self.state_dim, self.param_dim)), # ds/dp
-            action=jnp.zeros((self.action_dim, self.param_dim )), # du/dp
-            policy_gains=jnp.zeros((self.action_dim, self.obs_dim)), # dmu/dobs
-        )
 
     def step_env(
         self,
@@ -99,8 +90,8 @@ class Pendulum(EnvSensitivity):
 
         done = self.is_terminal(env_state, params)
         return (
-            jax.lax.stop_gradient(self.get_obs(state)),
-            jax.lax.stop_gradient(env_state),
+            self.get_obs(state),
+            env_state,
             reward,
             done,
             {"discount": self.discount(env_state, params)},

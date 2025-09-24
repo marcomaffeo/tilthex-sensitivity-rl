@@ -2,11 +2,26 @@ import jax
 import jax.numpy as jnp
 from pathlib import Path
 from flax import serialization
+from envs.base import Sensitivity
+
+
+def default_sensitivity(env) -> Sensitivity:
+        """Default sensitivity parameters."""
+        return Sensitivity(
+            state=jnp.zeros((env.state_dim, env.param_dim)), # ds/dp
+            action=jnp.zeros((env.action_dim, env.param_dim )), # du/dp
+            policy_gains=jnp.zeros((env.action_dim, env.obs_dim)), # dmu/dobs
+        )
 
 def angle_normalize(x: jax.Array) -> jax.Array:
     """Normalize the angle - radians."""
     return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
 
+def normalize(a, a_min, a_max):
+    """
+    Maps input a from [a_min, a_max] to [-1, 1]
+    """
+    return 2 * (a - a_min) / (a_max - a_min) - 1
 
 def load_actor_params_from_file(params_path: str):
     """Load actor parameters from a msgpack file and merge with fresh critic params.

@@ -15,10 +15,10 @@ from envs.wrappers import (
     GymnaxWrapper,
     LogWrapper,
     VecEnv,
-    NormalizeVecObservation,
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
+    MinMaxObservationWrapper
 )
 from utils import load_actor_params_from_file, merge_actor_params_with_fresh_critic
 
@@ -95,12 +95,12 @@ def make_train(config):
     env_params = env.default_params
     env = GymnaxWrapper(env)
     env = ClipAction(env)
+    # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
         env = SensitivityWrapper(env)
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        # env = NormalizeVecObservation(env)
         env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
@@ -189,6 +189,8 @@ def make_train(config):
                 obsv, env_state, reward, done, info = env.step(
                     rng_step, env_state, action, env_params
                 )
+                obsv = jax.lax.stop_gradient(obsv)
+                env_state = jax.lax.stop_gradient(env_state)
                 transition = Transition(
                     done, action, value, reward, log_prob, last_obs, info
                 )

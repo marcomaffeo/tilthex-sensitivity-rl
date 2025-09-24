@@ -25,7 +25,7 @@ Install dependencies for the `cuda` env:
 `pixi install -e cuda`
 
 Verify JAX sees your GPU:
-`pixi run -e cuda python -- -c "import jax; print(jax.devices())"`
+`pixi run -e cuda python -c "import jax; print(jax.devices())"`
 
 Notes:
 - The CUDA wheels typically bundle the necessary CUDA runtime components; you still need a compatible NVIDIA driver on the host.
@@ -40,9 +40,9 @@ Train PPO (writes latest artifacts to `runs/latest`):
 - CUDA: `pixi run -e cuda train`
 
 Analyze a run (generate plots/CSV/summary):
-- `pixi run analyze -- runs/latest`
-- Add smoothing: `pixi run analyze -- runs/latest --smooth 21`
-- Compare multiple runs: `pixi run analyze -- runs/ppo_* --compare --out_dir runs/compare`
+- `pixi run analyze --run_dirs runs/latest`
+- Add smoothing: `pixi run analyze --run_dirs runs/latest --smooth 21`
+- Compare multiple runs: `pixi run analyze --run_dirs runs/ppo_* --compare --out_dir runs/compare`
 
 Generate rollouts from a saved model:
 - `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`

@@ -8,6 +8,7 @@ platforms = ["osx-arm64", "linux-64"]
 
 [dependencies]
 python = ">=3.10,<3.15"
+tensorboard = "*"
 numpy = "*"
 matplotlib = "*"
 python-build = "*"
@@ -17,6 +18,7 @@ pip = "*"
 [pypi-dependencies]
 jax = ">=0.6.0, <=0.7.2"
 distrax = "*"
+torch = ">=2.0.0"
 gymnax = "*"
 flax = "*"
 optax = "*"

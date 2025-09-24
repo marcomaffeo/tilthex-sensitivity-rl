@@ -533,7 +533,7 @@ if __name__ == "__main__":
         "LR": 5e-5,
         "NUM_ENVS": 1048,
         "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 10e7,
+        "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
@@ -564,11 +564,6 @@ if __name__ == "__main__":
 
     # tensorboard writer
     writer = SummaryWriter(f"{run_dir}")
-    writer.add_text(
-        "hyperparameters",
-        "|param|value|\n|-|-|\n%s"
-        % ("\n".join([f"|{key}|{value}|" for key, value in config.items()])),
-    )
 
     train_jit = jax.jit(make_train(config, writer))
     # train_jit = make_train(config, writer)
@@ -599,10 +594,26 @@ if __name__ == "__main__":
     ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
     done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
     ep_returns = ret[done]
+
+    # Prepare metrics for hparams logging
+    hparam_dict = {
+        k: v
+        for k, v in config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+    metric_dict = {}
     if ep_returns.size > 0:
+        metric_dict = {
+            "hparam/final_avg_return": float(ep_returns.mean()),
+            "hparam/final_max_return": float(ep_returns.max()),
+            "hparam/final_episodes": float(ep_returns.size),
+        }
         print(
             f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
         )
+
+    # Log hyperparameters with final metrics
+    writer.add_hparams(hparam_dict, metric_dict)
 
     # close tensorboard writer
     writer.close()

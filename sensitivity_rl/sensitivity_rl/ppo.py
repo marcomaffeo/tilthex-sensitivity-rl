@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import flax.linen as nn
 import numpy as np
+from typing import Dict
 import optax
 from flax.linen.initializers import constant, orthogonal
 from typing import NamedTuple, Optional
@@ -11,6 +12,7 @@ from pathlib import Path
 from datetime import datetime
 from flax import serialization
 from envs import Pendulum
+from gymnax.environments import environment
 from envs.wrappers import (
     GymnaxWrapper,
     LogWrapper,
@@ -20,12 +22,25 @@ from envs.wrappers import (
     ClipAction,
     SensitivityWrapper,
 )
-from utils import load_actor_params_from_file, merge_actor_params_with_fresh_critic
+from utils import (
+    load_actor_params_from_file,
+    merge_actor_params_with_fresh_critic,
+)
+from torch.utils.tensorboard import SummaryWriter
+
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
 jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-jax.config.update("jax_persistent_cache_enable_xla_caches", "xla_gpu_per_fusion_autotune_cache_dir")
+jax.config.update(
+    "jax_persistent_cache_enable_xla_caches",
+    "xla_gpu_per_fusion_autotune_cache_dir",
+)
+
+
+envs: Dict[str, environment.Environment] = {
+    "pendulum": Pendulum,
+}
 
 
 class ActorCritic(nn.Module):
@@ -38,38 +53,54 @@ class ActorCritic(nn.Module):
             activation = nn.relu
         else:
             activation = nn.tanh
-            
+
         # Actor network with explicit names
         actor_mean = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
-            name="actor_dense1"
+            128,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+            name="actor_dense1",
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
-            name="actor_dense2"
+            128,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+            name="actor_dense2",
         )(actor_mean)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0),
-            name="actor_output"
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="actor_output",
         )(actor_mean)
-        actor_logtstd = self.param("actor_log_std", nn.initializers.zeros, (self.action_dim,))
+        actor_logtstd = self.param(
+            "actor_log_std", nn.initializers.zeros, (self.action_dim,)
+        )
         pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
         # Critic network with explicit names
         critic = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
-            name="critic_dense1"
+            128,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+            name="critic_dense1",
         )(x)
         critic = activation(critic)
         critic = nn.Dense(
-            128, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0),
-            name="critic_dense2"
+            128,
+            kernel_init=orthogonal(np.sqrt(2)),
+            bias_init=constant(0.0),
+            name="critic_dense2",
         )(critic)
         critic = activation(critic)
-        critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0),
-            name="critic_output")(critic)
+        critic = nn.Dense(
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
+            name="critic_output",
+        )(critic)
 
         return pi, jnp.squeeze(critic, axis=-1)
 
@@ -84,14 +115,14 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def make_train(config):
+def make_train(config, writer: SummaryWriter):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
     )
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env = Pendulum()
+    env = envs[config["ENV_NAME"]]()
     env_params = env.default_params
     env = GymnaxWrapper(env)
     env = ClipAction(env)
@@ -114,30 +145,41 @@ def make_train(config):
     def train(rng):
         # INIT NETWORK
         network = ActorCritic(
-            env.action_space(env_params).shape[0], activation=config["ACTIVATION"]
+            env.action_space(env_params).shape[0],
+            activation=config["ACTIVATION"],
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
-        
+
         # Load actor parameters from file if specified, otherwise initialize randomly
         if config.get("LOAD_ACTOR_PARAMS_PATH"):
-            print(f"Loading actor parameters from: {config['LOAD_ACTOR_PARAMS_PATH']}")
+            print(
+                f"Loading actor parameters from: {config['LOAD_ACTOR_PARAMS_PATH']}"
+            )
             print("Critic parameters will be randomly initialized")
-            
+
             try:
                 # Always initialize fresh parameters first
                 fresh_params = network.init(_rng, init_x)
-                
+
                 # Load only actor parameters
-                actor_params = load_actor_params_from_file(config["LOAD_ACTOR_PARAMS_PATH"])
-                
+                actor_params = load_actor_params_from_file(
+                    config["LOAD_ACTOR_PARAMS_PATH"]
+                )
+
                 # Merge actor params with fresh critic params
-                network_params = merge_actor_params_with_fresh_critic(actor_params, fresh_params)
-                print("Successfully loaded actor parameters (critic randomly initialized)")
-                    
+                network_params = merge_actor_params_with_fresh_critic(
+                    actor_params, fresh_params
+                )
+                print(
+                    "Successfully loaded actor parameters (critic randomly initialized)"
+                )
+
             except (FileNotFoundError, ValueError) as e:
                 print(f"Warning: {e}")
-                print("Falling back to random initialization for all parameters")
+                print(
+                    "Falling back to random initialization for all parameters"
+                )
                 network_params = network.init(_rng, init_x)
         else:
             network_params = network.init(_rng, init_x)
@@ -211,10 +253,17 @@ def make_train(config):
                         transition.value,
                         transition.reward,
                     )
-                    delta = reward + config["GAMMA"] * next_value * (1 - done) - value
+                    delta = (
+                        reward
+                        + config["GAMMA"] * next_value * (1 - done)
+                        - value
+                    )
                     gae = (
                         delta
-                        + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
+                        + config["GAMMA"]
+                        * config["GAE_LAMBDA"]
+                        * (1 - done)
+                        * gae
                     )
                     return (gae, value), gae
 
@@ -244,13 +293,27 @@ def make_train(config):
                             value - traj_batch.value
                         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
                         value_losses = jnp.square(value - targets)
-                        value_losses_clipped = jnp.square(value_pred_clipped - targets)
+                        value_losses_clipped = jnp.square(
+                            value_pred_clipped - targets
+                        )
                         value_loss = (
-                            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
+                            0.5
+                            * jnp.maximum(
+                                value_losses, value_losses_clipped
+                            ).mean()
                         )
 
                         # CALCULATE ACTOR LOSS
-                        ratio = jnp.exp(log_prob - traj_batch.log_prob)
+                        log_ratio = log_prob - traj_batch.log_prob
+                        ratio = jnp.exp(log_ratio)
+
+                        # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                        old_approx_kl = (-log_ratio).mean()
+                        approx_kl = ((ratio - 1) - log_ratio).mean()
+                        clipfracs = jnp.mean(
+                            jnp.abs(ratio - 1.0) > config["CLIP_EPS"]
+                        )
+
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
@@ -270,7 +333,14 @@ def make_train(config):
                             + config["VF_COEF"] * value_loss
                             - config["ENT_COEF"] * entropy
                         )
-                        return total_loss, (value_loss, loss_actor, entropy)
+                        return total_loss, (
+                            value_loss,
+                            loss_actor,
+                            entropy,
+                            old_approx_kl,
+                            approx_kl,
+                            clipfracs,
+                        )
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
@@ -280,8 +350,11 @@ def make_train(config):
                     return train_state, total_loss
 
                 train_state, traj_batch, advantages, targets, rng = update_state
+
                 rng, _rng = jax.random.split(rng)
-                batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
+                batch_size = (
+                    config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
+                )
                 assert (
                     batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
                 ), "batch size must be equal to number of steps * number of envs"
@@ -302,7 +375,13 @@ def make_train(config):
                 train_state, total_loss = jax.lax.scan(
                     _update_minbatch, train_state, minibatches
                 )
-                update_state = (train_state, traj_batch, advantages, targets, rng)
+                update_state = (
+                    train_state,
+                    traj_batch,
+                    advantages,
+                    targets,
+                    rng,
+                )
                 return update_state, total_loss
 
             update_state = (train_state, traj_batch, advantages, targets, rng)
@@ -312,6 +391,28 @@ def make_train(config):
             train_state = update_state[0]
             metric = traj_batch.info
             rng = update_state[-1]
+
+            # Extract and compute mean losses from loss_info
+            # loss_info shape: [UPDATE_EPOCHS, NUM_MINIBATCHES] where each element is (total_loss, (value_loss, actor_loss, entropy))
+            # loss_info is a tuple of (total_losses_array, aux_losses_tuple)
+            # where aux_losses_tuple = (value_losses_array, actor_losses_array, entropies_array)
+            total_losses, (
+                value_losses,
+                actor_losses,
+                entropies,
+                old_approx_kl,
+                approx_kl,
+                clipfracs,
+            ) = loss_info
+
+            # Compute means across all scan iterations (epochs and minibatches)
+            mean_total_loss = total_losses.mean()
+            mean_value_loss = value_losses.mean()
+            mean_actor_loss = actor_losses.mean()
+            mean_entropy = entropies.mean()
+            mean_old_approx_kl = old_approx_kl.mean()
+            mean_approx_kl = approx_kl.mean()
+            mean_clipfrac = jnp.concatenate(clipfracs).mean()
             if config.get("DEBUG"):
 
                 def callback(info):
@@ -319,7 +420,8 @@ def make_train(config):
                         info["returned_episode"]
                     ]
                     timesteps = (
-                        info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
+                        info["timestep"][info["returned_episode"]]
+                        * config["NUM_ENVS"]
                     )
                     for t in range(len(timesteps)):
                         print(
@@ -327,6 +429,91 @@ def make_train(config):
                         )
 
                 jax.debug.callback(callback, metric)
+
+            # logging variables
+            traj_batch.value
+            targets_var = jnp.var(targets)
+            explained_var = 1 - jnp.var(targets - traj_batch.value) / (
+                targets_var + 1e-8
+            )
+            # explained_var = explained_var.mean()
+
+            # Log metrics to tensorboard using the computed mean losses
+            def log_callback(
+                mean_total,
+                mean_value,
+                mean_actor,
+                mean_ent,
+                metric,
+                explained_var,
+                mean_old_approx_kl,
+                mean_approx_kl,
+                mean_clipfrac,
+                timestep,
+            ):
+
+                episodic_return = metric["returned_episode_returns"][
+                    metric["returned_episode"]
+                ].mean()
+                episodic_length = metric["returned_episode_lengths"][
+                    metric["returned_episode"]
+                ].mean()
+
+                writer.add_scalar(
+                    "train/total_loss", float(mean_total), int(timestep)
+                )
+                writer.add_scalar(
+                    "train/value_loss", float(mean_value), int(timestep)
+                )
+                writer.add_scalar(
+                    "train/policy_loss", float(mean_actor), int(timestep)
+                )
+                writer.add_scalar(
+                    "train/entropy", float(mean_ent), int(timestep)
+                )
+                writer.add_scalar(
+                    "returns/episodic_return",
+                    float(episodic_return),
+                    int(timestep),
+                )
+                writer.add_scalar(
+                    "returns/episodic_length",
+                    float(episodic_length),
+                    int(timestep),
+                )
+
+                writer.add_scalar(
+                    "train/old_approx_kl",
+                    float(mean_old_approx_kl),
+                    int(timestep),
+                )
+                writer.add_scalar(
+                    "train/approx_kl", float(mean_approx_kl), int(timestep)
+                )
+                writer.add_scalar(
+                    "train/clipfrac", float(mean_clipfrac), int(timestep)
+                )
+                writer.add_scalar(
+                    "train/explained_variance",
+                    float(explained_var),
+                    int(timestep),
+                )
+
+            # Get current timestep from metric
+            current_timestep = metric["timestep"].mean() * config["NUM_ENVS"]
+            jax.debug.callback(
+                log_callback,
+                mean_total_loss,
+                mean_value_loss,
+                mean_actor_loss,
+                mean_entropy,
+                metric,
+                explained_var,
+                mean_old_approx_kl,
+                mean_approx_kl,
+                mean_clipfrac,
+                current_timestep,
+            )
 
             runner_state = (train_state, env_state, last_obs, rng)
             return runner_state, metric
@@ -344,14 +531,14 @@ def make_train(config):
 if __name__ == "__main__":
     config = {
         "LR": 5e-5,
-        "NUM_ENVS": 1024,
+        "NUM_ENVS": 1048,
         "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 1e7,
+        "TOTAL_TIMESTEPS": 10e7,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
         "GAE_LAMBDA": 0.99,
-        "CLIP_EPS": 0.2,
+        "CLIP_EPS": 0.4,
         "ENT_COEF": 0.0,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
@@ -360,24 +547,32 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": False,
+        "ENV_NAME": "pendulum",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
     rng = jax.random.PRNGKey(30)
-    train_jit = jax.jit(make_train(config))
-    out = train_jit(rng)
 
     # Create/rotate run directory: archive previous 'latest' to timestamped dir, then use 'runs/latest'
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
-    latest_dir = runs_root / "latest"
-    if latest_dir.exists():
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        archive_dir = runs_root / f"ppo_{ts}"
-        latest_dir.rename(archive_dir)
-        print(f"Archived previous latest to: {archive_dir}")
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    latest_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
+
     run_dir = latest_dir
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
+
+    # tensorboard writer
+    writer = SummaryWriter(f"{run_dir}")
+    writer.add_text(
+        "hyperparameters",
+        "|param|value|\n|-|-|\n%s"
+        % ("\n".join([f"|{key}|{value}|" for key, value in config.items()])),
+    )
+
+    train_jit = jax.jit(make_train(config, writer))
+    # train_jit = make_train(config, writer)
+    out = train_jit(rng)
 
     # Save params
     train_state, env_state, obsv, _rng = out["runner_state"]
@@ -386,6 +581,7 @@ if __name__ == "__main__":
 
     # Save config
     import json
+
     with (run_dir / "config.json").open("w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
@@ -404,4 +600,9 @@ if __name__ == "__main__":
     done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
     ep_returns = ret[done]
     if ep_returns.size > 0:
-        print(f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}")
+        print(
+            f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
+        )
+
+    # close tensorboard writer
+    writer.close()

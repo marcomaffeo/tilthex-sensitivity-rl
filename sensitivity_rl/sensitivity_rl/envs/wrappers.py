@@ -6,8 +6,8 @@ import numpy as np
 from flax import struct
 from typing import Optional, Tuple, Union
 from gymnax.environments import environment, spaces
-from .base import Sensitivity, EnvSensitivity
-from utils import angle_normalize
+from envs.base import Sensitivity
+from utils import angle_normalize, normalize, default_sensitivity
 
 
 class GymnaxWrapper(object):
@@ -159,85 +159,6 @@ class VecEnv(GymnaxWrapper):
         self.step = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
 
 
-@struct.dataclass
-class NormalizeVecObsEnvState:
-    mean: jnp.ndarray
-    var: jnp.ndarray
-    count: float
-    env_state: environment.EnvState
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-
-class NormalizeVecObservation(GymnaxWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-
-    def reset(self, key, params=None):
-        obs, state = self._env.reset(key, params)
-        state = NormalizeVecObsEnvState(
-            mean=jnp.zeros_like(obs),
-            var=jnp.ones_like(obs),
-            count=1e-4,
-            env_state=state,
-        )
-        batch_mean = jnp.mean(obs, axis=0)
-        batch_var = jnp.var(obs, axis=0)
-        batch_count = obs.shape[0]
-
-        delta = batch_mean - state.mean
-        tot_count = state.count + batch_count
-
-        new_mean = state.mean + delta * batch_count / tot_count
-        m_a = state.var * state.count
-        m_b = batch_var * batch_count
-        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-        new_var = M2 / tot_count
-        new_count = tot_count
-
-        state = NormalizeVecObsEnvState(
-            mean=new_mean,
-            var=new_var,
-            count=new_count,
-            env_state=state.env_state,
-        )
-
-        return (obs - state.mean) / jnp.sqrt(state.var + 1e-8), state
-
-    def step(self, key, state, action, params=None):
-        obs, env_state, reward, done, info = self._env.step(
-            key, state.env_state, action, params
-        )
-
-        batch_mean = jnp.mean(obs, axis=0)
-        batch_var = jnp.var(obs, axis=0)
-        batch_count = obs.shape[0]
-
-        delta = batch_mean - state.mean
-        tot_count = state.count + batch_count
-
-        new_mean = state.mean + delta * batch_count / tot_count
-        m_a = state.var * state.count
-        m_b = batch_var * batch_count
-        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
-        new_var = M2 / tot_count
-        new_count = tot_count
-
-        state = NormalizeVecObsEnvState(
-            mean=new_mean,
-            var=new_var,
-            count=new_count,
-            env_state=env_state,
-        )
-        return (
-            (obs - state.mean) / jnp.sqrt(state.var + 1e-8),
-            state,
-            reward,
-            done,
-            info,
-        )
-
 
 @struct.dataclass
 class NormalizeVecRewEnvState:
@@ -309,10 +230,20 @@ class SensitivityEnvState:
 
 
 class SensitivityWrapper(GymnaxWrapper):
-    def __init__(self, env: EnvSensitivity):
+    def __init__(self, env):
         super().__init__(env)
 
+        self.state_unravel = jax.flatten_util.ravel_pytree(
+            self._env.reset(jax.random.PRNGKey(0))[1].state)[1]
+
+        self.param_unravel = jax.flatten_util.ravel_pytree(
+            self._env.default_params)[1]
+
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
+        self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
+        self.df_du = jax.jacfwd(self._step_to_state_wrapped, argnums=3)
+        self.df_dp = jax.jacfwd(self._step_to_state_wrapped, argnums=4)
+        self.dobs_dx = jax.jacfwd(self._step_to_obs_wrapped, argnums=2)
 
     def set_actor(self, actor, network_params):
         # Should add a check for dimension compatibility
@@ -330,22 +261,22 @@ class SensitivityWrapper(GymnaxWrapper):
     def step_sensitivity(
         self,
         key: chex.PRNGKey,
-        env_state,
+        sens_state: SensitivityEnvState,
         action: Union[int, float, jax.Array],
         params,
         obs,
     ):
         """Compute the next environment state and update sensitivities."""
-        state = env_state.state
+        state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
+        params = jax.flatten_util.ravel_pytree(params)[0]
         # Compute Jacobians
-        df_dx = self._env.df_dx(key, state, action, params)
-        df_du = self._env.df_du(key, state, action, params)
-        df_dp = self._env.df_dp(key, state, action, params)
-        dobs_dx = self._env.dobs_dx(state)
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, params)
+        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
 
         # Unpack sensitivities
-        sens = env_state.sensitivity
-        sens_s = sens.state  # ds/dp
+        sens_s = sens_state.sensitivity.state # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
@@ -361,33 +292,76 @@ class SensitivityWrapper(GymnaxWrapper):
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
-        sensitivity = self._env.default_sensitivity()
+        sensitivity = default_sensitivity(self._env)
         state = SensitivityEnvState(env_state=env_state, sensitivity=sensitivity)
         return obs, state
 
     def step(
         self,
         key: chex.PRNGKey,
-        state,
+        sens_state: SensitivityEnvState,
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
         obs, env_state, reward, done, info = self._env.step(
-            key, state.env_state, action, params
+            key, sens_state.env_state, action, params
         )
 
-        sensitivity = self.step_sensitivity(key, state, action, params, obs)
+        sensitivity = self.step_sensitivity(key, sens_state, action, params, obs)
 
         reward = jax.lax.select(
-            jnp.abs(angle_normalize(state.theta) < 0.1),
+            jnp.abs(angle_normalize(sens_state.theta) < 0.1),
             reward - 1e-1*jnp.linalg.matrix_norm(sensitivity.state, ord='fro'),
             reward
         )
 
-        env_state = SensitivityEnvState(
+        sens_state = SensitivityEnvState(
             env_state=env_state, 
             sensitivity=sensitivity)
 
-        return obs, env_state, reward, done, info
+        return obs, sens_state, reward, done, info
+
+    # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
+    def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
+        state = self.state_unravel(state_flat)
+        params = self.param_unravel(params_flat)
+        env_state = env_state.replace(state=state)
+        obs, env_state, reward, done, info = self._env.step(key, env_state, action, params)
+        return jax.flatten_util.ravel_pytree(env_state.state)[0]
+
+    def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
+        state = self.state_unravel(state_flat)
+        params = self.param_unravel(params_flat)
+        env_state = env_state.replace(state=state)
+        obs, env_state, reward, done, info = self._env.step(key, env_state, action, params)
+        return jax.flatten_util.ravel_pytree(obs)[0]
     
+
+
+class MinMaxObservationWrapper(GymnaxWrapper):
+    """Normalize the observations of the environment to [-1, 1]."""
+
+    def __init__(self, env, params: Optional[environment.EnvParams] = None):
+        super().__init__(env)
+        self._obs_min = jnp.array(self._env.observation_space(params).low)
+        self._obs_max = jnp.array(self._env.observation_space(params).high)
+        # check for infinities
+        assert jnp.isinf(self._obs_max).sum() == 0, "Obs space has infinities"
+        assert jnp.isinf(self._obs_min).sum() == 0, "Obs space has infinities"
+
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        obs, env_state = self._env.reset(key, params)
+        obs = normalize(obs, self._obs_min, self._obs_max)
+        return obs, env_state
+
+    def step(self,
+        key: chex.PRNGKey,
+        state,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,):
+        obs, env_state, reward, done, info = self._env.step(
+            key, state, action, params
+        )
+        obs = normalize(obs, self._obs_min, self._obs_max)
+        return obs, env_state, reward, done, info

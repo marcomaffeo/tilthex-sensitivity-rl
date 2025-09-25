@@ -67,6 +67,8 @@ class RolloutConfig:
     seed: int
     plot: bool
     plot_format: str  # e.g., "png"
+    sample_params: bool = False  # Whether to sample parameters
+    param_std: float = 0.1  # Standard deviation for parameter sampling (relative to nominal)
 
 
 def _now_stamp() -> str:
@@ -103,6 +105,40 @@ def _build_env_from_config(config: Dict) -> Tuple[GymnaxWrapper, object]:
     if bool(config.get("NORMALIZE_ENV", False)):
         env = NormalizeVecReward(env, float(config.get("GAMMA", 0.99)))
     return env, env_params
+
+
+def _sample_env_params(env_params, rng_key: jax.Array, std: float = 0.1):
+    """Sample environment parameters around nominal values.
+    
+    Only samples pytree leaf parameters (m, l in the pendulum case).
+    Uses relative standard deviation (std * nominal_value).
+    """
+    # Get pytree leaves (the parameters that are actually part of the tree)
+    leaves, treedef = jax.tree.flatten(env_params)
+    
+    # Sample each leaf parameter
+    sampled_leaves = []
+    for leaf in leaves:
+        # Convert to JAX array and handle scalars
+        leaf_array = jnp.asarray(leaf)
+        shape = leaf_array.shape if hasattr(leaf_array, 'shape') else ()
+        
+        # Use relative sampling: nominal ± (std * nominal)
+        noise = jax.random.normal(rng_key, shape=shape) * std * jnp.abs(leaf_array)
+        rng_key, _ = jax.random.split(rng_key)
+        sampled_leaf = leaf_array + noise
+        
+        # Ensure positive values for physical parameters like mass and length
+        sampled_leaf = jnp.maximum(sampled_leaf, 0.01)  # Minimum threshold
+        
+        # Convert back to scalar if original was scalar
+        if jnp.isscalar(leaf) or (hasattr(leaf_array, 'shape') and leaf_array.shape == ()):
+            sampled_leaf = float(sampled_leaf)
+        
+        sampled_leaves.append(sampled_leaf)
+    
+    # Reconstruct the parameters
+    return jax.tree.unflatten(treedef, sampled_leaves)
 
 
 def _unwrap_base_env_state(env_state):
@@ -215,14 +251,21 @@ def _rollout_batch(
     all_action: list,
     all_reward: list,
     all_value: list,
-) -> Tuple[int, List[Tuple[int, float, int, float, float, float, float]]]:
+    sample_params: bool = False,
+    param_std: float = 0.1,
+) -> Tuple[int, List[Tuple[int, float, int, float, float, float, float, float, float]]]:
     """
     Run a batch of parallel rollouts and save per-trajectory .npz files.
     Returns:
       - number of trajectories saved
       - list of summary tuples:
-        (traj_id, ep_return, ep_length, start_theta, start_theta_dot, end_theta, end_theta_dot)
+        (traj_id, ep_return, ep_length, start_theta, start_theta_dot, end_theta, end_theta_dot, sampled_m, sampled_l)
     """
+    # Sample parameters if requested
+    if sample_params:
+        rng_key, param_key = jax.random.split(rng_key)
+        env_params = _sample_env_params(env_params, param_key, param_std)
+    
     # Reset environments with different keys
     reset_keys = jax.random.split(rng_key, batch_size)
     obs, env_state = env.reset(reset_keys, env_params)
@@ -336,6 +379,8 @@ def _rollout_batch(
                 float(theta_dot0[i]),
                 float(theta_arr[-1]),
                 float(theta_dot_arr[-1]),
+                float(env_params.m),  # Sampled mass
+                float(env_params.l),  # Sampled length
             )
         )
         saved += 1
@@ -363,6 +408,8 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         "deterministic": rcfg.deterministic,
         "plot": rcfg.plot,
         "plot_format": rcfg.plot_format,
+        "sample_params": rcfg.sample_params,
+        "param_std": rcfg.param_std,
         "config": config,
     }
     with (rollouts_dir / "meta.json").open("w", encoding="utf-8") as f:
@@ -371,7 +418,10 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     # CSV summary header
     summary_path = rollouts_dir / "rollouts_summary.csv"
     with summary_path.open("w", encoding="utf-8") as f:
-        f.write("traj_id,return,length,start_theta,start_theta_dot,end_theta,end_theta_dot\n")
+        if rcfg.sample_params:
+            f.write("traj_id,return,length,start_theta,start_theta_dot,end_theta,end_theta_dot,mass,length\n")
+        else:
+            f.write("traj_id,return,length,start_theta,start_theta_dot,end_theta,end_theta_dot,mass,length\n")
 
     all_theta: List[np.ndarray] = []
     all_theta_dot: List[np.ndarray] = []
@@ -382,7 +432,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     batch = rcfg.batch_size
     rng = jax.random.PRNGKey(rcfg.seed)
     saved_total = 0
-    all_summaries: List[Tuple[int, float, int, float, float, float, float]] = []
+    all_summaries: List[Tuple[int, float, int, float, float, float, float, float, float]] = []
 
     print(f"[rollouts] Starting: run={run_dir} total={total} batch={batch} deterministic={rcfg.deterministic}")
     for offset in range(0, total, batch):
@@ -405,6 +455,8 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             all_action=all_action,
             all_reward=all_reward,
             all_value=all_value,
+            sample_params=rcfg.sample_params,
+            param_std=rcfg.param_std,
         )
         saved_total += saved
         all_summaries.extend(summaries)
@@ -413,8 +465,8 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     # Write summaries
     with summary_path.open("a", encoding="utf-8") as f:
         for s in all_summaries:
-            traj_id, ep_ret, ep_len, th0, thd0, thN, thdN = s
-            f.write(f"{traj_id},{ep_ret},{ep_len},{th0},{thd0},{thN},{thdN}\n")
+            traj_id, ep_ret, ep_len, th0, thd0, thN, thdN, mass, length = s
+            f.write(f"{traj_id},{ep_ret},{ep_len},{th0},{thd0},{thN},{thdN},{mass},{length}\n")
 
     if rcfg.plot:
         _plot_all_trajectories(rollouts_dir, all_theta, all_theta_dot, all_action, all_reward, all_value, rcfg.plot_format)
@@ -470,6 +522,17 @@ def parse_args() -> argparse.Namespace:
         default="png",
         help="Image format for trajectory plots (e.g., png, pdf).",
     )
+    p.add_argument(
+        "--sample_params",
+        action="store_true",
+        help="Sample environment parameters (m, l) around nominal values for sensitivity analysis.",
+    )
+    p.add_argument(
+        "--param_std",
+        type=float,
+        default=0.1,
+        help="Relative standard deviation for parameter sampling (default: 0.1 = 10%%).",
+    )
     return p.parse_args()
 
 
@@ -483,6 +546,8 @@ def main() -> None:
         seed=args.seed,
         plot=args.plot,
         plot_format=args.plot_format,
+        sample_params=args.sample_params,
+        param_std=args.param_std,
     )
 
     for run_dir_str in args.run_dirs:

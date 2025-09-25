@@ -17,16 +17,19 @@ from envs.base import Sensitivity
 
 from utils import angle_normalize
 
+
 @struct.dataclass
-class ModelState():
+class ModelState:
     theta: jax.Array
     theta_dot: jax.Array
+
 
 @struct.dataclass
 class EnvState(environment.EnvState):
     state: ModelState
-    last_u: jax.Array # Only needed for rendering
+    last_u: jax.Array  # Only needed for rendering
     time: int
+
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
         return getattr(self.state, name)
@@ -45,6 +48,7 @@ class EnvParams(environment.EnvParams):
 
 class Pendulum(environment.Environment):
     """JAX Compatible version of Pendulum-v0 OpenAI gym environment."""
+
     def __init__(self):
         self.state_dim = 2
         self.obs_dim = 3
@@ -56,7 +60,6 @@ class Pendulum(environment.Environment):
     def default_params(self) -> EnvParams:
         """Default environment parameters for Pendulum-v0."""
         return EnvParams()
-
 
     def step_env(
         self,
@@ -71,16 +74,15 @@ class Pendulum(environment.Environment):
 
         state = env_state.state
 
-        reward = - (
-            angle_normalize(state.theta) ** 2
-            + 0.1 * state.theta_dot**2
+        state_next = self.step_dynamics(key, state, action, params)
+
+        reward = -(
+            angle_normalize(state_next.theta) ** 2
+            + 0.1 * state_next.theta_dot**2
             + 0.001 * (u**2)
         )
 
-
         reward = reward.squeeze()
-
-        state_next = self.step_dynamics(key, state, action, params)
 
         env_state = EnvState(
             state=state_next,
@@ -132,11 +134,7 @@ class Pendulum(environment.Environment):
         high = jnp.array([jnp.pi, 1])
         state = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
         state = ModelState(theta=state[0], theta_dot=state[1])
-        env_state = EnvState(
-            state=state, 
-            last_u=jnp.array(0.0), 
-            time=0
-        )
+        env_state = EnvState(state=state, last_u=jnp.array(0.0), time=0)
         return self.get_obs(state), env_state
 
     def get_obs(self, state: ModelState) -> jax.Array:
@@ -200,4 +198,3 @@ class Pendulum(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
-

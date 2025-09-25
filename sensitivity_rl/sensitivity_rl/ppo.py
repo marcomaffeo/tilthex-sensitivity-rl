@@ -11,7 +11,7 @@ import distrax
 from pathlib import Path
 from datetime import datetime
 from flax import serialization
-from envs import Pendulum
+from envs import Pendulum, DroneV0
 from gymnax.environments import environment
 from envs.wrappers import (
     GymnaxWrapper,
@@ -20,7 +20,7 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
-    MinMaxObservationWrapper
+    MinMaxObservationWrapper,
 )
 from utils import (
     load_actor_params_from_file,
@@ -40,6 +40,7 @@ jax.config.update(
 
 envs: Dict[str, environment.Environment] = {
     "pendulum": Pendulum,
+    "drone_v0": DroneV0,
 }
 
 
@@ -56,14 +57,14 @@ class ActorCritic(nn.Module):
 
         # Actor network with explicit names
         actor_mean = nn.Dense(
-            128,
+            512,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="actor_dense1",
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            128,
+            512,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="actor_dense2",
@@ -82,14 +83,14 @@ class ActorCritic(nn.Module):
 
         # Critic network with explicit names
         critic = nn.Dense(
-            128,
+            512,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="critic_dense1",
         )(x)
         critic = activation(critic)
         critic = nn.Dense(
-            128,
+            512,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="critic_dense2",
@@ -425,10 +426,9 @@ def make_train(config, writer: SummaryWriter):
                         info["timestep"][info["returned_episode"]]
                         * config["NUM_ENVS"]
                     )
-                    for t in range(len(timesteps)):
-                        print(
-                            f"global step={timesteps[t]}, episodic return={return_values[t]}"
-                        )
+                    print(
+                        f"global step={timesteps[-1]}, episodic return={return_values.mean()}"
+                    )
 
                 jax.debug.callback(callback, metric)
 
@@ -536,12 +536,12 @@ if __name__ == "__main__":
         "NUM_ENVS": 1048,
         "NUM_STEPS": 200,
         "TOTAL_TIMESTEPS": 1e7,
-        "UPDATE_EPOCHS": 10,
+        "UPDATE_EPOCHS": 4,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
-        "GAE_LAMBDA": 0.99,
-        "CLIP_EPS": 0.4,
-        "ENT_COEF": 0.0,
+        "GAE_LAMBDA": 0.95,
+        "CLIP_EPS": 0.3,
+        "ENT_COEF": 0.01,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
@@ -549,7 +549,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": False,
-        "ENV_NAME": "pendulum",
+        "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
     rng = jax.random.PRNGKey(30)
@@ -615,7 +615,7 @@ if __name__ == "__main__":
         )
 
     # Log hyperparameters with final metrics
-    writer.add_hparams(hparam_dict, metric_dict)
+    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
 
     # close tensorboard writer
     writer.close()

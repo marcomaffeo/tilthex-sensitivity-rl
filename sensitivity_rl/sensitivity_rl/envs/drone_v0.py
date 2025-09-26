@@ -6,12 +6,14 @@ Source: github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
 """
 
 from typing import Any
+from functools import partial
 
 import jax
 import jax.numpy as jnp
 from flax import struct
 
 from gymnax.environments import environment, spaces
+from gymnax.environments.environment import TEnvState, TEnvParams
 
 from envs.base import Sensitivity
 
@@ -100,10 +102,10 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([1, 2.5, 2.5, 2])
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([1, 1, 1])
+        pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0])
     )
     env_min_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([-1, -1, 0])
+        pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, 0.0])
     )
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -131,6 +133,26 @@ class DroneV0(environment.Environment):
     def default_params(self) -> EnvParams:
         """Default environment parameters for Drone-v0."""
         return EnvParams()
+
+    @partial(jax.jit, static_argnames=("self",))
+    def step(
+        self,
+        key: jax.Array,
+        state: TEnvState,
+        action: int | float | jax.Array,
+        params: TEnvParams | None = None,
+    ) -> tuple[jax.Array, TEnvState, jax.Array, jax.Array, dict[Any, Any]]:
+        """Overload step to remove the reset when done."""
+
+        if params is None:
+            params = self.default_params
+
+        # Step
+        key_step, _ = jax.random.split(key)
+        obs_st, state_st, reward, done, info = self.step_env(
+            key_step, state, action, params
+        )
+        return obs_st, state_st, reward, done, info
 
     def step_env(
         self,

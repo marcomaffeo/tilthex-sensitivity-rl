@@ -20,6 +20,7 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
+    ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
 from utils import (
@@ -83,14 +84,14 @@ class ActorCritic(nn.Module):
 
         # Critic network with explicit names
         critic = nn.Dense(
-            512,
+            256,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="critic_dense1",
         )(x)
         critic = activation(critic)
         critic = nn.Dense(
-            512,
+            256,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="critic_dense2",
@@ -130,6 +131,7 @@ def make_train(config, writer: SummaryWriter):
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
         env = SensitivityWrapper(env)
+    env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
@@ -457,6 +459,9 @@ def make_train(config, writer: SummaryWriter):
                 episodic_return = metric["returned_episode_returns"][
                     metric["returned_episode"]
                 ].mean()
+                episodic_return_true = metric["returned_episode_returns_true"][
+                    metric["returned_episode"]
+                ].mean()
                 episodic_length = metric["returned_episode_lengths"][
                     metric["returned_episode"]
                 ].mean()
@@ -476,6 +481,11 @@ def make_train(config, writer: SummaryWriter):
                 writer.add_scalar(
                     "returns/episodic_return",
                     float(episodic_return),
+                    int(timestep),
+                )
+                writer.add_scalar(
+                    "returns/episodic_return_true",
+                    float(episodic_return_true),
                     int(timestep),
                 )
                 writer.add_scalar(
@@ -536,19 +546,19 @@ if __name__ == "__main__":
         "NUM_ENVS": 1048,
         "NUM_STEPS": 200,
         "TOTAL_TIMESTEPS": 1e7,
-        "UPDATE_EPOCHS": 4,
+        "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
-        "GAE_LAMBDA": 0.95,
+        "GAE_LAMBDA": 0.99,
         "CLIP_EPS": 0.3,
-        "ENT_COEF": 0.01,
+        "ENT_COEF": 0.0,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
         "ANNEAL_LR": False,
         "NORMALIZE_ENV": True,
         "DEBUG": True,
-        "SENSITIVITY": False,
+        "SENSITIVITY": True,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }

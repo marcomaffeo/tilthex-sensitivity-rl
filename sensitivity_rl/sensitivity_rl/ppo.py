@@ -465,6 +465,10 @@ def make_train(config, writer: SummaryWriter):
                 episodic_length = metric["returned_episode_lengths"][
                     metric["returned_episode"]
                 ].mean()
+                sensitivity_state_max = (
+                    metric["sensitivity_state"].max(axis=0).mean()
+                )
+                sensitivity_state_mean = metric["sensitivity_state"].mean()
 
                 writer.add_scalar(
                     "train/total_loss", float(mean_total), int(timestep)
@@ -491,6 +495,16 @@ def make_train(config, writer: SummaryWriter):
                 writer.add_scalar(
                     "returns/episodic_length",
                     float(episodic_length),
+                    int(timestep),
+                )
+                writer.add_scalar(
+                    "returns/sensitivity_state_max",
+                    float(sensitivity_state_max),
+                    int(timestep),
+                )
+                writer.add_scalar(
+                    "returns/sensitivity_state_mean",
+                    float(sensitivity_state_mean),
                     int(timestep),
                 )
 
@@ -551,7 +565,7 @@ if __name__ == "__main__":
         "GAMMA": 0.95,
         "GAE_LAMBDA": 0.99,
         "CLIP_EPS": 0.3,
-        "ENT_COEF": 0.0,
+        "ENT_COEF": 0.01,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",

@@ -377,6 +377,9 @@ class SensitivityWrapper(GymnaxWrapper):
         )
 
         info["trw"] = reward
+        info["sensitivity_state"] = jnp.linalg.matrix_norm(
+            sens_state.sensitivity.state, ord="fro"
+        )
 
         sensitivity = self.step_sensitivity(
             key, sens_state, action, params, obs, done

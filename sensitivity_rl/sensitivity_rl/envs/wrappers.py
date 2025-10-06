@@ -279,7 +279,7 @@ class SensitivityEnvState:
 
 
 class SensitivityWrapper(GymnaxWrapper):
-    def __init__(self, env):
+    def __init__(self, env, regularization_weight=0.0):
         super().__init__(env)
 
         self.state_unravel = jax.flatten_util.ravel_pytree(
@@ -289,6 +289,8 @@ class SensitivityWrapper(GymnaxWrapper):
         self.param_unravel = jax.flatten_util.ravel_pytree(
             self._env.default_params
         )[1]
+
+        self.regularization_weight = regularization_weight
 
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
         self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
@@ -387,7 +389,7 @@ class SensitivityWrapper(GymnaxWrapper):
 
         reward = jax.lax.select(
             done,
-            reward - 1 * jnp.linalg.matrix_norm(sensitivity.state, ord="fro"),
+            reward - self.regularization_weight * jnp.linalg.matrix_norm(sensitivity.state, ord="fro"),
             reward,
         )
 

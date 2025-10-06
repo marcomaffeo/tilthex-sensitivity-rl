@@ -55,6 +55,8 @@ from envs.wrappers import (
     VecEnv,
     ClipAction,
     NormalizeVecReward,
+    SensitivityWrapper,
+    ResetEnvWrapper,
 )
 
 
@@ -100,6 +102,9 @@ def _build_env_from_config(config: Dict) -> Tuple[GymnaxWrapper, object]:
     env = GymnaxWrapper(env)
     # No LogWrapper for evaluation rollouts to avoid metric interference
     env = ClipAction(env)
+    if bool(config.get("SENSITIVITY", False)):
+        env = SensitivityWrapper(env, regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"])
+    env = ResetEnvWrapper(env)  # Don't remove
     env = VecEnv(env)
     # Apply normalization wrappers if used during training
     if bool(config.get("NORMALIZE_ENV", False)):

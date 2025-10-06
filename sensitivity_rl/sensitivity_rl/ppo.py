@@ -130,7 +130,7 @@ def make_train(config, writer: SummaryWriter):
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        env = SensitivityWrapper(env)
+        env = SensitivityWrapper(env, regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"])
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
@@ -573,6 +573,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.0,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }

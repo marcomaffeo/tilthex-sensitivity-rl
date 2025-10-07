@@ -127,6 +127,7 @@ class DroneV0(environment.Environment):
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 1.0])
+        self.hovering_thrust = self.default_params.m * self.default_params.g
         super().__init__()
 
     @property
@@ -154,6 +155,7 @@ class DroneV0(environment.Environment):
         )
         return obs_st, state_st, reward, done, info
 
+    @partial(jax.jit, static_argnums=(0))
     def step_env(
         self,
         key: jax.Array,
@@ -174,19 +176,18 @@ class DroneV0(environment.Environment):
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.01,
-            10.0,  # reward when close to target
-            0.1
+            50.0,  # reward when close to target
+            5.0
             * (
                 jnp.linalg.norm(pos_diff_old) - jnp.linalg.norm(pos_diff)
             ),  # distance improvement reward
         )
 
-        # jax.debug.callback(lambda x: print("Debug info:", x), reward_app)
-
         reward = (
-            -0.1 * jnp.linalg.norm(state_next.omega)
+            -0.5 * jnp.linalg.norm(state_next.omega)
             + reward_app
-            - 0.001 * (jnp.linalg.norm(u) ** 2)
+            - 0.05 * (jnp.linalg.norm(u - self.hovering_thrust) ** 2)
+            - 0.1 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()
@@ -291,6 +292,7 @@ class DroneV0(environment.Environment):
         vel = jnp.array([0.0, 0.0, 0.0])
         omega = jnp.array([0.0, 0.0, 0.0])
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
+        key, _ = jax.random.split(key)
         target_pos = jax.random.uniform(
             key,
             shape=(3,),

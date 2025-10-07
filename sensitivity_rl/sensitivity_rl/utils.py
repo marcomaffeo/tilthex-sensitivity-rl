@@ -90,3 +90,40 @@ def merge_actor_params_with_fresh_critic(actor_params, fresh_params):
         merged_params['params'] = merged_layer_params
     
     return merged_params
+
+
+
+def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None = None) -> Path:
+    """Create or refresh the latest symlink for a given environment.
+
+    Parameters
+    ----------
+    run_dir:
+        The directory containing the results of the most recent PPO run.
+    env_name:
+        Environment key (e.g. "drone_v0") used to build the runs/<env> hierarchy.
+    runs_root:
+        Base directory that contains the per-environment run folders. Defaults to
+        the "runs" folder relative to the current working directory.
+
+    Returns
+    -------
+    Path
+        Absolute path to the refreshed latest symlink.
+    """
+
+    runs_root = runs_root or Path("runs")
+    env_root = runs_root / env_name
+    env_root.mkdir(parents=True, exist_ok=True)
+
+    latest_dir = env_root / "latest"
+    target = run_dir.resolve()
+
+    if latest_dir.exists() or latest_dir.is_symlink():
+        if latest_dir.is_symlink() or latest_dir.is_file():
+            latest_dir.unlink()
+        else:
+            shutil.rmtree(latest_dir)
+
+    latest_dir.symlink_to(target, target_is_directory=True)
+    return latest_dir

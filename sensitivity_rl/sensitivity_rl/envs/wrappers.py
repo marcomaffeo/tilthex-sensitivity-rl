@@ -155,9 +155,7 @@ class ClipAction(GymnaxWrapper):
         self.high = high
 
     def step(self, key, state, action, params=None):
-        """TODO: In theory the below line should be the way to do this."""
-        # action = jnp.clip(action, self.env.action_space.low, self.env.action_space.high)
-        action = jnp.clip(action, self.low, self.high)
+        action = jnp.clip(action, self._env.action_space(params).low, self._env.action_space(params).high)
         return self._env.step(key, state, action, params)
 
 
@@ -383,18 +381,25 @@ class SensitivityWrapper(GymnaxWrapper):
             sens_state.sensitivity.state, ord="fro"
         )
 
-        sensitivity = self.step_sensitivity(
+        next_sensitivity = self.step_sensitivity(
             key, sens_state, action, params, obs, done
         )
 
-        reward = jax.lax.select(
-            done,
-            reward - self.regularization_weight * jnp.linalg.matrix_norm(sensitivity.state, ord="fro"),
-            reward,
-        )
+        # Final sensitivity reward regularization
+        # reward = jax.lax.select(
+        #     done,
+        #     reward - self.regularization_weight * jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
+        #     reward,
+        # )
+
+        # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one)
+        reward = reward - self.regularization_weight * (
+            jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro") - jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro")
+            )
+
 
         sens_state = SensitivityEnvState(
-            env_state=env_state, sensitivity=sensitivity
+            env_state=env_state, sensitivity=next_sensitivity
         )
 
         return obs, sens_state, reward, done, info

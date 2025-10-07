@@ -1,3 +1,4 @@
+import os
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -26,6 +27,7 @@ from envs.wrappers import (
 from utils import (
     load_actor_params_from_file,
     merge_actor_params_with_fresh_critic,
+    update_latest_symlink,
 )
 from torch.utils.tensorboard import SummaryWriter
 
@@ -554,9 +556,12 @@ def make_train(config, writer: SummaryWriter):
     return train
 
 
+
+
+
 if __name__ == "__main__":
     config = {
-        "LR": 5e-5,
+        "LR": 1e-3,
         "NUM_ENVS": 1048,
         "NUM_STEPS": 200,
         "TOTAL_TIMESTEPS": 1e7,
@@ -579,15 +584,15 @@ if __name__ == "__main__":
     }
     rng = jax.random.PRNGKey(30)
 
-    # Create/rotate run directory: archive previous 'latest' to timestamped dir, then use 'runs/latest'
+    # Create/rotate run directory
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    latest_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
-
-    run_dir = latest_dir
+    run_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
+
+    update_latest_symlink(run_dir, config["ENV_NAME"], runs_root)
 
     # tensorboard writer
     writer = SummaryWriter(f"{run_dir}")

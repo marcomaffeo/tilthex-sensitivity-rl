@@ -113,7 +113,7 @@ class EnvParams(environment.EnvParams):
     # TODO: check this
     I: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5]),
+        default_factory=lambda: jnp.array([9.3951e-5, 9.3951e-5, 3.2347e-5]),
     )
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
 
@@ -176,18 +176,15 @@ class DroneV0(environment.Environment):
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.01,
-            50.0,  # reward when close to target
-            5.0
-            * (
-                jnp.linalg.norm(pos_diff_old) - jnp.linalg.norm(pos_diff)
-            ),  # distance improvement reward
+            5.0,  # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
         reward = (
-            -0.5 * jnp.linalg.norm(state_next.omega)
+            -0.05 * jnp.linalg.norm(state_next.omega)
             + reward_app
             - 0.05 * (jnp.linalg.norm(u - self.hovering_thrust) ** 2)
-            - 0.1 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
+            # - 0.1 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()

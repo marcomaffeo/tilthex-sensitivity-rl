@@ -1,4 +1,7 @@
 import os
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
@@ -60,14 +63,14 @@ class ActorCritic(nn.Module):
 
         # Actor network with explicit names
         actor_mean = nn.Dense(
-            512,
+            256,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="actor_dense1",
         )(x)
         actor_mean = activation(actor_mean)
         actor_mean = nn.Dense(
-            512,
+            256,
             kernel_init=orthogonal(np.sqrt(2)),
             bias_init=constant(0.0),
             name="actor_dense2",
@@ -132,7 +135,10 @@ def make_train(config, writer: SummaryWriter):
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        env = SensitivityWrapper(env, regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"])
+        env = SensitivityWrapper(
+            env,
+            regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"],
+        )
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
@@ -556,21 +562,18 @@ def make_train(config, writer: SummaryWriter):
     return train
 
 
-
-
-
 if __name__ == "__main__":
     config = {
         "LR": 1e-3,
-        "NUM_ENVS": 1048,
+        "NUM_ENVS": 400,
         "NUM_STEPS": 200,
         "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
-        "GAE_LAMBDA": 0.99,
-        "CLIP_EPS": 0.3,
-        "ENT_COEF": 0.01,
+        "GAE_LAMBDA": 0.95,
+        "CLIP_EPS": 0.1,
+        "ENT_COEF": 0.0,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
         "ACTIVATION": "tanh",
@@ -578,7 +581,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.0,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.8,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
@@ -649,3 +652,40 @@ if __name__ == "__main__":
 
     # close tensorboard writer
     writer.close()
+
+    # Run rollouts for evaluation
+    eval_config = {
+        "NUM_ROLLOUTS": 10,
+        "MAX_STEPS": 200,
+        "DETERMINISTIC": True,
+        "SEED": 42,
+    }
+
+    import subprocess
+
+    # Call with positional and named args
+    subprocess.run(
+        [
+            "python3",
+            "sensitivity_rl/rollouts.py",
+            "--run_dirs",
+            f"{run_dir}",
+            "--max_step",
+            f"{eval_config['MAX_STEPS']}",
+            "--num_rollouts",
+            f"{eval_config['NUM_ROLLOUTS']}",
+            "--deterministic",
+        ]
+    )
+
+    subprocess.run(
+        [
+            "python3",
+            (
+                "sensitivity_rl/plots/plot_drone_rollouts.py"
+                if config["ENV_NAME"] == "drone_v0"
+                else "sensitivity_rl/plots/plot_pendulum_rollouts.py"
+            ),
+            f"{run_dir}/rollouts/",
+        ]
+    )

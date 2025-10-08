@@ -125,7 +125,9 @@ def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     return config, params_bytes
 
 
-def _build_env_from_config(config: Dict[str, Any]) -> Tuple[GymnaxWrapper, Any, str]:
+def _build_env_from_config(
+    config: Dict[str, Any],
+) -> Tuple[GymnaxWrapper, Any, str]:
     env_name = config.get("ENV_NAME", "pendulum").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
@@ -201,8 +203,10 @@ def _rollout_episode(
 
     env_state = env_state.replace(target_pos=jnp.array([0.0, 0.0, 0.5]))
 
-    horizon = max_steps if max_steps > 0 else int(
-        getattr(env_params, "max_steps_in_episode", 200)
+    horizon = (
+        max_steps
+        if max_steps > 0
+        else int(getattr(env_params, "max_steps_in_episode", 200))
     )
 
     state_tracks = defaultdict(list)
@@ -221,7 +225,6 @@ def _rollout_episode(
             rng, act_key = jax.random.split(rng)
             action = pi.sample(seed=act_key)
 
-    
         rng, step_key = jax.random.split(rng)
         obs, env_state, reward, done_flag, _ = env.step(
             step_key, env_state, action, env_params
@@ -241,13 +244,17 @@ def _rollout_episode(
     return actions, state_arrays, steps + 1
 
 
-def _save_trajectory(path: Path, actions: np.ndarray, state_arrays: Dict[str, np.ndarray]) -> None:
+def _save_trajectory(
+    path: Path, actions: np.ndarray, state_arrays: Dict[str, np.ndarray]
+) -> None:
     payload = {"actions": actions}
     payload.update(state_arrays)
     np.savez_compressed(path, **payload)
 
 
-def _init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes: bytes):
+def _init_model_and_params(
+    config: Dict[str, Any], env, env_params, params_bytes: bytes
+):
     params = serialization.msgpack_restore(params_bytes)
 
     actor_hidden = 256
@@ -257,7 +264,9 @@ def _init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes
     except (KeyError, AttributeError, TypeError, IndexError):
         actor_hidden = 256
     try:
-        critic_hidden = int(params["params"]["critic_dense1"]["kernel"].shape[1])
+        critic_hidden = int(
+            params["params"]["critic_dense1"]["kernel"].shape[1]
+        )
     except (KeyError, AttributeError, TypeError, IndexError):
         critic_hidden = 256
 
@@ -274,12 +283,14 @@ def _init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     config, params_bytes = _load_run_artifacts(run_dir)
     env, env_params, env_name = _build_env_from_config(config)
-    model, params = _init_model_and_params(config, env, env_params, params_bytes)
+    model, params = _init_model_and_params(
+        config, env, env_params, params_bytes
+    )
 
     if bool(config.get("SENSITIVITY", False)) and hasattr(env, "set_actor"):
         env.set_actor(model, params)
 
-    rollouts_dir = run_dir / "rollouts" / _now_stamp()
+    rollouts_dir = run_dir / "rollouts"
     _ensure_dir(rollouts_dir)
 
     meta = {
@@ -321,9 +332,13 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         with summary_path.open("a", encoding="utf-8") as f:
             f.write(f"{traj_id},{steps}\n")
 
-        print(f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts} -> {traj_file}")
+        print(
+            f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts} -> {traj_file}"
+        )
 
-    print(f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}")
+    print(
+        f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
+    )
 
 
 def parse_args() -> argparse.Namespace:

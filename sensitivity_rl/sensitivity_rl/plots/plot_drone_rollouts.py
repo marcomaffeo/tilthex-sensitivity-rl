@@ -10,6 +10,7 @@ from typing import Iterable, List
 
 import matplotlib.pyplot as plt
 import numpy as np
+
 POSITION_KEYS = ("state_pos",)
 TARGET_KEYS = ("target_pos",)
 
@@ -26,7 +27,9 @@ def _iter_trajectory_files(rollouts_dir: Path) -> Iterable[Path]:
     return sorted(rollouts_dir.glob("traj_*.npz"))
 
 
-def _get_array(data: np.lib.npyio.NpzFile, candidates: Iterable[str], label: str) -> np.ndarray:
+def _get_array(
+    data: np.lib.npyio.NpzFile, candidates: Iterable[str], label: str
+) -> np.ndarray:
     for key in candidates:
         if key in data:
             return np.asarray(data[key])
@@ -48,14 +51,18 @@ def _extract_series(npz_file: Path) -> dict:
 
     try:
         target_traj = _get_array(data, TARGET_KEYS, "target position")
-        series["target"] = target_traj[0] if target_traj.ndim >= 2 else target_traj
+        series["target"] = (
+            target_traj[0] if target_traj.ndim >= 2 else target_traj
+        )
     except KeyError:
         pass
 
     return series
 
 
-def plot_drone_rollouts(series_list: List[dict], output: Path | None = None) -> None:
+def plot_drone_rollouts(
+    series_list: List[dict], output: Path | None = None
+) -> None:
     plt.style.use("seaborn-v0_8")
     fig = plt.figure(figsize=(14, 8))
     gs = fig.add_gridspec(2, 4, height_ratios=[2, 1])
@@ -72,7 +79,18 @@ def plot_drone_rollouts(series_list: List[dict], output: Path | None = None) -> 
 
         if "target" in series:
             target = series["target"]
-            ax_path.scatter(target[0], target[1], target[2], marker="x", color="red", s=30)
+            ax_path.scatter(
+                target[0], target[1], target[2], marker="x", color="red", s=30
+            )
+
+        ax_path.scatter(
+            pos[0, 0],
+            pos[0, 1],
+            pos[0, 2],
+            marker="o",
+            color="green",
+            s=30,
+        )
 
         actions = series["actions"]
         for idx, ax in enumerate(axes_act):
@@ -99,8 +117,14 @@ def plot_drone_rollouts(series_list: List[dict], output: Path | None = None) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Plot quadrotor rollouts produced by sensitivity_rl.rollouts.")
-    parser.add_argument("rollouts_dir", type=Path, help="Directory containing trajectory .npz files and meta.json")
+    parser = argparse.ArgumentParser(
+        description="Plot quadrotor rollouts produced by sensitivity_rl.rollouts."
+    )
+    parser.add_argument(
+        "rollouts_dir",
+        type=Path,
+        help="Directory containing trajectory .npz files and meta.json",
+    )
     parser.add_argument(
         "--max_traj",
         type=int,
@@ -128,11 +152,15 @@ def main() -> None:
     for path in files[: args.max_traj]:
         try:
             series_to_plot.append(_extract_series(path))
-        except KeyError as exc:  # pragma: no cover - guardrail for mixed directories
+        except (
+            KeyError
+        ) as exc:  # pragma: no cover - guardrail for mixed directories
             print(f"[warn] Skipping {path.name}: {exc}")
 
     if not series_to_plot:
-        raise RuntimeError("No valid quadrotor trajectories were loaded. Nothing to plot.")
+        raise RuntimeError(
+            "No valid quadrotor trajectories were loaded. Nothing to plot."
+        )
 
     plot_drone_rollouts(series_to_plot, rollouts_dir)
 

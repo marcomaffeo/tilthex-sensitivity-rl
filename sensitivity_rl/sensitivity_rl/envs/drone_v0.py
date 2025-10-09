@@ -113,7 +113,7 @@ class EnvParams(environment.EnvParams):
     # TODO: check this
     I: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([9.3951e-5, 9.3951e-5, 3.2347e-5]),
+        default_factory=lambda: jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5]),
     )
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
 

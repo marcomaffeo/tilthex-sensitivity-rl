@@ -567,7 +567,7 @@ if __name__ == "__main__":
         "LR": 1e-3,
         "NUM_ENVS": 400,
         "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 1e7,
+        "TOTAL_TIMESTEPS": 1e6,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
@@ -581,7 +581,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.8,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.5,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
@@ -667,7 +667,7 @@ if __name__ == "__main__":
     subprocess.run(
         [
             "python3",
-            "sensitivity_rl/rollouts.py",
+            os.path.dirname(__file__) + "/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
             "--max_step",
@@ -682,9 +682,10 @@ if __name__ == "__main__":
         [
             "python3",
             (
-                "sensitivity_rl/plots/plot_drone_rollouts.py"
+                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
                 if config["ENV_NAME"] == "drone_v0"
-                else "sensitivity_rl/plots/plot_pendulum_rollouts.py"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
             ),
             f"{run_dir}/rollouts/",
         ]

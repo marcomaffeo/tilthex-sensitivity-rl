@@ -613,7 +613,7 @@ if __name__ == "__main__":
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
+    run_dir = runs_root / config["ENV_NAME"] / f"RPO_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
 
@@ -689,7 +689,7 @@ if __name__ == "__main__":
     subprocess.run(
         [
             "python3",
-            "sensitivity_rl/rollouts.py",
+            os.path.dirname(__file__) + "/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
             "--max_step",
@@ -704,9 +704,10 @@ if __name__ == "__main__":
         [
             "python3",
             (
-                "sensitivity_rl/plots/plot_drone_rollouts.py"
+                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
                 if config["ENV_NAME"] == "drone_v0"
-                else "sensitivity_rl/plots/plot_pendulum_rollouts.py"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
             ),
             f"{run_dir}/rollouts/",
         ]

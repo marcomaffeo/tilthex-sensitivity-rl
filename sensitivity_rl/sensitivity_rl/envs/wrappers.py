@@ -281,7 +281,9 @@ class SensitivityEnvState:
 
 
 class SensitivityWrapper(GymnaxWrapper):
-    def __init__(self, env, regularization_weight=0.0):
+    def __init__(
+        self, env, regularization_weight=0.0, add_sensitivity_to_info=False
+    ):
         super().__init__(env)
 
         self.state_unravel = jax.flatten_util.ravel_pytree(
@@ -293,6 +295,7 @@ class SensitivityWrapper(GymnaxWrapper):
         )[1]
 
         self.regularization_weight = regularization_weight
+        self.add_sensitivity_to_info = add_sensitivity_to_info
 
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
         self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
@@ -380,13 +383,13 @@ class SensitivityWrapper(GymnaxWrapper):
             key, sens_state.env_state, action, params
         )
 
-        info["trw"] = reward
-        info["sensitivity_state"] = jnp.linalg.matrix_norm(
-            sens_state.sensitivity.state, ord="fro"
-        )
-
         next_sensitivity = self.step_sensitivity(
             key, sens_state, action, params, obs, done
+        )
+
+        info["trw"] = reward
+        info["sensitivity_state"] = jnp.linalg.matrix_norm(
+            next_sensitivity.state, ord="fro"
         )
 
         # Final sensitivity reward regularization
@@ -402,6 +405,148 @@ class SensitivityWrapper(GymnaxWrapper):
         reward = reward - self.regularization_weight * (
             jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro")
             - jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro")
+        )
+
+        sens_state = SensitivityEnvState(
+            env_state=env_state, sensitivity=next_sensitivity
+        )
+
+        return obs, sens_state, reward, done, info
+
+    # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
+    def _step_to_state_wrapped(
+        self, key, env_state, state_flat, action, params_flat
+    ):
+        state = self.state_unravel(state_flat)
+        params = self.param_unravel(params_flat)
+        env_state = env_state.replace(state=state)
+        obs, env_state, reward, done, info = self._env.step(
+            key, env_state, action, params
+        )
+        return jax.flatten_util.ravel_pytree(env_state.state)[0]
+
+    def _step_to_obs_wrapped(
+        self, key, env_state, state_flat, action, params_flat
+    ):
+        state = self.state_unravel(state_flat)
+        params = self.param_unravel(params_flat)
+        env_state = env_state.replace(state=state)
+        obs, env_state, reward, done, info = self._env.step(
+            key, env_state, action, params
+        )
+        return jax.flatten_util.ravel_pytree(obs)[0]
+
+
+class SensitivityExtWrapper(GymnaxWrapper):
+    def __init__(
+        self, env, regularization_weight=0.0, add_sensitivity_to_info=False
+    ):
+        super().__init__(env)
+
+        self.state_unravel = jax.flatten_util.ravel_pytree(
+            self._env.reset(jax.random.PRNGKey(0))[1].state
+        )[1]
+
+        self.param_unravel = jax.flatten_util.ravel_pytree(
+            self._env.default_params
+        )[1]
+
+        self.regularization_weight = regularization_weight
+        self.add_sensitivity_to_info = add_sensitivity_to_info
+
+        self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
+        self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
+        self.df_du = jax.jacfwd(self._step_to_state_wrapped, argnums=3)
+        self.df_dp = jax.jacfwd(self._step_to_state_wrapped, argnums=4)
+        self.dobs_dx = jax.jacfwd(self._step_to_obs_wrapped, argnums=2)
+
+    def set_actor(self, actor, network_params):
+        # Should add a check for dimension compatibility
+        self._actor = actor
+        self.network_params = network_params
+
+    def update_network_params(self, network_params):
+        self.network_params = network_params
+
+    def compute_action(self, rng, obs, network_params):
+        pi, _ = self._actor.apply(network_params, obs)
+        action = pi.sample(seed=rng)
+        return action
+
+    def step_sensitivity(
+        self,
+        key: chex.PRNGKey,
+        sens_state: SensitivityEnvState,
+        action: Union[int, float, jax.Array],
+        params,
+        obs,
+        done,
+    ):
+        """Compute the next environment state and update sensitivities."""
+        state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
+        params = jax.flatten_util.ravel_pytree(params)[0]
+        # Compute Jacobians
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, params)
+        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
+
+        """
+        jax.debug.callback(
+            lambda x, y, z, w, d: (
+                print(f"Sensitivity jacobians: {x},{y},{z},{w}") if d else None
+            ),
+            jnp.linalg.matrix_norm(df_dx, ord="fro"),
+            jnp.linalg.matrix_norm(df_du, ord="fro"),
+            jnp.linalg.matrix_norm(df_dp, ord="fro"),
+            jnp.linalg.matrix_norm(dobs_dx, ord="fro"),
+            done,
+        )
+        """
+        # Unpack sensitivities
+        sens_s = sens_state.sensitivity.state  # ds/dp
+        dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
+        # Update action sensitivity
+        sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
+        # Update sensitivities using chain rule
+        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
+        sens_s_next = jnp.clip(sens_s_next, -10, 10)
+        # Pack updated sensitivitie
+        return Sensitivity(
+            state=sens_s_next,
+            action=sens_a,
+            policy_gains=dmu_dobs,
+        )
+
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ):
+        obs, env_state = self._env.reset(key, params)
+        sensitivity = default_sensitivity(self._env)
+        state = SensitivityEnvState(
+            env_state=env_state, sensitivity=sensitivity
+        )
+        return obs, state
+
+    def step(
+        self,
+        key: chex.PRNGKey,
+        sens_state: SensitivityEnvState,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+
+        obs, env_state, reward, done, info = self._env.step(
+            key, sens_state.env_state, action, params
+        )
+
+        next_sensitivity = self.step_sensitivity(
+            key, sens_state, action, params, obs, done
+        )
+
+        info["trw"] = reward
+        info["sensitivity_state"] = jnp.linalg.matrix_norm(
+            next_sensitivity.state, ord="fro"
         )
 
         sens_state = SensitivityEnvState(

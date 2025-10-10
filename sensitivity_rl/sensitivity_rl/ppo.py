@@ -565,14 +565,14 @@ def make_train(config, writer: SummaryWriter):
 if __name__ == "__main__":
     config = {
         "LR": 1e-3,
-        "NUM_ENVS": 400,
+        "NUM_ENVS": 1000,
         "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 1e6,
+        "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
         "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.1,
+        "CLIP_EPS": 0.4,
         "ENT_COEF": 0.0,
         "VF_COEF": 0.5,
         "MAX_GRAD_NORM": 0.5,
@@ -581,7 +581,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.5,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.0,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
@@ -617,13 +617,6 @@ if __name__ == "__main__":
 
     # Save raw metrics arrays for post-hoc analysis/plotting
     metrics = out["metrics"]
-    np.savez_compressed(
-        run_dir / "metrics_raw.npz",
-        returned_episode_returns=np.array(metrics["returned_episode_returns"]),
-        returned_episode_lengths=np.array(metrics["returned_episode_lengths"]),
-        returned_episode=np.array(metrics["returned_episode"]),
-        timestep=np.array(metrics["timestep"]),
-    )
 
     # Minimal console summary
     ret = np.array(metrics["returned_episode_returns"]).reshape(-1)

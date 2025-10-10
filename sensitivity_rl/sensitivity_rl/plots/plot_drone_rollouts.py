@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Iterable, List
 
+from flax import serialization
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -24,11 +26,11 @@ def _load_meta(rollouts_dir: Path) -> dict:
 
 
 def _iter_trajectory_files(rollouts_dir: Path) -> Iterable[Path]:
-    return sorted(rollouts_dir.glob("traj_*.npz"))
+    return sorted(rollouts_dir.glob("traj_*.msgpack"))
 
 
 def _get_array(
-    data: np.lib.npyio.NpzFile, candidates: Iterable[str], label: str
+    data, candidates: Iterable[str], label: str
 ) -> np.ndarray:
     for key in candidates:
         if key in data:
@@ -38,10 +40,11 @@ def _get_array(
     )
 
 
-def _extract_series(npz_file: Path) -> dict:
-    data = np.load(npz_file)
+def _extract_series(to_load: Path) -> dict:
 
-    positions = _get_array(data, POSITION_KEYS, "state_pos")
+    data = serialization.msgpack_restore(to_load.read_bytes())
+
+    positions = np.asarray(data["state"][:, :3])
     actions = np.asarray(data["actions"])
 
     series = {
@@ -78,6 +81,7 @@ def plot_drone_rollouts(
         ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
 
         if "target" in series:
+            print("Plotting target")
             target = series["target"]
             ax_path.scatter(
                 target[0], target[1], target[2], marker="x", color="red", s=30
@@ -137,8 +141,7 @@ def main() -> None:
     if not rollouts_dir.exists():
         raise FileNotFoundError(f"Rollouts directory not found: {rollouts_dir}")
 
-    meta = _load_meta(rollouts_dir)
-    env_name = meta.get("env_name", "drone_v0")
+    env_name = "drone_v0"
     if env_name.lower() not in {"drone_v0", "quadrotor", "drone", "quad"}:
         raise ValueError(
             f"This plotting script is for the quadrotor environment. Found env_name={env_name!r} in meta.json"

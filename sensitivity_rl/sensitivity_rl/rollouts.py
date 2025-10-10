@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -27,7 +28,7 @@ from flax import serialization
 from flax.linen.initializers import constant, orthogonal
 from envs import Pendulum, DroneV0
 from envs.wrappers import GymnaxWrapper, ClipAction, SensitivityWrapper
-
+from jax.flatten_util import ravel_pytree
 
 ENV_REGISTRY = {
     "pendulum": Pendulum,
@@ -103,15 +104,6 @@ class ActorCriticEval(nn.Module):
 
         return pi, jnp.squeeze(critic_value, axis=-1)
 
-
-def _now_stamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M")
-
-
-def _ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
 def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
     params_path = run_dir / "params.msgpack"
@@ -137,17 +129,10 @@ def _build_env_from_config(
     env_cls = ENV_REGISTRY[env_name]
     env = env_cls()
     env_params = env.default_params
+    env_params.replace(is_testing=True)
 
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)
-
-    # if bool(config.get("SENSITIVITY", False)):
-    #     regularization = float(
-    #         config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 0.0)
-    #     )
-    #     wrapped_env = SensitivityWrapper(
-    #         wrapped_env, regularization_weight=regularization
-    #     )
 
     return wrapped_env, env_params, env_name
 
@@ -158,67 +143,50 @@ def _unwrap_base_env_state(env_state: Any) -> Any:
     return env_state
 
 
-def _record_state(state_tracks, env_state: Any) -> None:
-    base_state = _unwrap_base_env_state(env_state)
-    components: Dict[str, np.ndarray] = {}
+def _flatten_value(x):
+    """Flatten a pytree or array/scalar into a 1D JAX array for logging."""
+    try:
+        flat, _ = ravel_pytree(x)
+    except Exception:
+        flat = jnp.ravel(jnp.asarray(x))
+    return flat
 
-    model_state = getattr(base_state, "state", None)
-    if model_state is not None:
-        if hasattr(model_state, "__dataclass_fields__"):
-            for name in model_state.__dataclass_fields__:
-                components[f"state_{name}"] = np.asarray(
-                    getattr(model_state, name)
-                )
-        else:
-            components["state"] = np.asarray(model_state)
-
-    if hasattr(base_state, "time"):
-        components["time"] = np.asarray(base_state.time)
-
-    if hasattr(base_state, "target_pos"):
-        components["target_pos"] = np.asarray(base_state.target_pos)
-
-    for key, value in components.items():
-        state_tracks[key].append(np.asarray(value))
-
-
-def _convert_state_tracks(state_tracks) -> Dict[str, np.ndarray]:
-    arrays: Dict[str, np.ndarray] = {}
-    for key, values in state_tracks.items():
-        arrays[key] = np.stack([np.asarray(v) for v in values], axis=0)
-    return arrays
-
-
-def _rollout_episode(
+@partial(jax.jit, static_argnames=("env", "actor_critic", "max_steps", "deterministic"))
+def rollout_episode(
     env,
     env_params,
-    model,
+    actor_critic,
     params,
     rng_key: jax.Array,
     max_steps: int,
     deterministic: bool,
-) -> Tuple[np.ndarray, Dict[str, np.ndarray], int]:
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
     rng_reset, rng = jax.random.split(rng_key)
     obs, env_state = env.reset(rng_reset, env_params)
 
-    env_state = env_state.replace(target_pos=jnp.array([0.0, 0.0, 0.5]))
 
+    # Determine horizon
     horizon = (
         max_steps
         if max_steps > 0
         else int(getattr(env_params, "max_steps_in_episode", 200))
     )
+    # Preallocate action buffer
+    act_shape = env.action_space(env_params).shape
+    actions_buf = jnp.zeros((horizon,) + act_shape, dtype=jnp.float32)
 
-    state_tracks = defaultdict(list)
-    _record_state(state_tracks, env_state)
+    # Preallocate log buffers for requested keys and write initial state at index 0
+    logs_buf: Dict[str, jnp.ndarray] = {}
+    for key in env_state.__dataclass_fields__.keys():
+        val0 = getattr(env_state, key)
+        flat0 = _flatten_value(val0)
+        logs_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
+        logs_buf[key] = logs_buf[key].at[0].set(flat0)
 
-    action_shape = env.action_space(env_params).shape
-    actions_list = []
+    def body_fun(i, carry):
+        rng, obs, env_state, actions_buf, logs_buf = carry
 
-    done = False
-
-    for steps in range(horizon):
-        pi, _ = model.apply(params, obs)
+        pi, _ = actor_critic.apply(params, obs)
         if deterministic:
             action = pi.mean()
         else:
@@ -226,30 +194,33 @@ def _rollout_episode(
             action = pi.sample(seed=act_key)
 
         rng, step_key = jax.random.split(rng)
-        obs, env_state, reward, done_flag, _ = env.step(
-            step_key, env_state, action, env_params
-        )
+        obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
-        actions_list.append(env_state.last_u)
+        # Record action after environment step (matches previous semantics)
+        actions_buf = actions_buf.at[i].set(env_state.last_u)
 
-        done = bool(np.asarray(done_flag))
-        _record_state(state_tracks, env_state)
+        # Record selected state fields at index i+1
+        for key in env_state.__dataclass_fields__.keys():
+            val = getattr(env_state, key)
+            flat = _flatten_value(val)
+            logs_buf[key] = logs_buf[key].at[i + 1].set(flat)
 
-    if actions_list:
-        actions = np.stack(actions_list, axis=0)
-    else:
-        actions = np.empty((0,) + action_shape, dtype=np.float32)
+        return (rng, obs, env_state, actions_buf, logs_buf)
 
-    state_arrays = _convert_state_tracks(state_tracks)
-    return actions, state_arrays, steps + 1
+    rng, obs, env_state, actions_buf, logs_buf = jax.lax.fori_loop(
+        0, horizon, body_fun, (rng, obs, env_state, actions_buf, logs_buf)
+    )
+
+    return actions_buf, logs_buf
 
 
-def _save_trajectory(
-    path: Path, actions: np.ndarray, state_arrays: Dict[str, np.ndarray]
+
+def save_trajectory(
+    path: Path, actions: np.ndarray, state_filtered: Dict[str, np.ndarray]
 ) -> None:
-    payload = {"actions": actions}
-    payload.update(state_arrays)
-    np.savez_compressed(path, **payload)
+    to_save = {"actions": actions}
+    to_save.update(state_filtered)
+    path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
 def _init_model_and_params(
@@ -283,42 +254,22 @@ def _init_model_and_params(
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     config, params_bytes = _load_run_artifacts(run_dir)
     env, env_params, env_name = _build_env_from_config(config)
-    model, params = _init_model_and_params(
+    actor_critic, params = _init_model_and_params(
         config, env, env_params, params_bytes
     )
 
-    if bool(config.get("SENSITIVITY", False)) and hasattr(env, "set_actor"):
-        env.set_actor(model, params)
 
     rollouts_dir = run_dir / "rollouts"
-    _ensure_dir(rollouts_dir)
-
-    meta = {
-        "run_dir": str(run_dir),
-        "timestamp": _now_stamp(),
-        "seed": rcfg.seed,
-        "num_rollouts": rcfg.num_rollouts,
-        "max_steps": rcfg.max_steps,
-        "deterministic": rcfg.deterministic,
-        "env_name": env_name,
-        "format_version": 1,
-        "config": config,
-    }
-    with (rollouts_dir / "meta.json").open("w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
-
-    summary_path = rollouts_dir / "rollouts_summary.csv"
-    with summary_path.open("w", encoding="utf-8") as f:
-        f.write("traj_id,length\n")
+    rollouts_dir.mkdir(parents=True, exist_ok=True)
 
     rng = jax.random.PRNGKey(rcfg.seed)
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
-        actions, state_arrays, steps = _rollout_episode(
+        actions, state_flat = rollout_episode(
             env=env,
             env_params=env_params,
-            model=model,
+            actor_critic=actor_critic,
             params=params,
             rng_key=episode_key,
             max_steps=rcfg.max_steps,
@@ -326,11 +277,9 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         )
 
         traj_id = idx + 1
-        traj_file = rollouts_dir / f"traj_{traj_id:05d}.npz"
-        _save_trajectory(traj_file, actions, state_arrays)
+        traj_file = rollouts_dir / f"traj_{traj_id:05d}.msgpack"
 
-        with summary_path.open("a", encoding="utf-8") as f:
-            f.write(f"{traj_id},{steps}\n")
+        save_trajectory(traj_file, actions, state_flat)
 
         print(
             f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts} -> {traj_file}"
@@ -365,7 +314,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--deterministic",
-        action="store_true",
+        type=bool,
+        default=True,
         help="Use policy mean action instead of sampling from the distribution.",
     )
     parser.add_argument(

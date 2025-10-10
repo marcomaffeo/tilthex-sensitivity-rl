@@ -116,6 +116,7 @@ class EnvParams(environment.EnvParams):
         default_factory=lambda: jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5]),
     )
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
+    is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
 class DroneV0(environment.Environment):
@@ -126,7 +127,7 @@ class DroneV0(environment.Environment):
         self.obs_dim = 13
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
-        self.target_pos = jnp.array([0.0, 0.0, 1.0])
+        self.target_pos = jnp.array([0.0, 0.0, 0.5])
         self.hovering_thrust = self.default_params.m * self.default_params.g
         super().__init__()
 
@@ -184,7 +185,7 @@ class DroneV0(environment.Environment):
             -0.05 * jnp.linalg.norm(state_next.omega)
             + reward_app
             - 0.05 * (jnp.linalg.norm(u - self.hovering_thrust) ** 2)
-            # - 0.1 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
+            - 0.005 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()
@@ -289,13 +290,17 @@ class DroneV0(environment.Environment):
         vel = jnp.array([0.0, 0.0, 0.0])
         omega = jnp.array([0.0, 0.0, 0.0])
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
+
         key, _ = jax.random.split(key)
-        target_pos = jax.random.uniform(
+        target_pos = jax.lax.select(params.is_testing, 
+        jax.random.uniform(
             key,
             shape=(3,),
             minval=params.env_min_limits,
             maxval=params.env_max_limits,
-        )
+        ),
+        self.target_pos)
+
         env_state = EnvState(
             state=state,
             target_pos=target_pos,

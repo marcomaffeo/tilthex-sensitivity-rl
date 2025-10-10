@@ -353,7 +353,7 @@ class SensitivityWrapper(GymnaxWrapper):
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
         sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
-        sens_s_next = jnp.clip(sens_s_next, -10, 10)
+        sens_s_next = jnp.clip(sens_s_next, -1000, 1000)
         # Pack updated sensitivitie
         return Sensitivity(
             state=sens_s_next,
@@ -510,7 +510,7 @@ class SensitivityExtWrapper(GymnaxWrapper):
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
         sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
-        sens_s_next = jnp.clip(sens_s_next, -10, 10)
+        sens_s_next = jnp.clip(sens_s_next, -1000, 1000)
         # Pack updated sensitivitie
         return Sensitivity(
             state=sens_s_next,

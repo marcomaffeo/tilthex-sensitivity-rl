@@ -24,6 +24,7 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
+    SensitivityExtWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -135,7 +136,7 @@ def make_train(config, writer: SummaryWriter):
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        env = SensitivityWrapper(
+        env = SensitivityExtWrapper(
             env,
             regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"],
         )
@@ -327,7 +328,21 @@ def make_train(config, writer: SummaryWriter):
                             jnp.abs(ratio - 1.0) > config["CLIP_EPS"]
                         )
 
+                        # get sensitivity
+                        sensitivity_state = traj_batch.info["sensitivity_state"]
+                        ss_normalized = (sensitivity_state) / (
+                            jnp.max(sensitivity_state)
+                            - jnp.min(sensitivity_state)
+                            + 1e-8
+                        )
+                        # ss_normalized = jnp.clip(ss_normalized, -10.0, 10.0)
+
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
+                        gae = (
+                            gae
+                            + config["SENSITIVITY_REGULARIZATION_WEIGHT"]
+                            * ss_normalized
+                        )
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
                             jnp.clip(
@@ -581,7 +596,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.5,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.12,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }
@@ -663,7 +678,6 @@ if __name__ == "__main__":
 
     import subprocess
 
-    os.path.dirname(__file__)
     # Call with positional and named args
     subprocess.run(
         [

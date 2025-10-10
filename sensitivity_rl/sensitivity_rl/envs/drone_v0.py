@@ -184,7 +184,7 @@ class DroneV0(environment.Environment):
             -0.05 * jnp.linalg.norm(state_next.omega)
             + reward_app
             - 0.05 * (jnp.linalg.norm(u - self.hovering_thrust) ** 2)
-            # - 0.1 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
+            - 0.005 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()

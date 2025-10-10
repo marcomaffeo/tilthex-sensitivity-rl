@@ -567,7 +567,7 @@ if __name__ == "__main__":
         "LR": 1e-3,
         "NUM_ENVS": 400,
         "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 1e6,
+        "TOTAL_TIMESTEPS": 1e7,
         "UPDATE_EPOCHS": 10,
         "NUM_MINIBATCHES": 64,
         "GAMMA": 0.95,
@@ -581,7 +581,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.5,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.02,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }

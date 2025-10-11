@@ -128,7 +128,7 @@ class DroneV0(environment.Environment):
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
-        self.hovering_thrust = self.default_params.m * self.default_params.g
+        self.hovering_action = jnp.array([self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0])
 
         self.params_min = [
             0.02,  # mass
@@ -193,7 +193,7 @@ class DroneV0(environment.Environment):
         reward = (
             -0.05 * jnp.linalg.norm(state_next.omega)
             + reward_app
-            - 0.05 * (jnp.linalg.norm(u - self.hovering_thrust) ** 2)
+            - 0.05 * (jnp.linalg.norm(u - self.hovering_action) ** 2)
             - 0.005 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
@@ -315,7 +315,7 @@ class DroneV0(environment.Environment):
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            last_u=jnp.array([0.0, 0.0, 0.0, 0.0]),
+            last_u=self.hovering_action,
             time=0,
         )
         return self.get_obs(env_state), env_state

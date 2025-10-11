@@ -13,6 +13,7 @@ numpy = "*"
 matplotlib = "*"
 python-build = "*"
 pip = "*"
+pytest = ">=8.4.2,<9"
 
 
 [pypi-dependencies]

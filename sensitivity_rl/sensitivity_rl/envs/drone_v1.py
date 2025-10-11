@@ -323,7 +323,7 @@ class DroneV1(environment.Environment):
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            last_u=last_u=self.hovering_action,
+            last_u=self.hovering_action,
             time=0,
         )
         return self.get_obs(env_state), env_state

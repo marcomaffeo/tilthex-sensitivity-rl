@@ -46,7 +46,10 @@ Train PPO (writes latest artifacts to `runs/latest`):
 - Whatever config you pass is copied into the output run directory as `config.json`, alongside the learned parameters.
 
 Generate rollouts from a saved model:
-- `pixi run rollouts --run_dirs runs/drone_v0/latest --num_rollouts 100 --batch_size 64 --deterministic`
+- `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --deterministic`
+
+Generate rollouts from a saved model (with perturbed parameters):
+- `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --param_samples 10 --deterministic`
 
 Sensitivity/Jacobian checks:
 `pixi run test-sensitivity`

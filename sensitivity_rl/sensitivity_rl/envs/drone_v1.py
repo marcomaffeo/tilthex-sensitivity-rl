@@ -309,7 +309,7 @@ class DroneV1(environment.Environment):
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
         key, _ = jax.random.split(key)
-         target_pos = jax.lax.select(
+        target_pos = jax.lax.select(
             params.is_testing,
             self.target_pos,
             jax.random.uniform(

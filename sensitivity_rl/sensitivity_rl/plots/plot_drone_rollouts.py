@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 from typing import Iterable, List
 
+from flax import serialization
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -15,20 +17,12 @@ POSITION_KEYS = ("state_pos",)
 TARGET_KEYS = ("target_pos",)
 
 
-def _load_meta(rollouts_dir: Path) -> dict:
-    meta_path = rollouts_dir / "meta.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"meta.json not found in {rollouts_dir}")
-    with meta_path.open("r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
 def _iter_trajectory_files(rollouts_dir: Path) -> Iterable[Path]:
-    return sorted(rollouts_dir.glob("traj_*.npz"))
+    return sorted(rollouts_dir.glob("traj_*.msgpack"))
 
 
 def _get_array(
-    data: np.lib.npyio.NpzFile, candidates: Iterable[str], label: str
+    data, candidates: Iterable[str], label: str
 ) -> np.ndarray:
     for key in candidates:
         if key in data:
@@ -38,10 +32,11 @@ def _get_array(
     )
 
 
-def _extract_series(npz_file: Path) -> dict:
-    data = np.load(npz_file)
+def _extract_series(to_load: Path) -> dict:
 
-    positions = _get_array(data, POSITION_KEYS, "state_pos")
+    data = serialization.msgpack_restore(to_load.read_bytes())
+
+    positions = np.asarray(data["state"][:, :3])
     actions = np.asarray(data["actions"])
 
     series = {
@@ -121,15 +116,16 @@ def main() -> None:
         description="Plot quadrotor rollouts produced by sensitivity_rl.rollouts."
     )
     parser.add_argument(
-        "rollouts_dir",
+        "--rollouts_dir",
         type=Path,
-        help="Directory containing trajectory .npz files and meta.json",
+        default=Path("runs/latest/rollouts"),
+        help="Directory containing trajectory .msgpack files and config.json",
     )
     parser.add_argument(
         "--max_traj",
         type=int,
-        default=20,
-        help="Maximum number of trajectories to include (default: 20)",
+        default=100,
+        help="Maximum number of trajectories to include (default: 100)",
     )
     args = parser.parse_args()
 
@@ -137,8 +133,7 @@ def main() -> None:
     if not rollouts_dir.exists():
         raise FileNotFoundError(f"Rollouts directory not found: {rollouts_dir}")
 
-    meta = _load_meta(rollouts_dir)
-    env_name = meta.get("env_name", "drone_v0")
+    env_name = "drone_v0"
     if env_name.lower() not in {"drone_v0", "quadrotor", "drone", "quad"}:
         raise ValueError(
             f"This plotting script is for the quadrotor environment. Found env_name={env_name!r} in meta.json"

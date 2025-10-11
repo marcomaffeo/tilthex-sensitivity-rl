@@ -100,8 +100,6 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
     ----------
     run_dir:
         The directory containing the results of the most recent PPO run.
-    env_name:
-        Environment key (e.g. "drone_v0") used to build the runs/<env> hierarchy.
     runs_root:
         Base directory that contains the per-environment run folders. Defaults to
         the "runs" folder relative to the current working directory.
@@ -113,10 +111,8 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
     """
 
     runs_root = runs_root or Path("runs")
-    env_root = runs_root / env_name
-    env_root.mkdir(parents=True, exist_ok=True)
 
-    latest_dir = env_root / "latest"
+    latest_dir = runs_root / "latest"
     target = run_dir.resolve()
 
     if latest_dir.exists() or latest_dir.is_symlink():

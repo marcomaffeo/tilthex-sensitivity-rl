@@ -26,14 +26,12 @@ import flax.linen as nn
 import distrax
 from flax import serialization
 from flax.linen.initializers import constant, orthogonal
-from envs import Pendulum, DroneV0
-from envs.wrappers import GymnaxWrapper, ClipAction, SensitivityWrapper
+from envs import ENV_REGISTRY
+from envs import Pendulum, DroneV0, DroneV1
+from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
-ENV_REGISTRY = {
-    "pendulum": Pendulum,
-    "drone_v0": DroneV0,
-}
+from networks import ActorCritic
 
 
 @dataclass
@@ -44,67 +42,8 @@ class RolloutConfig:
     seed: int
 
 
-class ActorCriticEval(nn.Module):
-    action_dim: int
-    activation: str = "tanh"
-    actor_hidden_dim: int = 256
-    critic_hidden_dim: int = 256
 
-    @nn.compact
-    def __call__(self, x):
-        activation_fn = nn.relu if self.activation == "relu" else nn.tanh
-
-        actor = nn.Dense(
-            self.actor_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense1",
-        )(x)
-        actor = activation_fn(actor)
-        actor = nn.Dense(
-            self.actor_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense2",
-        )(actor)
-        actor = activation_fn(actor)
-        actor_mean = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-            name="actor_output",
-        )(actor)
-        actor_log_std = self.param(
-            "actor_log_std",
-            nn.initializers.zeros,
-            (self.action_dim,),
-        )
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_log_std))
-
-        critic = nn.Dense(
-            self.critic_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense1",
-        )(x)
-        critic = activation_fn(critic)
-        critic = nn.Dense(
-            self.critic_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense2",
-        )(critic)
-        critic = activation_fn(critic)
-        critic_value = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
-            name="critic_output",
-        )(critic)
-
-        return pi, jnp.squeeze(critic_value, axis=-1)
-
-def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
+def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
     params_path = run_dir / "params.msgpack"
     if not cfg_path.exists():
@@ -117,10 +56,10 @@ def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     return config, params_bytes
 
 
-def _build_env_from_config(
+def build_env_from_config(
     config: Dict[str, Any],
 ) -> Tuple[GymnaxWrapper, Any, str]:
-    env_name = config.get("ENV_NAME", "pendulum").lower()
+    env_name = config.get("ENV_NAME", "drone_v0").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
             f"Unknown environment '{env_name}'. Available: {sorted(ENV_REGISTRY)}"
@@ -136,11 +75,6 @@ def _build_env_from_config(
 
     return wrapped_env, env_params, env_name
 
-
-def _unwrap_base_env_state(env_state: Any) -> Any:
-    while hasattr(env_state, "env_state"):
-        env_state = env_state.env_state
-    return env_state
 
 
 def _flatten_value(x):
@@ -214,7 +148,6 @@ def rollout_episode(
     return actions_buf, logs_buf
 
 
-
 def save_trajectory(
     path: Path, actions: np.ndarray, state_filtered: Dict[str, np.ndarray]
 ) -> None:
@@ -223,41 +156,32 @@ def save_trajectory(
     path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
-def _init_model_and_params(
+def init_model_and_params(
     config: Dict[str, Any], env, env_params, params_bytes: bytes
 ):
     params = serialization.msgpack_restore(params_bytes)
 
-    actor_hidden = 256
-    critic_hidden = 256
-    try:
-        actor_hidden = int(params["params"]["actor_dense1"]["kernel"].shape[1])
-    except (KeyError, AttributeError, TypeError, IndexError):
-        actor_hidden = 256
-    try:
-        critic_hidden = int(
-            params["params"]["critic_dense1"]["kernel"].shape[1]
-        )
-    except (KeyError, AttributeError, TypeError, IndexError):
-        critic_hidden = 256
+    actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
+    critic_layer_sizes = tuple(config["CRITIC_LAYER_SIZES"])
 
     action_dim = env.action_space(env_params).shape[0]
-    model = ActorCriticEval(
+    model = ActorCritic(
         action_dim=action_dim,
         activation=config.get("ACTIVATION", "tanh"),
-        actor_hidden_dim=actor_hidden,
-        critic_hidden_dim=critic_hidden,
+        actor_layer_sizes=actor_layer_sizes,
+        critic_layer_sizes=critic_layer_sizes,
     )
     return model, params
 
 
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
-    config, params_bytes = _load_run_artifacts(run_dir)
-    env, env_params, env_name = _build_env_from_config(config)
-    actor_critic, params = _init_model_and_params(
+
+    config, params_bytes = load_run_artifacts(run_dir)
+    env, env_params, env_name = build_env_from_config(config)
+
+    actor_critic, params = init_model_and_params(
         config, env, env_params, params_bytes
     )
-
 
     rollouts_dir = run_dir / "rollouts"
     rollouts_dir.mkdir(parents=True, exist_ok=True)

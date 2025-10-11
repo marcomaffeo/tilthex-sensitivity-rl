@@ -17,14 +17,6 @@ POSITION_KEYS = ("state_pos",)
 TARGET_KEYS = ("target_pos",)
 
 
-def _load_meta(rollouts_dir: Path) -> dict:
-    meta_path = rollouts_dir / "meta.json"
-    if not meta_path.exists():
-        raise FileNotFoundError(f"meta.json not found in {rollouts_dir}")
-    with meta_path.open("r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
 def _iter_trajectory_files(rollouts_dir: Path) -> Iterable[Path]:
     return sorted(rollouts_dir.glob("traj_*.msgpack"))
 
@@ -125,15 +117,16 @@ def main() -> None:
         description="Plot quadrotor rollouts produced by sensitivity_rl.rollouts."
     )
     parser.add_argument(
-        "rollouts_dir",
+        "--rollouts_dir",
         type=Path,
-        help="Directory containing trajectory .npz files and meta.json",
+        default=Path("runs/latest/rollouts"),
+        help="Directory containing trajectory .msgpack files and config.json",
     )
     parser.add_argument(
         "--max_traj",
         type=int,
-        default=20,
-        help="Maximum number of trajectories to include (default: 20)",
+        default=100,
+        help="Maximum number of trajectories to include (default: 100)",
     )
     args = parser.parse_args()
 

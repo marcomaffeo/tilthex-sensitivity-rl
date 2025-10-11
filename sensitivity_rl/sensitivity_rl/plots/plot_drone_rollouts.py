@@ -73,7 +73,6 @@ def plot_drone_rollouts(
         ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
 
         if "target" in series:
-            print("Plotting target")
             target = series["target"]
             ax_path.scatter(
                 target[0], target[1], target[2], marker="x", color="red", s=30

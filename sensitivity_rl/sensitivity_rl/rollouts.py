@@ -212,7 +212,6 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             rng_key=sample_key,
         )
         env_param_sets.extend(sampled_params)
-        print(sampled_params)
 
     env_params_batched = jax.tree_util.tree_map(
         lambda *vals: jnp.stack([jnp.asarray(v) for v in vals], axis=0),

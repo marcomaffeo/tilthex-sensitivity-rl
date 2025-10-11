@@ -134,6 +134,15 @@ class DroneV1(environment.Environment):
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
         self.hovering_thrust = self.default_params.m * self.default_params.g
+
+        self.params_min = [
+            0.02,  # mass
+            jnp.array([1e-5, 1e-5, 1e-5]),  # inertia
+        ]
+        self.params_max = [
+            0.05,  # mass
+            jnp.array([1e-4, 1e-4, 1e-4]),  # inertia 
+        ]  
         super().__init__()
 
     @property
@@ -300,15 +309,15 @@ class DroneV1(environment.Environment):
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
         key, _ = jax.random.split(key)
-        target_pos = jax.lax.select(
-            params.is_testing, 
+         target_pos = jax.lax.select(
+            params.is_testing,
+            self.target_pos,
             jax.random.uniform(
                 key,
                 shape=(3,),
                 minval=params.env_min_limits,
                 maxval=params.env_max_limits,
-            ),
-            self.target_pos
+            )
         )
 
         env_state = EnvState(

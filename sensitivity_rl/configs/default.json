@@ -3,7 +3,7 @@
     "LR": 0.001,
     "NUM_ENVS": 1000,
     "NUM_STEPS": 200,
-    "TOTAL_TIMESTEPS": 1e7,
+    "TOTAL_TIMESTEPS": 1.5e7,
     "UPDATE_EPOCHS": 10,
     "NUM_MINIBATCHES": 64,
     "GAMMA": 0.95,

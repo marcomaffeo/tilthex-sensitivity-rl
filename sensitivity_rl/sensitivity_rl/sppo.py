@@ -606,7 +606,6 @@ if __name__ == "__main__":
                 if config["ENV_NAME"] == "drone_v0" or config["ENV_NAME"] == "drone_v1"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
-            ),
-            f"{run_dir}/rollouts/",
+            )
         ]
     )

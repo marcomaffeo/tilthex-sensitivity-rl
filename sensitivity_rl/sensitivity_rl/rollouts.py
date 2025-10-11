@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
 from functools import partial
@@ -32,6 +30,7 @@ from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
 from networks import ActorCritic
+from utils import sample_env_params
 
 
 @dataclass
@@ -40,6 +39,7 @@ class RolloutConfig:
     max_steps: int
     deterministic: bool
     seed: int
+    param_samples: int
 
 
 
@@ -68,7 +68,7 @@ def build_env_from_config(
     env_cls = ENV_REGISTRY[env_name]
     env = env_cls()
     env_params = env.default_params
-    env_params.replace(is_testing=True)
+    env_params = env_params.replace(is_testing=True)
 
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)
@@ -85,7 +85,13 @@ def _flatten_value(x):
         flat = jnp.ravel(jnp.asarray(x))
     return flat
 
-@partial(jax.jit, static_argnames=("env", "actor_critic", "max_steps", "deterministic"))
+
+# NOTE: Treating env and actor_critic as static keeps the function JIT-able while
+# allowing vmap to supply different rng/env_params externally.
+@partial(
+    jax.jit,
+    static_argnames=("env", "actor_critic", "max_steps", "deterministic"),
+)
 def rollout_episode(
     env,
     env_params,
@@ -95,9 +101,9 @@ def rollout_episode(
     max_steps: int,
     deterministic: bool,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+
     rng_reset, rng = jax.random.split(rng_key)
     obs, env_state = env.reset(rng_reset, env_params)
-
 
     # Determine horizon
     horizon = (
@@ -149,10 +155,14 @@ def rollout_episode(
 
 
 def save_trajectory(
-    path: Path, actions: np.ndarray, state_filtered: Dict[str, np.ndarray]
+    path: Path,
+    actions: np.ndarray,
+    state_filtered: Dict[str, np.ndarray],
+    env_params=None,
 ) -> None:
     to_save = {"actions": actions}
     to_save.update(state_filtered)
+
     path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
@@ -187,27 +197,93 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     rollouts_dir.mkdir(parents=True, exist_ok=True)
 
     rng = jax.random.PRNGKey(rcfg.seed)
+    param_sample_count = max(1, rcfg.param_samples)
+
+    env_param_sets = [env_params]
+    if param_sample_count > 1:
+        rng, sample_key = jax.random.split(rng)
+        lows, highs = env.params_min, env.params_max
+        sampled_params = sample_env_params(
+            env=env,
+            base_params=env_params,
+            lows=lows,
+            highs=highs,
+            num_samples=param_sample_count - 1,
+            rng_key=sample_key,
+        )
+        env_param_sets.extend(sampled_params)
+        print(sampled_params)
+
+    env_params_batched = jax.tree_util.tree_map(
+        lambda *vals: jnp.stack([jnp.asarray(v) for v in vals], axis=0),
+        *env_param_sets,
+    )
+
+    batched_rollout = jax.vmap(
+        rollout_episode,
+        in_axes=(None, 0, None, None, 0, None, None),
+        out_axes=(0, 0),
+    )
+
+    print(
+        f"[rollouts] Using {param_sample_count} environment parameter set(s)"
+        f" for {run_dir.name}"
+    )
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
-        actions, state_flat = rollout_episode(
-            env=env,
-            env_params=env_params,
-            actor_critic=actor_critic,
-            params=params,
-            rng_key=episode_key,
-            max_steps=rcfg.max_steps,
-            deterministic=rcfg.deterministic,
+        episode_keys = jax.random.split(episode_key, param_sample_count)
+        actions_batch, state_batch = batched_rollout(
+            env,
+            env_params_batched,
+            actor_critic,
+            params,
+            episode_keys,
+            rcfg.max_steps,
+            rcfg.deterministic,
         )
+
+        actions_batch = np.asarray(actions_batch)
+        state_batch_np = {
+            key: np.asarray(val) for key, val in state_batch.items()
+        }
+
+        env_params_samples = [
+            jax.tree_util.tree_map(lambda x: np.asarray(x[i]), env_params_batched)
+            for i in range(param_sample_count)
+        ]
 
         traj_id = idx + 1
-        traj_file = rollouts_dir / f"traj_{traj_id:05d}.msgpack"
 
-        save_trajectory(traj_file, actions, state_flat)
+        for sample_idx in range(param_sample_count):
+            if param_sample_count == 1:
+                traj_file = rollouts_dir / f"traj_{traj_id:05d}.msgpack"
+            else:
+                traj_file = (
+                    rollouts_dir
+                    / f"traj_{traj_id:05d}_sample_{sample_idx:02d}.msgpack"
+                )
 
-        print(
-            f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts} -> {traj_file}"
-        )
+            actions = actions_batch[sample_idx]
+            state_flat = {
+                key: value[sample_idx] for key, value in state_batch_np.items()
+            }
+            save_trajectory(
+                traj_file,
+                actions,
+                state_flat,
+                env_params_samples[sample_idx],
+            )
+
+            suffix = (
+                " (nominal)"
+                if sample_idx == 0
+                else f" (sample {sample_idx})"
+            )
+            print(
+                f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts}{suffix}"
+                f" -> {traj_file}"
+            )
 
     print(
         f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
@@ -248,6 +324,15 @@ def parse_args() -> argparse.Namespace:
         default=0,
         help="Base PRNG seed for rollouts.",
     )
+    parser.add_argument(
+        "--param_samples",
+        type=int,
+        default=1,
+        help=(
+            "Number of environment parameter samples per rollout (>=1). "
+            "Value 1 uses only the nominal parameters."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -258,6 +343,7 @@ def main() -> None:
         max_steps=args.max_steps,
         deterministic=args.deterministic,
         seed=args.seed,
+        param_samples=max(1, args.param_samples),
     )
 
     for run_dir_str in args.run_dirs:

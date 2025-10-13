@@ -548,6 +548,10 @@ class SensitivityExtWrapper(GymnaxWrapper):
         info["sensitivity_state"] = jnp.linalg.matrix_norm(
             next_sensitivity.state, ord="fro"
         )
+        info["sensitivity_state_rw"] = -(
+            jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro")
+            - jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro")
+        )
 
         sens_state = SensitivityEnvState(
             env_state=env_state, sensitivity=next_sensitivity

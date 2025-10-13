@@ -329,7 +329,9 @@ def make_train(config, writer: SummaryWriter):
                         )
 
                         # get sensitivity
-                        sensitivity_state = traj_batch.info["sensitivity_state"]
+                        sensitivity_state = traj_batch.info[
+                            "sensitivity_state_rw"
+                        ]
                         ss_normalized = (sensitivity_state) / (
                             jnp.max(sensitivity_state)
                             - jnp.min(sensitivity_state)
@@ -596,7 +598,7 @@ if __name__ == "__main__":
         "NORMALIZE_ENV": True,
         "DEBUG": True,
         "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.12,
+        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.1,
         "ENV_NAME": "drone_v0",
         # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
     }

@@ -12,11 +12,10 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple
+from functools import partial
 
 import jax
 import jax.numpy as jnp
@@ -25,14 +24,13 @@ import flax.linen as nn
 import distrax
 from flax import serialization
 from flax.linen.initializers import constant, orthogonal
-from envs import Pendulum, DroneV0
-from envs.wrappers import GymnaxWrapper, ClipAction, SensitivityWrapper
+from envs import ENV_REGISTRY
+from envs import Pendulum, DroneV0, DroneV1
+from envs.wrappers import GymnaxWrapper, ClipAction
+from jax.flatten_util import ravel_pytree
 
-
-ENV_REGISTRY = {
-    "pendulum": Pendulum,
-    "drone_v0": DroneV0,
-}
+from networks import ActorCritic
+from utils import sample_env_params
 
 
 @dataclass
@@ -41,78 +39,11 @@ class RolloutConfig:
     max_steps: int
     deterministic: bool
     seed: int
+    param_samples: int
 
 
-class ActorCriticEval(nn.Module):
-    action_dim: int
-    activation: str = "tanh"
-    actor_hidden_dim: int = 256
-    critic_hidden_dim: int = 256
 
-    @nn.compact
-    def __call__(self, x):
-        activation_fn = nn.relu if self.activation == "relu" else nn.tanh
-
-        actor = nn.Dense(
-            self.actor_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense1",
-        )(x)
-        actor = activation_fn(actor)
-        actor = nn.Dense(
-            self.actor_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense2",
-        )(actor)
-        actor = activation_fn(actor)
-        actor_mean = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-            name="actor_output",
-        )(actor)
-        actor_log_std = self.param(
-            "actor_log_std",
-            nn.initializers.zeros,
-            (self.action_dim,),
-        )
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_log_std))
-
-        critic = nn.Dense(
-            self.critic_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense1",
-        )(x)
-        critic = activation_fn(critic)
-        critic = nn.Dense(
-            self.critic_hidden_dim,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense2",
-        )(critic)
-        critic = activation_fn(critic)
-        critic_value = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
-            name="critic_output",
-        )(critic)
-
-        return pi, jnp.squeeze(critic_value, axis=-1)
-
-
-def _now_stamp() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M")
-
-
-def _ensure_dir(p: Path) -> None:
-    p.mkdir(parents=True, exist_ok=True)
-
-
-def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
+def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
     params_path = run_dir / "params.msgpack"
     if not cfg_path.exists():
@@ -125,10 +56,10 @@ def _load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     return config, params_bytes
 
 
-def _build_env_from_config(
+def build_env_from_config(
     config: Dict[str, Any],
 ) -> Tuple[GymnaxWrapper, Any, str]:
-    env_name = config.get("ENV_NAME", "pendulum").lower()
+    env_name = config.get("ENV_NAME", "drone_v0").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
             f"Unknown environment '{env_name}'. Available: {sorted(ENV_REGISTRY)}"
@@ -137,88 +68,65 @@ def _build_env_from_config(
     env_cls = ENV_REGISTRY[env_name]
     env = env_cls()
     env_params = env.default_params
+    env_params = env_params.replace(is_testing=True)
 
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)
 
-    # if bool(config.get("SENSITIVITY", False)):
-    #     regularization = float(
-    #         config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 0.0)
-    #     )
-    #     wrapped_env = SensitivityWrapper(
-    #         wrapped_env, regularization_weight=regularization
-    #     )
-
     return wrapped_env, env_params, env_name
 
 
-def _unwrap_base_env_state(env_state: Any) -> Any:
-    while hasattr(env_state, "env_state"):
-        env_state = env_state.env_state
-    return env_state
+
+def _flatten_value(x):
+    """Flatten a pytree or array/scalar into a 1D JAX array for logging."""
+    try:
+        flat, _ = ravel_pytree(x)
+    except Exception:
+        flat = jnp.ravel(jnp.asarray(x))
+    return flat
 
 
-def _record_state(state_tracks, env_state: Any) -> None:
-    base_state = _unwrap_base_env_state(env_state)
-    components: Dict[str, np.ndarray] = {}
-
-    model_state = getattr(base_state, "state", None)
-    if model_state is not None:
-        if hasattr(model_state, "__dataclass_fields__"):
-            for name in model_state.__dataclass_fields__:
-                components[f"state_{name}"] = np.asarray(
-                    getattr(model_state, name)
-                )
-        else:
-            components["state"] = np.asarray(model_state)
-
-    if hasattr(base_state, "time"):
-        components["time"] = np.asarray(base_state.time)
-
-    if hasattr(base_state, "target_pos"):
-        components["target_pos"] = np.asarray(base_state.target_pos)
-
-    for key, value in components.items():
-        state_tracks[key].append(np.asarray(value))
-
-
-def _convert_state_tracks(state_tracks) -> Dict[str, np.ndarray]:
-    arrays: Dict[str, np.ndarray] = {}
-    for key, values in state_tracks.items():
-        arrays[key] = np.stack([np.asarray(v) for v in values], axis=0)
-    return arrays
-
-
-def _rollout_episode(
+# NOTE: Treating env and actor_critic as static keeps the function JIT-able while
+# allowing vmap to supply different rng/env_params externally.
+@partial(
+    jax.jit,
+    static_argnames=("env", "actor_critic", "max_steps", "deterministic"),
+)
+def rollout_episode(
     env,
     env_params,
-    model,
+    actor_critic,
     params,
     rng_key: jax.Array,
     max_steps: int,
     deterministic: bool,
-) -> Tuple[np.ndarray, Dict[str, np.ndarray], int]:
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+
     rng_reset, rng = jax.random.split(rng_key)
     obs, env_state = env.reset(rng_reset, env_params)
 
-    env_state = env_state.replace(target_pos=jnp.array([0.0, 0.0, 0.5]))
-
+    # Determine horizon
     horizon = (
         max_steps
         if max_steps > 0
         else int(getattr(env_params, "max_steps_in_episode", 200))
     )
+    # Preallocate action buffer
+    act_shape = env.action_space(env_params).shape
+    actions_buf = jnp.zeros((horizon,) + act_shape, dtype=jnp.float32)
 
-    state_tracks = defaultdict(list)
-    _record_state(state_tracks, env_state)
+    # Preallocate log buffers for requested keys and write initial state at index 0
+    logs_buf: Dict[str, jnp.ndarray] = {}
+    for key in env_state.__dataclass_fields__.keys():
+        val0 = getattr(env_state, key)
+        flat0 = _flatten_value(val0)
+        logs_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
+        logs_buf[key] = logs_buf[key].at[0].set(flat0)
 
-    action_shape = env.action_space(env_params).shape
-    actions_list = []
+    def body_fun(i, carry):
+        rng, obs, env_state, actions_buf, logs_buf = carry
 
-    done = False
-
-    for steps in range(horizon):
-        pi, _ = model.apply(params, obs)
+        pi, _ = actor_critic.apply(params, obs)
         if deterministic:
             action = pi.mean()
         else:
@@ -226,115 +134,155 @@ def _rollout_episode(
             action = pi.sample(seed=act_key)
 
         rng, step_key = jax.random.split(rng)
-        obs, env_state, reward, done_flag, _ = env.step(
-            step_key, env_state, action, env_params
-        )
+        obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
-        actions_list.append(env_state.last_u)
+        # Record action after environment step (matches previous semantics)
+        actions_buf = actions_buf.at[i].set(env_state.last_u)
 
-        done = bool(np.asarray(done_flag))
-        _record_state(state_tracks, env_state)
+        # Record selected state fields at index i+1
+        for key in env_state.__dataclass_fields__.keys():
+            val = getattr(env_state, key)
+            flat = _flatten_value(val)
+            logs_buf[key] = logs_buf[key].at[i + 1].set(flat)
 
-    if actions_list:
-        actions = np.stack(actions_list, axis=0)
-    else:
-        actions = np.empty((0,) + action_shape, dtype=np.float32)
+        return (rng, obs, env_state, actions_buf, logs_buf)
 
-    state_arrays = _convert_state_tracks(state_tracks)
-    return actions, state_arrays, steps + 1
+    rng, obs, env_state, actions_buf, logs_buf = jax.lax.fori_loop(
+        0, horizon, body_fun, (rng, obs, env_state, actions_buf, logs_buf)
+    )
+
+    return actions_buf, logs_buf
 
 
-def _save_trajectory(
-    path: Path, actions: np.ndarray, state_arrays: Dict[str, np.ndarray]
+def save_trajectory(
+    path: Path,
+    actions: np.ndarray,
+    state_filtered: Dict[str, np.ndarray],
+    env_params=None,
 ) -> None:
-    payload = {"actions": actions}
-    payload.update(state_arrays)
-    np.savez_compressed(path, **payload)
+    to_save = {"actions": actions}
+    to_save.update(state_filtered)
+
+    path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
-def _init_model_and_params(
+def init_model_and_params(
     config: Dict[str, Any], env, env_params, params_bytes: bytes
 ):
     params = serialization.msgpack_restore(params_bytes)
 
-    actor_hidden = 256
-    critic_hidden = 256
-    try:
-        actor_hidden = int(params["params"]["actor_dense1"]["kernel"].shape[1])
-    except (KeyError, AttributeError, TypeError, IndexError):
-        actor_hidden = 256
-    try:
-        critic_hidden = int(
-            params["params"]["critic_dense1"]["kernel"].shape[1]
-        )
-    except (KeyError, AttributeError, TypeError, IndexError):
-        critic_hidden = 256
+    actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
+    critic_layer_sizes = tuple(config["CRITIC_LAYER_SIZES"])
 
     action_dim = env.action_space(env_params).shape[0]
-    model = ActorCriticEval(
+    model = ActorCritic(
         action_dim=action_dim,
         activation=config.get("ACTIVATION", "tanh"),
-        actor_hidden_dim=actor_hidden,
-        critic_hidden_dim=critic_hidden,
+        actor_layer_sizes=actor_layer_sizes,
+        critic_layer_sizes=critic_layer_sizes,
     )
     return model, params
 
 
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
-    config, params_bytes = _load_run_artifacts(run_dir)
-    env, env_params, env_name = _build_env_from_config(config)
-    model, params = _init_model_and_params(
+
+    config, params_bytes = load_run_artifacts(run_dir)
+    env, env_params, env_name = build_env_from_config(config)
+
+    actor_critic, params = init_model_and_params(
         config, env, env_params, params_bytes
     )
 
-    if bool(config.get("SENSITIVITY", False)) and hasattr(env, "set_actor"):
-        env.set_actor(model, params)
-
     rollouts_dir = run_dir / "rollouts"
-    _ensure_dir(rollouts_dir)
-
-    meta = {
-        "run_dir": str(run_dir),
-        "timestamp": _now_stamp(),
-        "seed": rcfg.seed,
-        "num_rollouts": rcfg.num_rollouts,
-        "max_steps": rcfg.max_steps,
-        "deterministic": rcfg.deterministic,
-        "env_name": env_name,
-        "format_version": 1,
-        "config": config,
-    }
-    with (rollouts_dir / "meta.json").open("w", encoding="utf-8") as f:
-        json.dump(meta, f, indent=2)
-
-    summary_path = rollouts_dir / "rollouts_summary.csv"
-    with summary_path.open("w", encoding="utf-8") as f:
-        f.write("traj_id,length\n")
+    rollouts_dir.mkdir(parents=True, exist_ok=True)
 
     rng = jax.random.PRNGKey(rcfg.seed)
+    param_sample_count = max(1, rcfg.param_samples)
+
+    env_param_sets = [env_params]
+    if param_sample_count > 1:
+        rng, sample_key = jax.random.split(rng)
+        lows, highs = env.params_min, env.params_max
+        sampled_params = sample_env_params(
+            env=env,
+            base_params=env_params,
+            lows=lows,
+            highs=highs,
+            num_samples=param_sample_count - 1,
+            rng_key=sample_key,
+        )
+        env_param_sets.extend(sampled_params)
+
+    env_params_batched = jax.tree_util.tree_map(
+        lambda *vals: jnp.stack([jnp.asarray(v) for v in vals], axis=0),
+        *env_param_sets,
+    )
+
+    batched_rollout = jax.vmap(
+        rollout_episode,
+        in_axes=(None, 0, None, None, 0, None, None),
+        out_axes=(0, 0),
+    )
+
+    print(
+        f"[rollouts] Using {param_sample_count} environment parameter set(s)"
+        f" for {run_dir.name}"
+    )
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
-        actions, state_arrays, steps = _rollout_episode(
-            env=env,
-            env_params=env_params,
-            model=model,
-            params=params,
-            rng_key=episode_key,
-            max_steps=rcfg.max_steps,
-            deterministic=rcfg.deterministic,
+        episode_keys = jax.random.split(episode_key, param_sample_count)
+        actions_batch, state_batch = batched_rollout(
+            env,
+            env_params_batched,
+            actor_critic,
+            params,
+            episode_keys,
+            rcfg.max_steps,
+            rcfg.deterministic,
         )
+
+        actions_batch = np.asarray(actions_batch)
+        state_batch_np = {
+            key: np.asarray(val) for key, val in state_batch.items()
+        }
+
+        env_params_samples = [
+            jax.tree_util.tree_map(lambda x: np.asarray(x[i]), env_params_batched)
+            for i in range(param_sample_count)
+        ]
 
         traj_id = idx + 1
-        traj_file = rollouts_dir / f"traj_{traj_id:05d}.npz"
-        _save_trajectory(traj_file, actions, state_arrays)
 
-        with summary_path.open("a", encoding="utf-8") as f:
-            f.write(f"{traj_id},{steps}\n")
+        for sample_idx in range(param_sample_count):
+            if param_sample_count == 1:
+                traj_file = rollouts_dir / f"traj_{traj_id:05d}.msgpack"
+            else:
+                traj_file = (
+                    rollouts_dir
+                    / f"traj_{traj_id:05d}_sample_{sample_idx:02d}.msgpack"
+                )
 
-        print(
-            f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts} -> {traj_file}"
-        )
+            actions = actions_batch[sample_idx]
+            state_flat = {
+                key: value[sample_idx] for key, value in state_batch_np.items()
+            }
+            save_trajectory(
+                traj_file,
+                actions,
+                state_flat,
+                env_params_samples[sample_idx],
+            )
+
+            suffix = (
+                " (nominal)"
+                if sample_idx == 0
+                else f" (sample {sample_idx})"
+            )
+            print(
+                f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts}{suffix}"
+                f" -> {traj_file}"
+            )
 
     print(
         f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
@@ -365,7 +313,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--deterministic",
-        action="store_true",
+        type=bool,
+        default=True,
         help="Use policy mean action instead of sampling from the distribution.",
     )
     parser.add_argument(
@@ -373,6 +322,15 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="Base PRNG seed for rollouts.",
+    )
+    parser.add_argument(
+        "--param_samples",
+        type=int,
+        default=1,
+        help=(
+            "Number of environment parameter samples per rollout (>=1). "
+            "Value 1 uses only the nominal parameters."
+        ),
     )
     return parser.parse_args()
 
@@ -384,6 +342,7 @@ def main() -> None:
         max_steps=args.max_steps,
         deterministic=args.deterministic,
         seed=args.seed,
+        param_samples=max(1, args.param_samples),
     )
 
     for run_dir_str in args.run_dirs:

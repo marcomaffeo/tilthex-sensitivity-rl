@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 from pathlib import Path
+from typing import Any, Mapping, Tuple
 from flax import serialization
 from envs.base import Sensitivity
 
@@ -92,6 +93,67 @@ def merge_actor_params_with_fresh_critic(actor_params, fresh_params):
     return merged_params
 
 
+def sample_env_params(
+    env,
+    base_params,
+    lows,
+    highs,
+    num_samples: int,
+    rng_key: jax.Array,
+):
+    """Sample environment parameter pytrees within user-defined ranges.
+
+    Parameters
+    ----------
+    env: environment.Environment
+        Environment instance used for context; not mutated.
+    base_params: pytree
+        Reference parameters (usually ``env.default_params``).
+    lows, highs:
+        Lower and upper bounds supplied in the same flattened order as the
+        leaves returned by ``jax.tree_util.tree_flatten(base_params)``.
+        Each entry must broadcast with the corresponding leaf.
+    num_samples: int
+        Number of parameter copies to generate.
+    rng_key: jax.Array
+        PRNG key used for sampling.
+
+    Returns
+    -------
+    list
+        List of parameter pytrees sampled within provided bounds.
+    """
+
+    leaves, treedef = jax.tree_util.tree_flatten(base_params)
+    low_leaves, _ = jax.tree_util.tree_flatten(lows)
+    high_leaves, _ = jax.tree_util.tree_flatten(highs)
+
+    if len(low_leaves) != len(leaves) or len(high_leaves) != len(leaves):
+        raise ValueError("Bounds must match the number of leaves in base_params")
+
+    samples_per_leaf = []
+    key = rng_key
+    for leaf, low_bound, high_bound in zip(leaves, low_leaves, high_leaves):
+        leaf = jnp.asarray(leaf)
+        leaf_shape = leaf.shape
+        low = jnp.asarray(low_bound, dtype=leaf.dtype)
+        high = jnp.asarray(high_bound, dtype=leaf.dtype)
+        low = jnp.broadcast_to(low, leaf_shape)
+        high = jnp.broadcast_to(high, leaf_shape)
+
+        key, subkey = jax.random.split(key)
+        sample_shape = (num_samples,) + leaf_shape
+        uniform = jax.random.uniform(subkey, sample_shape)
+        sample = uniform * (high - low)[None, ...] + low[None, ...]
+        samples_per_leaf.append(sample)
+
+    sampled_params = []
+    for idx in range(num_samples):
+        leaves_idx = [leaf_samples[idx] for leaf_samples in samples_per_leaf]
+        sampled_params.append(jax.tree_util.tree_unflatten(treedef, leaves_idx))
+
+    return sampled_params
+
 
 def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None = None) -> Path:
     """Create or refresh the latest symlink for a given environment.
@@ -100,8 +162,6 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
     ----------
     run_dir:
         The directory containing the results of the most recent PPO run.
-    env_name:
-        Environment key (e.g. "drone_v0") used to build the runs/<env> hierarchy.
     runs_root:
         Base directory that contains the per-environment run folders. Defaults to
         the "runs" folder relative to the current working directory.
@@ -113,10 +173,8 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
     """
 
     runs_root = runs_root or Path("runs")
-    env_root = runs_root / env_name
-    env_root.mkdir(parents=True, exist_ok=True)
 
-    latest_dir = env_root / "latest"
+    latest_dir = runs_root / "latest"
     target = run_dir.resolve()
 
     if latest_dir.exists() or latest_dir.is_symlink():

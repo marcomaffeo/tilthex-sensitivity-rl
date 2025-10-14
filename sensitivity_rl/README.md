@@ -39,14 +39,17 @@ Train PPO (writes latest artifacts to `runs/latest`):
 - CPU: `pixi run train`
 - CUDA: `pixi run -e cuda train`
 
-Analyze a run (generate plots/CSV/summary):
-- `pixi run analyze --run_dirs runs/latest`
-- Add smoothing: `pixi run analyze --run_dirs runs/latest --smooth 21`
-- Compare multiple runs: `pixi run analyze --run_dirs runs/ppo_* --compare --out_dir runs/compare`
+### Configuration files
+
+- Training hyperparameters are stored as JSON files in the `configs/` directory (for example `configs/drone_v0.json`).
+- The `train` task loads `configs/default.json` by default. Choose a different config via `pixi run train --config configs/<name>.json`.
+- Whatever config you pass is copied into the output run directory as `config.json`, alongside the learned parameters.
 
 Generate rollouts from a saved model:
-- `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`
-- Add per-trajectory plots: append `--plot --plot_format png` (or pdf)
+- `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --deterministic`
+
+Generate rollouts from a saved model (with perturbed parameters):
+- `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --param_samples 10 --deterministic`
 
 Sensitivity/Jacobian checks:
 `pixi run test-sensitivity`
@@ -71,9 +74,8 @@ CUDA (Linux, CUDA 12):
 
 ### Testing
 
-1) `pixi run analyze --run_dirs runs/latest`
-2) `pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic`
-
+1) `pixi run rollouts`
+2) `pixi run plot_drone`
 3) `pixi run clean` (deletes all training results)
 
 

@@ -1,4 +1,7 @@
+import argparse
 import os
+import shutil
+import json
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
@@ -35,6 +38,22 @@ from utils import (
 )
 from torch.utils.tensorboard import SummaryWriter
 
+from envs import ENV_REGISTRY
+from networks import ActorCriticSens
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Train PPO agent with preset config"
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/default.json"),
+        help="Path to JSON config file (defaults to configs/default.json)",
+    )
+    return parser.parse_args()
+
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
@@ -43,99 +62,6 @@ jax.config.update(
     "jax_persistent_cache_enable_xla_caches",
     "xla_gpu_per_fusion_autotune_cache_dir",
 )
-
-
-envs: Dict[str, environment.Environment] = {
-    "pendulum": Pendulum,
-    "drone_v0": DroneV0,
-}
-
-
-class ActorCritic(nn.Module):
-    action_dim: int
-    activation: str = "tanh"
-
-    @nn.compact
-    def __call__(self, x):
-        if self.activation == "relu":
-            activation = nn.relu
-        else:
-            activation = nn.tanh
-
-        # Actor network with explicit names
-        actor_mean = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense1",
-        )(x)
-        actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="actor_dense2",
-        )(actor_mean)
-        actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-            name="actor_output",
-        )(actor_mean)
-        actor_logtstd = self.param(
-            "actor_log_std", nn.initializers.zeros, (self.action_dim,)
-        )
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
-
-        # Critic network with explicit names
-        critic = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense1",
-        )(x)
-        critic = activation(critic)
-        critic = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_dense2",
-        )(critic)
-        critic = activation(critic)
-        critic = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
-            name="critic_output",
-        )(critic)
-
-        # Critic network with explicit names
-        critic_s = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_s_dense1",
-        )(x)
-        critic_s = activation(critic_s)
-        critic_s = nn.Dense(
-            256,
-            kernel_init=orthogonal(np.sqrt(2)),
-            bias_init=constant(0.0),
-            name="critic_s_dense2",
-        )(critic_s)
-        critic_s = activation(critic_s)
-        critic_s = nn.Dense(
-            1,
-            kernel_init=orthogonal(1.0),
-            bias_init=constant(0.0),
-            name="critic_s_output",
-        )(critic_s)
-
-        return pi, (
-            jnp.squeeze(critic, axis=-1),
-            jnp.squeeze(critic_s, axis=-1),
-        )
 
 
 class Transition(NamedTuple):
@@ -157,7 +83,7 @@ def make_train(config, writer: SummaryWriter):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env = envs[config["ENV_NAME"]]()
+    env = ENV_REGISTRY[config["ENV_NAME"]]()
     env_params = env.default_params
     env = GymnaxWrapper(env)
     env = ClipAction(env)
@@ -183,7 +109,7 @@ def make_train(config, writer: SummaryWriter):
 
     def train(rng):
         # INIT NETWORK
-        network = ActorCritic(
+        network = ActorCriticSens(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
         )
@@ -709,29 +635,17 @@ def make_train(config, writer: SummaryWriter):
 
 
 if __name__ == "__main__":
-    config = {
-        "LR": 1e-3,
-        "NUM_ENVS": 400,
-        "NUM_STEPS": 200,
-        "TOTAL_TIMESTEPS": 1e7,
-        "UPDATE_EPOCHS": 10,
-        "NUM_MINIBATCHES": 64,
-        "GAMMA": 0.95,
-        "GAE_LAMBDA": 0.95,
-        "CLIP_EPS": 0.1,
-        "ENT_COEF": 0.0,
-        "VF_COEF": 0.5,
-        "MAX_GRAD_NORM": 0.5,
-        "ACTIVATION": "tanh",
-        "ANNEAL_LR": False,
-        "NORMALIZE_ENV": True,
-        "DEBUG": True,
-        "SENSITIVITY": True,
-        "SENSITIVITY_REGULARIZATION_WEIGHT": 0.02,
-        "ENV_NAME": "drone_v0",
-        # "LOAD_ACTOR_PARAMS_PATH": "runs/latest/params.msgpack",  # Path to load actor params from
-    }
-    rng = jax.random.PRNGKey(30)
+
+    args = parse_args()
+
+    config_path = args.config.resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with config_path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    rng = jax.random.PRNGKey(config.get("SEED", 30))
 
     # Create/rotate run directory
     runs_root = Path("runs")
@@ -741,7 +655,7 @@ if __name__ == "__main__":
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
 
-    update_latest_symlink(run_dir, config["ENV_NAME"], runs_root)
+    update_latest_symlink(run_dir, runs_root)
 
     # tensorboard writer
     writer = SummaryWriter(f"{run_dir}")
@@ -755,21 +669,10 @@ if __name__ == "__main__":
     params = train_state.params
     (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
 
-    # Save config
-    import json
-
-    with (run_dir / "config.json").open("w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2)
+    shutil.copy(config_path, run_dir / "config.json")
 
     # Save raw metrics arrays for post-hoc analysis/plotting
     metrics = out["metrics"]
-    np.savez_compressed(
-        run_dir / "metrics_raw.npz",
-        returned_episode_returns=np.array(metrics["returned_episode_returns"]),
-        returned_episode_lengths=np.array(metrics["returned_episode_lengths"]),
-        returned_episode=np.array(metrics["returned_episode"]),
-        timestep=np.array(metrics["timestep"]),
-    )
 
     # Minimal console summary
     ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
@@ -820,7 +723,6 @@ if __name__ == "__main__":
             f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
-            "--deterministic",
         ]
     )
 
@@ -830,9 +732,9 @@ if __name__ == "__main__":
             (
                 os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
                 if config["ENV_NAME"] == "drone_v0"
+                or config["ENV_NAME"] == "drone_v1"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),
-            f"{run_dir}/rollouts/",
         ]
     )

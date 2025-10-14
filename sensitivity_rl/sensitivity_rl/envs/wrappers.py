@@ -353,7 +353,7 @@ class SensitivityWrapper(GymnaxWrapper):
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
         sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
-        sens_s_next = jnp.clip(sens_s_next, -1000, 1000)
+        sens_s_next = jnp.clip(sens_s_next, -100000, 100000)
         # Pack updated sensitivitie
         return Sensitivity(
             state=sens_s_next,
@@ -388,8 +388,8 @@ class SensitivityWrapper(GymnaxWrapper):
         )
 
         info["trw"] = reward
-        info["sensitivity_state"] = jnp.linalg.matrix_norm(
-            next_sensitivity.state, ord="fro"
+        info["sensitivity_state"] = jnp.clip(
+            jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"), 0, 100000
         )
 
         # Final sensitivity reward regularization
@@ -403,8 +403,17 @@ class SensitivityWrapper(GymnaxWrapper):
 
         # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one)
         reward = reward - self.regularization_weight * (
-            jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro")
-            - jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro")
+            jnp.clip(
+                jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
+                0,
+                100000,
+            )
+            - 0.99
+            * jnp.clip(
+                jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
+                0,
+                100000,
+            )
         )
 
         sens_state = SensitivityEnvState(

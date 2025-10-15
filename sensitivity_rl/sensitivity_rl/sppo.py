@@ -37,6 +37,7 @@ from utils import (
 from torch.utils.tensorboard import SummaryWriter
 
 from networks import ActorCritic
+from buffers import _calculate_gae, RolloutTransition
 
 
 def parse_args():
@@ -59,16 +60,6 @@ jax.config.update(
     "jax_persistent_cache_enable_xla_caches",
     "xla_gpu_per_fusion_autotune_cache_dir",
 )
-
-
-class Transition(NamedTuple):
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    reward: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
-    info: jnp.ndarray
 
 
 def make_train(config, writer: SummaryWriter):
@@ -193,7 +184,7 @@ def make_train(config, writer: SummaryWriter):
                 )
                 obsv = jax.lax.stop_gradient(obsv)
                 env_state = jax.lax.stop_gradient(env_state)
-                transition = Transition(
+                transition = RolloutTransition(
                     done, action, value, reward, log_prob, last_obs, info
                 )
                 runner_state = (train_state, env_state, obsv, rng)
@@ -207,38 +198,7 @@ def make_train(config, writer: SummaryWriter):
             train_state, env_state, last_obs, rng = runner_state
             _, last_val = network.apply(train_state.params, last_obs)
 
-            def _calculate_gae(traj_batch, last_val):
-                def _get_advantages(gae_and_next_value, transition):
-                    gae, next_value = gae_and_next_value
-                    done, value, reward = (
-                        transition.done,
-                        transition.value,
-                        transition.reward,
-                    )
-                    delta = (
-                        reward
-                        + config["GAMMA"] * next_value * (1 - done)
-                        - value
-                    )
-                    gae = (
-                        delta
-                        + config["GAMMA"]
-                        * config["GAE_LAMBDA"]
-                        * (1 - done)
-                        * gae
-                    )
-                    return (gae, value), gae
-
-                _, advantages = jax.lax.scan(
-                    _get_advantages,
-                    (jnp.zeros_like(last_val), last_val),
-                    traj_batch,
-                    reverse=True,
-                    unroll=16,
-                )
-                return advantages, advantages + traj_batch.value
-
-            advantages, targets = _calculate_gae(traj_batch, last_val)
+            advantages, targets = _calculate_gae(config, traj_batch, last_val)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):

@@ -37,7 +37,7 @@ from utils import (
     update_latest_symlink,
 )
 from torch.utils.tensorboard import SummaryWriter
-
+from buffers import _calculate_gae_s, RolloutSensTransition
 from envs import ENV_REGISTRY
 from networks import ActorCriticSens
 
@@ -62,18 +62,6 @@ jax.config.update(
     "jax_persistent_cache_enable_xla_caches",
     "xla_gpu_per_fusion_autotune_cache_dir",
 )
-
-
-class Transition(NamedTuple):
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    value_s: jnp.ndarray
-    reward: jnp.ndarray
-    reward_s: jnp.ndarray
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
-    info: jnp.ndarray
 
 
 def make_train(config, writer: SummaryWriter):
@@ -203,7 +191,7 @@ def make_train(config, writer: SummaryWriter):
                 )
                 obsv = jax.lax.stop_gradient(obsv)
                 env_state = jax.lax.stop_gradient(env_state)
-                transition = Transition(
+                transition = RolloutSensTransition(
                     done,
                     action,
                     value,
@@ -237,63 +225,8 @@ def make_train(config, writer: SummaryWriter):
                 train_state.params, last_obs
             )
 
-            def _calculate_gae(traj_batch, last_val, last_val_s):
-                def _get_advantages(gae_and_next_value, transition):
-                    gae, gae_s, next_value, next_value_s = gae_and_next_value
-                    done, value, value_s, reward, reward_s = (
-                        transition.done,
-                        transition.value,
-                        transition.value_s,
-                        transition.reward,
-                        transition.reward_s,
-                    )
-                    delta = (
-                        reward
-                        + config["GAMMA"] * next_value * (1 - done)
-                        - value
-                    )
-                    gae = (
-                        delta
-                        + config["GAMMA"]
-                        * config["GAE_LAMBDA"]
-                        * (1 - done)
-                        * gae
-                    )
-                    delta_s = (
-                        reward_s
-                        + config["GAMMA"] * next_value_s * (1 - done)
-                        - value_s
-                    )
-                    gae_s = (
-                        delta_s
-                        + config["GAMMA"]
-                        * config["GAE_LAMBDA"]
-                        * (1 - done)
-                        * gae_s
-                    )
-                    return (gae, gae_s, value, value_s), (gae, gae_s)
-
-                _, (advantages, advantages_s) = jax.lax.scan(
-                    _get_advantages,
-                    (
-                        jnp.zeros_like(last_val),
-                        jnp.zeros_like(last_val),
-                        last_val,
-                        last_val_s,
-                    ),
-                    traj_batch,
-                    reverse=True,
-                    unroll=16,
-                )
-                return (
-                    advantages,
-                    advantages_s,
-                    advantages + traj_batch.value,
-                    advantages_s + traj_batch.value_s,
-                )
-
-            advantages, advantages_s, targets, targets_s = _calculate_gae(
-                traj_batch, last_val, last_val_s
+            advantages, advantages_s, targets, targets_s = _calculate_gae_s(
+                config, traj_batch, last_val, last_val_s
             )
 
             # UPDATE NETWORK

@@ -548,6 +548,7 @@ if __name__ == "__main__":
         "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
+        "PARAM_SAMPLES": 10,
     }
 
     import subprocess
@@ -563,6 +564,8 @@ if __name__ == "__main__":
             f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
+            "--param_samples",
+            f"{eval_config['PARAM_SAMPLES']}",
         ]
     )
 

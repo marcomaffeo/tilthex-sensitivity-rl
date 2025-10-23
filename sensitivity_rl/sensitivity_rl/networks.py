@@ -59,6 +59,93 @@ class ActorCritic(nn.Module):
         return pi, jnp.squeeze(critic, axis=-1)
 
 
+class SoftQNetwork(nn.Module):
+    layer_sizes: tuple = (256, 256)
+    activation: str = "relu"
+
+    @nn.compact
+    def __call__(self, state, action):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        x = jnp.concatenate([state, action], axis=-1)
+        for idx, layer_dim in enumerate(self.layer_sizes):
+            x = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"dense{idx + 1}",
+            )(x)
+            x = activation(x)
+        q_value = nn.Dense(
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
+            name="output",
+        )(x)
+        return jnp.squeeze(q_value, axis=-1)
+
+
+class Actor(nn.Module):
+    action_dim: int
+    layer_sizes: tuple = (256, 256)
+    activation: str = "relu"
+
+    @nn.compact
+    def __call__(self, state):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        x = state
+        for idx, layer_dim in enumerate(self.layer_sizes):
+            x = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"dense{idx + 1}",
+            )(x)
+            x = activation(x)
+        mean = nn.Dense(
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="output_mean",
+        )(x)
+        log_std = nn.Dense(
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="output_log_std",
+        )(x)
+        # Clamp log_std to reasonable bounds
+        log_std = jnp.clip(log_std, -20, 2)
+        pi = distrax.MultivariateNormalDiag(mean, jnp.exp(log_std))
+        return pi
+
+
+def get_sac_action_dist(pi, scale_action, bias_action, _rng):
+    """
+    Sample from a Gaussian policy pi, apply tanh squashing, and rescale to the
+    environment action space with (scale_action, bias_action). Also compute the
+    corrected log-probability including the Jacobian of the tanh and the
+    rescaling term, matching CleanRL/SpinUp conventions:
+        log_prob = N(x_t|mu, sigma) - sum(log(scale * (1 - tanh(x_t)^2) + 1e-6))
+    """
+    x_t = pi.sample(seed=_rng)
+    y_t = jnp.tanh(x_t)
+    # Include both tanh correction and action rescaling in the log-prob
+    # Note: scale_action is per-dimension; broadcast works as expected
+    log_prob = pi.log_prob(x_t) - jnp.log(scale_action * (1 - y_t**2) + 1e-6).sum(-1)
+    mean_tanh = jnp.tanh(pi.mean())
+    action = y_t * scale_action + bias_action
+    mean = mean_tanh * scale_action + bias_action
+    return action, log_prob, mean
+
+
 class ActorCriticSens(nn.Module):
     action_dim: int
     activation: str = "tanh"

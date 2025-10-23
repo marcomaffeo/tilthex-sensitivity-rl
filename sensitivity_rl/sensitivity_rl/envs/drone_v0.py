@@ -134,11 +134,11 @@ class DroneV0(environment.Environment):
 
         self.params_min = [
             0.02,  # mass
-            jnp.array([2e-5, 2e-5, 2e-5]),  # inertia
+            jnp.array([1e-5, 1e-5, 1e-5]),  # inertia
         ]
         self.params_max = [
             0.04,  # mass
-            jnp.array([1e-4, 1e-4, 1e-4]),  # inertia
+            jnp.array([8e-5, 8e-5, 1e-4]),  # inertia
         ]
         super().__init__()
 
@@ -193,10 +193,10 @@ class DroneV0(environment.Environment):
         )
 
         reward = (
-            -0.05 * jnp.linalg.norm(state_next.omega)
+            -0.08 * jnp.linalg.norm(state_next.omega)
             + reward_app
             - 0.05 * (jnp.linalg.norm(u - self.hovering_action) ** 2)
-            - 0.005 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
+            - 0.01 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()

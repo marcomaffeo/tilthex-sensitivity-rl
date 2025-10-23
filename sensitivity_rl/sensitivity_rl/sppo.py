@@ -98,6 +98,12 @@ def make_train(config, writer: SummaryWriter):
         network = ActorCritic(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
+            actor_layer_sizes=tuple(
+                config.get("ACTOR_LAYER_SIZES", [256, 256])
+            ),
+            critic_layer_sizes=tuple(
+                config.get("CRITIC_LAYER_SIZES", [256, 256])
+            ),
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)

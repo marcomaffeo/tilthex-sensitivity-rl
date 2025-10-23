@@ -100,6 +100,8 @@ def make_train(config, writer: SummaryWriter):
         network = ActorCriticSens(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
+            actor_layer_sizes=config.get("ACTOR_LAYER_SIZES", [256, 256]),
+            critic_layer_sizes=config.get("CRITIC_LAYER_SIZES", [256, 256]),
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
@@ -641,6 +643,7 @@ if __name__ == "__main__":
         "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
+        "PARAM_SAMPLES": 10,
     }
 
     import subprocess
@@ -656,6 +659,8 @@ if __name__ == "__main__":
             f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
+            "--param_samples",
+            f"{eval_config['PARAM_SAMPLES']}",
         ]
     )
 

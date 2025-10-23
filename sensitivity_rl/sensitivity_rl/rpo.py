@@ -39,7 +39,9 @@ from networks import ActorCritic
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Train PPO agent with preset config")
+    parser = argparse.ArgumentParser(
+        description="Train PPO agent with preset config"
+    )
     parser.add_argument(
         "--config",
         type=Path,
@@ -47,6 +49,7 @@ def parse_args():
         help="Path to JSON config file (defaults to configs/default.json)",
     )
     return parser.parse_args()
+
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
@@ -103,6 +106,12 @@ def make_train(config, writer: SummaryWriter):
         network = ActorCritic(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
+            actor_layer_sizes=tuple(
+                config.get("ACTOR_LAYER_SIZES", [256, 256])
+            ),
+            critic_layer_sizes=tuple(
+                config.get("CRITIC_LAYER_SIZES", [256, 256])
+            ),
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
@@ -625,9 +634,10 @@ if __name__ == "__main__":
             "python3",
             (
                 os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
-                if config["ENV_NAME"] == "drone_v0" or config["ENV_NAME"] == "drone_v1"
+                if config["ENV_NAME"] == "drone_v0"
+                or config["ENV_NAME"] == "drone_v1"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
-            )
+            ),
         ]
     )

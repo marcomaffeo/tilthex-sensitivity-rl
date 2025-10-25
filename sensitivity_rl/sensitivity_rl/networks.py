@@ -139,11 +139,19 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng):
     y_t = jnp.tanh(x_t)
     # Include both tanh correction and action rescaling in the log-prob
     # Note: scale_action is per-dimension; broadcast works as expected
-    log_prob = pi.log_prob(x_t) - jnp.log(scale_action * (1 - y_t**2) + 1e-6).sum(-1)
+    log_prob = pi.log_prob(x_t) - jnp.log(
+        scale_action * (1 - y_t**2) + 1e-6
+    ).sum(-1)
     mean_tanh = jnp.tanh(pi.mean())
     action = y_t * scale_action + bias_action
     mean = mean_tanh * scale_action + bias_action
     return action, log_prob, mean
+
+
+def get_ddpg_action_dist(pi, scale_action, bias_action, _rng):
+    mean_tanh = jnp.tanh(pi.mean())
+    mean = mean_tanh * scale_action + bias_action
+    return mean, None, mean
 
 
 class ActorCriticSens(nn.Module):

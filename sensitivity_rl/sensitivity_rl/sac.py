@@ -215,9 +215,8 @@ def make_train(config, writer: SummaryWriter):
         target_entropy = -jnp.prod(
             jnp.array(env.action_space(env_params).shape)
         )
-        target_entropy = jax.lax.stop_gradient(target_entropy)
         if config.get("ENT_COEF", 0.01) == "auto":
-            log_ent_coef = jnp.array(-10.0)
+            log_ent_coef = jnp.array(0.0)
             ent_coef = jnp.exp(log_ent_coef)
         else:
             ent_coef = config.get("ENT_COEF", 0.01)
@@ -288,8 +287,19 @@ def make_train(config, writer: SummaryWriter):
             # SELECT ACTION
             rng, _rng = jax.random.split(rng)
             pi = actor.apply(train_state_actor.params, last_obs)
-            action, _, _ = get_sac_action_dist(
+            action_pi, _, _ = get_sac_action_dist(
                 pi, scale_action, bias_action, _rng
+            )
+            action_rand = jax.random.uniform(
+                _rng,
+                minval=action_space.low,
+                maxval=action_space.high,
+                shape=(config["NUM_ENVS"],) + action_space.shape,
+            )
+            action = jax.lax.select(
+                total_steps < config["NUM_ENVS"] * config["LEARNING_STARTS"],
+                action_rand,
+                action_pi,
             )
 
             # STEP ENV
@@ -457,63 +467,107 @@ def make_train(config, writer: SummaryWriter):
                     grads=q2_grads
                 )
 
-                # Actor update (with fresh RNG key)
-                rng, _rng_actor = jax.random.split(rng)
+                def actor_update_step(update_state, unused):
 
-                def actor_loss_fn(actor_params):
-                    pi = actor.apply(actor_params, batch.obs)
-                    actions, log_pi, _ = get_sac_action_dist(
-                        pi, scale_action, bias_action, _rng_actor
+                    (
+                        train_state_actor,
+                        train_state_qf1,
+                        train_state_qf2,
+                        log_ent_coef,
+                        ent_coef_opt_state,
+                        rng,
+                    ) = update_state
+                    # Actor update (with fresh RNG key)
+                    rng, _rng_actor = jax.random.split(rng)
+
+                    def actor_loss_fn(actor_params):
+                        pi = actor.apply(actor_params, batch.obs)
+                        actions, log_pi, _ = get_sac_action_dist(
+                            pi, scale_action, bias_action, _rng_actor
+                        )
+
+                        qf1_pi = qf1.apply(
+                            train_state_qf1.params, batch.obs, actions
+                        )
+                        qf2_pi = qf2.apply(
+                            train_state_qf2.params, batch.obs, actions
+                        )
+                        min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
+
+                        actor_loss = jnp.mean(ent_coef * log_pi - min_qf_pi)
+                        return actor_loss, log_pi
+
+                    (actor_loss, log_pi), actor_grads = jax.value_and_grad(
+                        actor_loss_fn, has_aux=True
+                    )(train_state_actor.params)
+
+                    train_state_actor = train_state_actor.apply_gradients(
+                        grads=actor_grads
                     )
 
-                    qf1_pi = qf1.apply(
-                        train_state_qf1.params, batch.obs, actions
+                    # Update entropy coefficient with fresh forward pass (stop gradient)
+                    rng, _rng_alpha = jax.random.split(rng)
+                    pi_for_alpha = actor.apply(
+                        train_state_actor.params, batch.obs
                     )
-                    qf2_pi = qf2.apply(
-                        train_state_qf2.params, batch.obs, actions
+                    _, log_pi_for_alpha, _ = get_sac_action_dist(
+                        pi_for_alpha, scale_action, bias_action, _rng_alpha
                     )
-                    min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
+                    log_pi_for_alpha = jax.lax.stop_gradient(log_pi_for_alpha)
 
-                    actor_loss = jnp.mean(ent_coef * log_pi - min_qf_pi)
-                    return actor_loss, log_pi
+                    def ent_coef_loss_fn(alpha_params):
+                        alpha_loss = (
+                            -jnp.exp(alpha_params)
+                            * (log_pi_for_alpha + target_entropy).mean()
+                        )
+                        return alpha_loss, None
 
-                (actor_loss, log_pi), actor_grads = jax.value_and_grad(
-                    actor_loss_fn, has_aux=True
-                )(train_state_actor.params)
+                    (alpha_loss, _), alpha_grads = jax.value_and_grad(
+                        ent_coef_loss_fn, has_aux=True
+                    )(log_ent_coef)
 
-                train_state_actor = train_state_actor.apply_gradients(
-                    grads=actor_grads
+                    updates, ent_coef_opt_state = ent_coef_optimizer.update(
+                        alpha_grads, ent_coef_opt_state
+                    )
+                    log_ent_coef = jax.lax.select(
+                        config["ENT_COEF"] == "auto",
+                        optax.apply_updates(log_ent_coef, updates),
+                        log_ent_coef,
+                    )
+
+                    loss_info = (actor_loss, alpha_loss, log_pi)
+                    update_state = (
+                        train_state_actor,
+                        train_state_qf1,
+                        train_state_qf2,
+                        log_ent_coef,
+                        ent_coef_opt_state,
+                        rng,
+                    )
+                    return update_state, loss_info
+
+                us, loss_actor = jax.lax.scan(
+                    actor_update_step,
+                    (
+                        train_state_actor,
+                        train_state_qf1,
+                        train_state_qf2,
+                        log_ent_coef,
+                        ent_coef_opt_state,
+                        rng,
+                    ),
+                    None,
+                    config.get("ACTOR_EPOCHS", 1),
                 )
-
-                # Update entropy coefficient with fresh forward pass (stop gradient)
-                rng, _rng_alpha = jax.random.split(rng)
-                pi_for_alpha = actor.apply(train_state_actor.params, batch.obs)
-                _, log_pi_for_alpha, _ = get_sac_action_dist(
-                    pi_for_alpha, scale_action, bias_action, _rng_alpha
-                )
-                log_pi_for_alpha = jax.lax.stop_gradient(log_pi_for_alpha)
-
-                def ent_coef_loss_fn(alpha_params):
-                    alpha_loss = (
-                        -jnp.exp(alpha_params)
-                        * (log_pi_for_alpha + target_entropy).mean()
-                    )
-                    return alpha_loss, None
-
-                (alpha_loss, _), alpha_grads = jax.value_and_grad(
-                    ent_coef_loss_fn, has_aux=True
-                )(log_ent_coef)
-
-                updates, ent_coef_opt_state = ent_coef_optimizer.update(
-                    alpha_grads, ent_coef_opt_state
-                )
-                log_ent_coef = jax.lax.select(
-                    config["ENT_COEF"] == "auto",
-                    optax.apply_updates(log_ent_coef, updates),
+                (
+                    train_state_actor,
+                    _,
+                    _,
                     log_ent_coef,
-                )
-
-                entropy = log_pi.mean()
+                    ent_coef_opt_state,
+                    rng,
+                ) = us
+                entropy = loss_actor[-1].mean()
 
                 # Update target networks (soft update)
                 tau = config.get("POLYAK_TAU", 0.005)
@@ -540,10 +594,10 @@ def make_train(config, writer: SummaryWriter):
                     rng,
                 )
 
-                total_loss = q1_loss + q2_loss + actor_loss + alpha_loss
+                total_loss = q1_loss + q2_loss + loss_actor[0] + loss_actor[1]
                 return update_state, (
                     total_loss,
-                    (q1_loss, q2_loss, actor_loss, entropy),
+                    (q1_loss, q2_loss, loss_actor[0], entropy),
                 )
 
             update_state = (
@@ -719,13 +773,17 @@ def make_train(config, writer: SummaryWriter):
             total_steps,
         )
         runner_state, _ = jax.lax.scan(
-            env_step, runner_state, None, config["LEARNING_STARTS"]
+            env_step,
+            runner_state,
+            None,
+            config["LEARNING_STARTS"] // config["NUM_ENVS"],
         )
         runner_state, metric = jax.lax.scan(
             _update_step,
             runner_state,
             None,
-            config["NUM_UPDATES"] - config["LEARNING_STARTS"],
+            config["NUM_UPDATES"]
+            - config["LEARNING_STARTS"] // config["NUM_ENVS"],
         )
         return {"runner_state": runner_state, "metrics": metric}
 

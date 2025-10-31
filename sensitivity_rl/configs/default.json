@@ -1,6 +1,6 @@
 {
     "ENV_NAME": "drone_v0",
-    "LR": 0.0005,
+    "LR": 0.001,
     "NUM_ENVS": 1024,
     "NUM_STEPS": 200,
     "TOTAL_TIMESTEPS": 10e7,
@@ -9,7 +9,7 @@
     "GAMMA": 0.98,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.1,
-    "ENT_COEF": 0.01, 
+    "ENT_COEF": 0.0, 
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",
@@ -19,6 +19,6 @@
     "NORMALIZE_ENV": true,
     "DEBUG": true,
     "SENSITIVITY": true,
-    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.7,
+    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.4,
     "SEED": 30
 }

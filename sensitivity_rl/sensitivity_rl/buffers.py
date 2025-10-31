@@ -88,6 +88,19 @@ class RolloutSensTransition(NamedTuple):
     info: jnp.ndarray
 
 
+class RolloutSensAugTransition(NamedTuple):
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    value_s: jnp.ndarray
+    reward: jnp.ndarray
+    reward_s: jnp.ndarray
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    gru_hidden: jnp.ndarray  # GRU hidden state instead of sens_state
+    info: jnp.ndarray
+
+
 class ReplayTransition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray

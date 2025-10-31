@@ -226,3 +226,49 @@ class ActorCriticSens(nn.Module):
             jnp.squeeze(critic, axis=-1),
             jnp.squeeze(critic_s, axis=-1),
         )
+
+
+class ActorCriticSensAug(nn.Module):
+    action_dim: int
+    activation: str = "tanh"
+    actor_layer_sizes: tuple = (256, 256)
+    critic_layer_sizes: tuple = (256, 256)
+    gru_hidden_size: int = 64
+
+    @nn.compact
+    def __call__(self, obs, hidden_state):
+        """
+        Args:
+            obs: observation array [batch, obs_dim]
+            hidden_state: GRU hidden state [batch, gru_hidden_size]
+        Returns:
+            value_s: sensitivity value estimate [batch]
+            new_hidden_state: updated GRU hidden state [batch, gru_hidden_size]
+        """
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        # GRU cell to process observation sequence
+        gru_cell = nn.GRUCell(features=self.gru_hidden_size, name="gru_cell")
+        new_hidden_state, gru_output = gru_cell(hidden_state, obs)
+
+        # Critic network with explicit names, using GRU output
+        critic_s = gru_output
+        for idx, layer_dim in enumerate(self.critic_layer_sizes):
+            critic_s = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"critic_s_dense{idx + 1}",
+            )(critic_s)
+            critic_s = activation(critic_s)
+        critic_s = nn.Dense(
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
+            name="critic_s_output",
+        )(critic_s)
+
+        return jnp.squeeze(critic_s, axis=-1), new_hidden_state

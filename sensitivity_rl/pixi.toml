@@ -14,6 +14,8 @@ matplotlib = "*"
 python-build = "*"
 pip = "*"
 pytest = ">=8.4.2,<9"
+mujoco = "*"
+imageio = ">=2.37.0,<3"
 
 
 [pypi-dependencies]
@@ -25,6 +27,8 @@ flax = "*"
 optax = "*"
 chex = "*"
 #sensitivity-rl = { path = ".", editable = true }
+mujoco-mjx = "*"
+mujoco = "*"
 
 # CPU environment: install JAX CPU wheels via PyPI
 # [feature.cpu.pypi-dependencies]

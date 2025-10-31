@@ -311,6 +311,13 @@ class SensitivityWrapper(GymnaxWrapper):
     def update_network_params(self, network_params):
         self.network_params = network_params
 
+    def sensitivity_space(self, params):
+        return spaces.Box(
+            low=-jnp.inf,
+            high=jnp.inf,
+            shape=(self._env.state_dim * self._env.param_dim,),
+        )
+
     def compute_action(self, rng, obs, network_params):
         pi, _ = self._actor.apply(network_params, obs)
         action = pi.sample(seed=rng)
@@ -474,6 +481,13 @@ class SensitivityExtWrapper(GymnaxWrapper):
         self._actor = actor
         self.network_params = network_params
 
+    def sensitivity_space(self, params):
+        return spaces.Box(
+            low=-jnp.inf,
+            high=jnp.inf,
+            shape=(self._env.state_dim * self._env.param_dim,),
+        )
+
     def update_network_params(self, network_params):
         self.network_params = network_params
 
@@ -554,6 +568,7 @@ class SensitivityExtWrapper(GymnaxWrapper):
         )
 
         info["trw"] = reward
+
         info["sensitivity_state"] = jnp.clip(
             jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"), 0, 100000
         )
@@ -572,7 +587,8 @@ class SensitivityExtWrapper(GymnaxWrapper):
         )
 
         sens_state = SensitivityEnvState(
-            env_state=env_state, sensitivity=next_sensitivity
+            env_state=env_state,
+            sensitivity=next_sensitivity,
         )
 
         return obs, sens_state, reward, done, info

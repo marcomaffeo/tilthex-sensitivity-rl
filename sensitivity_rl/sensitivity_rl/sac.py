@@ -25,6 +25,7 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityOffWrapper,
+    MujocoSensitivityOffWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -87,10 +88,20 @@ def make_train(config, writer: SummaryWriter):
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        env = SensitivityOffWrapper(
-            env,
-            regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"],
-        )
+        if env.type == "mujoco":
+            env = MujocoSensitivityOffWrapper(
+                env,
+                regularization_weight=config[
+                    "SENSITIVITY_REGULARIZATION_WEIGHT"
+                ],
+            )
+        else:
+            env = SensitivityOffWrapper(
+                env,
+                regularization_weight=config[
+                    "SENSITIVITY_REGULARIZATION_WEIGHT"
+                ],
+            )
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
@@ -185,15 +196,15 @@ def make_train(config, writer: SummaryWriter):
         else:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
-                optax.adam(config["LR"], eps=1e-5),
+                optax.adam(config["POLICY_LR"], eps=1e-5),
             )
             tx_q1 = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
-                optax.adam(config["LR"], eps=1e-5),
+                optax.adam(config["Q_LR"], eps=1e-5),
             )
             tx_q2 = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
-                optax.adam(config["LR"], eps=1e-5),
+                optax.adam(config["Q_LR"], eps=1e-5),
             )
 
         train_state_actor = TrainState.create(
@@ -224,7 +235,7 @@ def make_train(config, writer: SummaryWriter):
 
         ent_coef_optimizer = optax.chain(
             optax.clip_by_global_norm(0.01),
-            optax.adam(config["LR"], eps=1e-5),
+            optax.adam(config["ALPHA_LR"], eps=1e-5),
         )
         ent_coef_opt_state = ent_coef_optimizer.init(log_ent_coef)
 
@@ -334,26 +345,7 @@ def make_train(config, writer: SummaryWriter):
 
         def _update_step(runner_state, unused):
 
-            (
-                train_state_actor,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-                _,
-            ) = runner_state
-
-            # COLLECT TRAJECTORIES
-            if config["SENSITIVITY"]:
-                env.update_network_params(train_state_actor.params)
-
+            # COLLECT ONE TRANSITION
             runner_state, _ = env_step(runner_state, None)
 
             (
@@ -372,204 +364,226 @@ def make_train(config, writer: SummaryWriter):
                 total_steps,
             ) = runner_state
 
-            def _update_epoch(update_state, unused):
-                (
-                    train_state_actor,
-                    train_state_qf1,
-                    train_state_qf2,
-                    ent_coef_opt_state,
-                    qf1_target_params,
-                    qf2_target_params,
+            # --- This logic replaces the scan over _update_epoch ---
+
+            # Sample batch from replay buffer
+            rng, _rng_batch = jax.random.split(rng)
+            batch = sample_batch_from_buffer(
+                rb, config["BATCH_SIZE"], _rng_batch
+            )
+
+            ent_coef = jnp.exp(log_ent_coef)
+
+            # Compute target Q-values
+            rng, _rng_target = jax.random.split(rng)
+            next_state_actions = actor.apply(
+                train_state_actor.params, batch.next_obs
+            )
+            next_state_actions_sample, next_state_log_pi, _ = (
+                get_sac_action_dist(
+                    next_state_actions,
+                    scale_action,
+                    bias_action,
+                    _rng_target,
+                )
+            )
+
+            next_state_log_pi = jax.lax.stop_gradient(next_state_log_pi)
+            qf1_next_target = qf1_target.apply(
+                qf1_target_params,
+                batch.next_obs,
+                next_state_actions_sample,
+            )
+            qf2_next_target = qf2_target.apply(
+                qf2_target_params,
+                batch.next_obs,
+                next_state_actions_sample,
+            )
+            min_qf_next_target = (
+                jnp.minimum(qf1_next_target, qf2_next_target).reshape(-1, 1)
+                - ent_coef * next_state_log_pi
+            )
+
+            rewards_col = batch.reward[..., None]
+            dones_col = batch.done[..., None]
+
+            next_q_value = (
+                rewards_col
+                + (1 - dones_col) * config["GAMMA"] * min_qf_next_target
+            )
+            next_q_value = jax.lax.stop_gradient(next_q_value)
+
+            # --- Q-function update (always happens) ---
+            def q1_loss_fn(qf1_params):
+                qf1_a_values = qf1.apply(qf1_params, batch.obs, batch.action)
+                qf1_loss = jnp.mean(
+                    (qf1_a_values.reshape(-1, 1) - next_q_value) ** 2
+                )
+                return qf1_loss
+
+            def q2_loss_fn(qf2_params):
+                qf2_a_values = qf2.apply(qf2_params, batch.obs, batch.action)
+                qf2_loss = jnp.mean(
+                    (qf2_a_values.reshape(-1, 1) - next_q_value) ** 2
+                )
+                return qf2_loss
+
+            (q1_loss, q1_grads) = jax.value_and_grad(q1_loss_fn)(
+                train_state_qf1.params
+            )
+            train_state_qf1 = train_state_qf1.apply_gradients(grads=q1_grads)
+
+            (q2_loss, q2_grads) = jax.value_and_grad(q2_loss_fn)(
+                train_state_qf2.params
+            )
+            train_state_qf2 = train_state_qf2.apply_gradients(grads=q2_grads)
+
+            # --- Conditional Actor and Alpha update ---
+            # This function defines the single update step for actor and alpha
+            def actor_alpha_update_body(carry, _):
+                (train_state_actor, log_ent_coef, ent_coef_opt_state, rng) = (
+                    carry
+                )
+                rng, _rng_actor = jax.random.split(rng)
+
+                # Use batch, ent_coef, train_state_qf1/2 from outer scope
+                # Note: This uses the *just updated* Q-network parameters
+
+                def actor_loss_fn(actor_params):
+                    pi = actor.apply(actor_params, batch.obs)
+                    actions, log_pi, _ = get_sac_action_dist(
+                        pi, scale_action, bias_action, _rng_actor
+                    )
+                    qf1_pi = qf1.apply(
+                        train_state_qf1.params, batch.obs, actions
+                    )
+                    qf2_pi = qf2.apply(
+                        train_state_qf2.params, batch.obs, actions
+                    )
+                    min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
+                    actor_loss = jnp.mean(
+                        ent_coef * log_pi - min_qf_pi.reshape(-1, 1)
+                    )
+                    return actor_loss, log_pi
+
+                (actor_loss, log_pi), actor_grads = jax.value_and_grad(
+                    actor_loss_fn, has_aux=True
+                )(train_state_actor.params)
+                train_state_actor = train_state_actor.apply_gradients(
+                    grads=actor_grads
+                )
+
+                # Alpha update
+                rng, _rng_alpha = jax.random.split(rng)
+                # Use new actor params for alpha loss
+                pi_for_alpha = actor.apply(train_state_actor.params, batch.obs)
+                _, log_pi_for_alpha, _ = get_sac_action_dist(
+                    pi_for_alpha, scale_action, bias_action, _rng_alpha
+                )
+                log_pi_for_alpha = jax.lax.stop_gradient(log_pi_for_alpha)
+
+                def ent_coef_loss_fn(alpha_params):
+                    alpha_loss = (
+                        -jnp.exp(alpha_params)
+                        * (log_pi_for_alpha + target_entropy).mean()
+                    )
+                    return alpha_loss, None
+
+                (alpha_loss, _), alpha_grads = jax.value_and_grad(
+                    ent_coef_loss_fn, has_aux=True
+                )(log_ent_coef)
+                updates, ent_coef_opt_state = ent_coef_optimizer.update(
+                    alpha_grads, ent_coef_opt_state
+                )
+                log_ent_coef = jax.lax.select(
+                    config["ENT_COEF"] == "auto",
+                    optax.apply_updates(log_ent_coef, updates),
                     log_ent_coef,
-                    rb,
+                )
+
+                carry = (
+                    train_state_actor,
+                    log_ent_coef,
+                    ent_coef_opt_state,
                     rng,
-                ) = update_state
-
-                # Sample batch from replay buffer
-                rng, _rng_batch = jax.random.split(rng)
-                batch = sample_batch_from_buffer(
-                    rb, config["BATCH_SIZE"], _rng_batch
                 )
+                losses = (actor_loss, alpha_loss, log_pi.mean())
+                return carry, losses
 
-                ent_coef = jnp.exp(log_ent_coef)
+            # This function just passes the state through, doing nothing
+            def no_actor_alpha_update_body(carry, _):
+                losses = (0.0, 0.0, 0.0)  # actor_loss, alpha_loss, entropy
+                return carry, losses
 
-                # Compute target Q-values FIRST (before defining loss functions)
-                rng, _rng_target = jax.random.split(rng)
-                next_state_actions = actor.apply(
-                    train_state_actor.params, batch.next_obs
-                )
-                next_state_actions_sample, next_state_log_pi, _ = (
-                    get_sac_action_dist(
-                        next_state_actions,
-                        scale_action,
-                        bias_action,
-                        _rng_target,
-                    )
-                )
+            # Get policy frequency from config, default to 1 (update every step)
+            policy_frequency = config.get("POLICY_FREQUENCY", 1)
+            initial_carry = (
+                train_state_actor,
+                log_ent_coef,
+                ent_coef_opt_state,
+                rng,
+            )
 
-                qf1_next_target = qf1_target.apply(
-                    qf1_target_params,
-                    batch.next_obs,
-                    next_state_actions_sample,
-                )
-                qf2_next_target = qf2_target.apply(
-                    qf2_target_params,
-                    batch.next_obs,
-                    next_state_actions_sample,
-                )
-                min_qf_next_target = (
-                    jnp.minimum(qf1_next_target, qf2_next_target)
-                    - ent_coef * next_state_log_pi
-                )
+            # --- Branch 1: Run the actual updates ---
+            def do_policy_update(carry):
 
-                # Flatten rewards and dones to match Q-value shape
-                next_q_value = (
-                    batch.reward.flatten()
-                    + (1 - batch.done.flatten())
-                    * config["GAMMA"]
-                    * min_qf_next_target
-                )
-                next_q_value = jax.lax.stop_gradient(next_q_value)
-
-                # Q-function update (NOW next_q_value is defined)
-                def q1_loss_fn(qf1_params):
-                    # Current Q-values
-                    qf1_a_values = qf1.apply(
-                        qf1_params, batch.obs, batch.action
-                    )
-                    qf1_loss = jnp.mean((qf1_a_values - next_q_value) ** 2)
-                    return qf1_loss
-
-                def q2_loss_fn(qf2_params):
-                    qf2_a_values = qf2.apply(
-                        qf2_params, batch.obs, batch.action
-                    )
-                    qf2_loss = jnp.mean((qf2_a_values - next_q_value) ** 2)
-                    return qf2_loss
-
-                # Update Q-functions
-                grad_q1_fn = jax.value_and_grad(
-                    q1_loss_fn,
-                    has_aux=False,
-                )
-                q1_loss, q1_grads = grad_q1_fn(train_state_qf1.params)
-
-                train_state_qf1 = train_state_qf1.apply_gradients(
-                    grads=q1_grads
-                )
-                grad_q2_fn = jax.value_and_grad(
-                    q2_loss_fn,
-                    has_aux=False,
-                )
-                q2_loss, q2_grads = grad_q2_fn(train_state_qf2.params)
-
-                train_state_qf2 = train_state_qf2.apply_gradients(
-                    grads=q2_grads
-                )
-
-                def actor_update_step(update_state, unused):
-
-                    (
-                        train_state_actor,
-                        train_state_qf1,
-                        train_state_qf2,
-                        log_ent_coef,
-                        ent_coef_opt_state,
-                        rng,
-                    ) = update_state
-                    # Actor update (with fresh RNG key)
-                    rng, _rng_actor = jax.random.split(rng)
-
-                    def actor_loss_fn(actor_params):
-                        pi = actor.apply(actor_params, batch.obs)
-                        actions, log_pi, _ = get_sac_action_dist(
-                            pi, scale_action, bias_action, _rng_actor
-                        )
-
-                        qf1_pi = qf1.apply(
-                            train_state_qf1.params, batch.obs, actions
-                        )
-                        qf2_pi = qf2.apply(
-                            train_state_qf2.params, batch.obs, actions
-                        )
-                        min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
-
-                        actor_loss = jnp.mean(ent_coef * log_pi - min_qf_pi)
-                        return actor_loss, log_pi
-
-                    (actor_loss, log_pi), actor_grads = jax.value_and_grad(
-                        actor_loss_fn, has_aux=True
-                    )(train_state_actor.params)
-
-                    train_state_actor = train_state_actor.apply_gradients(
-                        grads=actor_grads
-                    )
-
-                    # Update entropy coefficient with fresh forward pass (stop gradient)
-                    rng, _rng_alpha = jax.random.split(rng)
-                    pi_for_alpha = actor.apply(
-                        train_state_actor.params, batch.obs
-                    )
-                    _, log_pi_for_alpha, _ = get_sac_action_dist(
-                        pi_for_alpha, scale_action, bias_action, _rng_alpha
-                    )
-                    log_pi_for_alpha = jax.lax.stop_gradient(log_pi_for_alpha)
-
-                    def ent_coef_loss_fn(alpha_params):
-                        alpha_loss = (
-                            -jnp.exp(alpha_params)
-                            * (log_pi_for_alpha + target_entropy).mean()
-                        )
-                        return alpha_loss, None
-
-                    (alpha_loss, _), alpha_grads = jax.value_and_grad(
-                        ent_coef_loss_fn, has_aux=True
-                    )(log_ent_coef)
-
-                    updates, ent_coef_opt_state = ent_coef_optimizer.update(
-                        alpha_grads, ent_coef_opt_state
-                    )
-                    log_ent_coef = jax.lax.select(
-                        config["ENT_COEF"] == "auto",
-                        optax.apply_updates(log_ent_coef, updates),
-                        log_ent_coef,
-                    )
-
-                    loss_info = (actor_loss, alpha_loss, log_pi)
-                    update_state = (
-                        train_state_actor,
-                        train_state_qf1,
-                        train_state_qf2,
-                        log_ent_coef,
-                        ent_coef_opt_state,
-                        rng,
-                    )
-                    return update_state, loss_info
-
-                us, loss_actor = jax.lax.scan(
-                    actor_update_step,
-                    (
-                        train_state_actor,
-                        train_state_qf1,
-                        train_state_qf2,
-                        log_ent_coef,
-                        ent_coef_opt_state,
-                        rng,
-                    ),
+                # Scan the *actual* update body
+                (
+                    (new_ts_actor, new_log_ent, new_ent_opt_state, new_rng),
+                    losses,
+                ) = jax.lax.scan(
+                    actor_alpha_update_body,
+                    carry,
                     None,
-                    config.get("ACTOR_EPOCHS", 1),
+                    length=policy_frequency,
                 )
-                (
-                    train_state_actor,
-                    _,
-                    _,
-                    log_ent_coef,
-                    ent_coef_opt_state,
-                    rng,
-                ) = us
-                entropy = loss_actor[-1].mean()
+                new_carry = (
+                    new_ts_actor,
+                    new_log_ent,
+                    new_ent_opt_state,
+                    new_rng,
+                )
+                return new_carry, losses
 
-                # Update target networks (soft update)
+            # --- Branch 2: Run a "do-nothing" scan ---
+            def do_no_policy_update(carry):
+
+                # Scan the "do nothing" body
+                (
+                    (new_ts_actor, new_log_ent, new_ent_opt_state, new_rng),
+                    losses,
+                ) = jax.lax.scan(
+                    no_actor_alpha_update_body,
+                    carry,
+                    None,
+                    length=policy_frequency,
+                )
+                new_carry = (
+                    new_ts_actor,
+                    new_log_ent,
+                    new_ent_opt_state,
+                    new_rng,
+                )
+                return new_carry, losses
+
+            # Use lax.cond to run *either* the update scan *or* the do-nothing scan
+            # Both branches take the 'initial_carry' and return
+            # (final_carry, losses_tree) with the *same structure*.
+            (
+                (train_state_actor, log_ent_coef, ent_coef_opt_state, rng),
+                (actor_losses, alpha_losses, entropies),
+            ) = jax.lax.cond(
+                (total_steps % policy_frequency) == 0,
+                do_policy_update,  # Function to call if True
+                do_no_policy_update,  # Function to call if False
+                initial_carry,  # The argument to pass to *which_ever* func is called
+            )
+
+            # --- Conditional Target Network Update ---
+            target_network_frequency = config.get("TARGET_NETWORK_FREQUENCY", 1)
+
+            def update_targets(params):
+                (qf1_target_params, qf2_target_params) = params
                 tau = config.get("POLYAK_TAU", 0.005)
                 qf1_target_params = jax.tree.map(
                     lambda target, online: tau * online + (1 - tau) * target,
@@ -581,70 +595,32 @@ def make_train(config, writer: SummaryWriter):
                     qf2_target_params,
                     train_state_qf2.params,
                 )
+                return (qf1_target_params, qf2_target_params)
 
-                update_state = (
-                    train_state_actor,
-                    train_state_qf1,
-                    train_state_qf2,
-                    ent_coef_opt_state,
-                    qf1_target_params,
-                    qf2_target_params,
-                    log_ent_coef,
-                    rb,
-                    rng,
-                )
+            def no_update_targets(params):
+                return params
 
-                total_loss = q1_loss + q2_loss + loss_actor[0] + loss_actor[1]
-                return update_state, (
-                    total_loss,
-                    (q1_loss, q2_loss, loss_actor[0], entropy),
-                )
-
-            update_state = (
-                train_state_actor,
-                train_state_qf1,
-                train_state_qf2,
-                ent_coef_opt_state,
-                qf1_target_params,
-                qf2_target_params,
-                log_ent_coef,
-                rb,
-                rng,
+            (qf1_target_params, qf2_target_params) = jax.lax.cond(
+                (total_steps % target_network_frequency) == 0,
+                update_targets,
+                no_update_targets,
+                (qf1_target_params, qf2_target_params),
             )
-            update_state, loss_info = jax.lax.scan(
-                _update_epoch, update_state, None, config["UPDATE_EPOCHS"]
-            )
-            train_state_actor = update_state[0]
-            train_state_qf1 = update_state[1]
-            train_state_qf2 = update_state[2]
-            ent_coef_opt_state = update_state[3]
-            qf1_target_params = update_state[4]
-            qf2_target_params = update_state[5]
-            log_ent_coef = update_state[6]
-            metric = info
-            rng = update_state[-1]
 
-            # Extract and compute mean losses from loss_info
-            # loss_info shape: [UPDATE_EPOCHS, NUM_MINIBATCHES] where each element is (total_loss, (value_loss, actor_loss, entropy))
-            # loss_info is a tuple of (total_losses_array, aux_losses_tuple)
-            # where aux_losses_tuple = (value_losses_array, actor_losses_array, entropies_array)
-            total_losses, (
-                qf1_losses,
-                qf2_losses,
-                actor_losses,
-                entropies,
-            ) = loss_info
+            # --- Logging ---
+            metric = info  # Use the 'info' from env_step
+            mean_actor_loss = jnp.mean(actor_losses)
+            mean_alpha_loss = jnp.mean(
+                alpha_losses
+            )  # Not logged in CleanRL, but good to have
+            mean_entropy = jnp.mean(entropies)
+            mean_total_loss = (
+                q1_loss + q2_loss + mean_actor_loss
+            )  # alpha_loss is separate
 
-            # Compute means across all scan iterations (epochs and minibatches)
-            mean_total_loss = total_losses.mean()
-            mean_qf1_loss = qf1_losses.mean()
-            mean_qf2_loss = qf2_losses.mean()
-            mean_actor_loss = actor_losses.mean()
-            mean_entropy = entropies.mean()
             if config.get("DEBUG"):
 
                 def callback(info):
-
                     return_values = info["returned_episode_returns"][
                         info["returned_episode"]
                     ]
@@ -660,7 +636,7 @@ def make_train(config, writer: SummaryWriter):
 
                 jax.debug.callback(callback, metric)
 
-            # Log metrics to tensorboard using the computed mean losses
+            # Log metrics to tensorboard
             def log_callback(
                 mean_total,
                 mean_qf1,
@@ -711,33 +687,36 @@ def make_train(config, writer: SummaryWriter):
                 writer.add_scalar(
                     "train/entropy", float(mean_ent), int(timestep)
                 )
-
-                if "sensitivity_state" in metric:
-                    sensitivity_state_max = (
-                        metric["sensitivity_state"].max(axis=0).mean()
-                    )
-                    sensitivity_state_mean = metric["sensitivity_state"].mean()
-                    writer.add_scalar(
-                        "returns/sensitivity_state_max",
-                        float(sensitivity_state_max),
-                        int(timestep),
-                    )
-                    writer.add_scalar(
-                        "returns/sensitivity_state_mean",
-                        float(sensitivity_state_mean),
-                        int(timestep),
-                    )
+                if config["SENSITIVITY"]:
+                    if "sensitivity_state" in metric:
+                        sensitivity_state_max = (
+                            metric["sensitivity_state"].max(axis=0).mean()
+                        )
+                        sensitivity_state_mean = metric[
+                            "sensitivity_state"
+                        ].mean()
+                        writer.add_scalar(
+                            "returns/sensitivity_state_max",
+                            float(sensitivity_state_max),
+                            int(timestep),
+                        )
+                        writer.add_scalar(
+                            "returns/sensitivity_state_mean",
+                            float(sensitivity_state_mean),
+                            int(timestep),
+                        )
 
             jax.debug.callback(
                 log_callback,
                 mean_total_loss,
-                mean_qf1_loss,
-                mean_qf2_loss,
+                q1_loss,  # q1_loss is scalar, not from scan
+                q2_loss,  # q2_loss is scalar, not from scan
                 mean_actor_loss,
                 mean_entropy,
                 metric,
                 total_steps,
             )
+            # --- End Logging ---
 
             runner_state = (
                 train_state_actor,
@@ -749,7 +728,7 @@ def make_train(config, writer: SummaryWriter):
                 log_ent_coef,
                 env_state,
                 obsv,
-                info,
+                metric,  # Pass the metric (info) forward
                 rb,
                 rng,
                 total_steps,

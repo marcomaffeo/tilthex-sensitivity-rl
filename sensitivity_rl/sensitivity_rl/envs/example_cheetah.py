@@ -98,7 +98,9 @@ def wraped_step_env(
     params = param_unravel(params_flat)
     model, data, obs, reward, done = step_env(model, data, action, params)
 
-    return jax.flatten_util.ravel_pytree(data.qpos)[0]
+    return jax.flatten_util.ravel_pytree(
+        jnp.concatenate([data.qpos, data.qvel])
+    )[0]
 
 
 def step_env(

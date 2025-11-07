@@ -10,6 +10,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import jax.flatten_util
 from flax import struct
 
 import mujoco
@@ -22,13 +23,9 @@ from gymnax.environments.environment import TEnvState, TEnvParams
 
 from envs.base import Sensitivity
 
-model_path = Path(__file__).parent / "assets" / "half_cheetah.xml"
-mj_model = mujoco.MjModel.from_xml_path(str(model_path))
-mj_data = mujoco.MjData(mj_model)
-
-# Put on JAX device
-base_model = mjx.put_model(mj_model)
-base_data = mjx.put_data(mj_model, mj_data)
+# model_path = Path(__file__).parent / "assets" / "half_cheetah.xml"
+# mj_model = mujoco.MjModel.from_xml_path(str(model_path))
+# mj_data = mujoco.MjData(mj_model)
 
 
 @struct.dataclass
@@ -60,7 +57,7 @@ class EnvParams(environment.EnvParams):
     )
     ctrl_cost_weight: float = struct.field(pytree_node=False, default=0.1)
     forward_reward_weight: float = struct.field(pytree_node=False, default=1.0)
-    frame_skip: int = struct.field(pytree_node=False, default=1)
+    frame_skip: int = struct.field(pytree_node=False, default=5)
     damping: jax.Array = struct.field(
         pytree_node=True,
         default_factory=lambda: jnp.array([6, 4.5, 3, 4.5, 3, 1.5]),
@@ -77,7 +74,23 @@ class HalfCheetahV5(environment.Environment):
     """JAX Compatible version of HalfCheetah-v5."""
 
     def __init__(self):
+        model_path = Path(__file__).parent / "assets" / "half_cheetah.xml"
+        self.mj_model = mujoco.MjModel.from_xml_path(str(model_path))
+        self.mj_data = mujoco.MjData(self.mj_model)
+        self.model = mjx.put_model(self.mj_model)
+        self.data = mjx.put_data(self.mj_model, self.mj_data)
+        # to handle in a different way
+        self.type = "mujoco"
+        base_data = mjx.put_data(self.mj_model, self.mj_data)
 
+        flat_vector, unravel_fn = jax.flatten_util.ravel_pytree(base_data)
+        total_size = flat_vector.shape[0]
+        index_vector = jnp.arange(total_size)
+        index_map = unravel_fn(index_vector.astype(jnp.float32))
+        index_qpos = index_map.qpos
+        index_qvel = index_map.qvel
+
+        self.state_idx = (int(index_qpos[0]), int(index_qvel[-1]))
         self.obs_dim = base_data.qpos.size + base_data.qvel.size
 
         self.state_dim = self.obs_dim
@@ -140,7 +153,11 @@ class HalfCheetahV5(environment.Environment):
         state = env_state.state
 
         state_next = self.step_dynamics(key, state, u, params)
-        x_velocity = state_next.qvel[0]
+
+        x_velocity = (
+            (state_next.qpos[0] - state.qpos[0]) / params.frame_skip / 0.01
+        )
+
         forward_reward = params.forward_reward_weight * x_velocity
         ctrl_cost = params.ctrl_cost_weight * jnp.sum(jnp.square(u))
 
@@ -189,25 +206,28 @@ class HalfCheetahV5(environment.Environment):
         """
 
         friction = params.friction.reshape((1, -1)).repeat(
-            base_model.geom_friction.shape[0], axis=0
+            self.model.geom_friction.shape[0], axis=0
         )
         damping = jnp.concatenate(
             [jnp.array([0.0, 0.0, 0.0]), params.damping], axis=0
         )
-        model = base_model.replace(geom_friction=friction, dof_damping=damping)
-        data = base_data.replace(ctrl=action, qpos=state.qpos, qvel=state.qvel)
-
-        jax.debug.print("Step HalfCheetah with params:1")
+        model = self.model.replace(geom_friction=friction, dof_damping=damping)
+        data = self.data.replace(qpos=state.qpos, qvel=state.qvel, ctrl=action)
 
         # Apply frame skip
-        # for _ in range(params.frame_skip):
-        data = mjx.step(model, data)
+        # Define the function for a single step
+        def step_fn(data_carry, _):
+            # 'model' is captured from the outer scope
+            data_new = mjx.step(model, data_carry)
+            return data_new, None
 
-        jax.debug.print("Step HalfCheetah with params:2")
+        # Apply frame skip using jax.lax.scan
+        # This is fast to compile, even for large frame_skip
+        data, _ = jax.lax.scan(step_fn, data, None, length=params.frame_skip)
 
         state_new = ModelState(
-            qpos=data.qpos.squeeze(),
-            qvel=data.qvel.squeeze(),
+            qpos=data.qpos,
+            qvel=data.qvel,
         )
 
         return state_new
@@ -216,13 +236,17 @@ class HalfCheetahV5(environment.Environment):
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
         """Reset environment state with small random noise."""
-        qpos_noise = jax.random.uniform(
-            key, base_data.qpos.shape, minval=-0.1, maxval=0.1
-        )
-        qpos = base_data.qpos + qpos_noise
-        qvel = jnp.zeros_like(base_data.qvel)
+        rng, rng_qpos = jax.random.split(key, 2)
 
-        state = ModelState(qpos=qpos, qvel=qvel)
+        qpos_noise = jax.random.uniform(
+            rng_qpos, self.data.qpos.shape, minval=-0.1, maxval=0.1
+        )
+        new_qpos = self.data.qpos + qpos_noise
+
+        state = ModelState(
+            qpos=new_qpos,
+            qvel=jnp.zeros_like(self.data.qvel),
+        )
 
         env_state = EnvState(
             state=state,
@@ -237,7 +261,7 @@ class HalfCheetahV5(environment.Environment):
 
         return jnp.concatenate(
             [
-                state.qpos[:].reshape(-1),
+                state.qpos.reshape(-1),
                 state.qvel.reshape(-1),
             ]
         ).squeeze()
@@ -275,15 +299,15 @@ class HalfCheetahV5(environment.Environment):
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
         """State space of the environment."""
-        qpos_dim = base_data.qpos.size
-        qvel_dim = base_data.qvel.size
+        qpos_dim = self.data.qpos.size
+        qvel_dim = self.data.qvel.size
 
         return spaces.Dict(
             {
                 "state": spaces.Box(
                     -jnp.finfo(jnp.float32).max,
                     jnp.finfo(jnp.float32).max,
-                    (qpos_dim + qvel_dim,),
+                    (self.state_dim,),
                     jnp.float32,
                 ),
                 "last_u": spaces.Box(

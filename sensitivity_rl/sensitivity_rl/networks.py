@@ -85,13 +85,15 @@ class SoftQNetwork(nn.Module):
             bias_init=constant(0.0),
             name="output",
         )(x)
-        return jnp.squeeze(q_value, axis=-1)
+        return q_value
 
 
 class Actor(nn.Module):
     action_dim: int
     layer_sizes: tuple = (256, 256)
     activation: str = "relu"
+    LOG_STD_MAX = 2
+    LOG_STD_MIN = -5
 
     @nn.compact
     def __call__(self, state):
@@ -121,8 +123,10 @@ class Actor(nn.Module):
             bias_init=constant(0.0),
             name="output_log_std",
         )(x)
-        # Clamp log_std to reasonable bounds
-        log_std = jnp.clip(log_std, -20, 2)
+        log_std = nn.tanh(log_std)
+        log_std = self.LOG_STD_MIN + 0.5 * (
+            self.LOG_STD_MAX - self.LOG_STD_MIN
+        ) * (log_std + 1)
         pi = distrax.MultivariateNormalDiag(mean, jnp.exp(log_std))
         return pi
 
@@ -145,6 +149,7 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng):
     mean_tanh = jnp.tanh(pi.mean())
     action = y_t * scale_action + bias_action
     mean = mean_tanh * scale_action + bias_action
+    log_prob = jnp.expand_dims(log_prob, -1)
     return action, log_prob, mean
 
 

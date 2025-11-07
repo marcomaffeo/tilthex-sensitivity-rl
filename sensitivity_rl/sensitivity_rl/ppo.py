@@ -25,6 +25,7 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
+    MujocoSensitivityWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -73,10 +74,20 @@ def make_train(config, writer: SummaryWriter):
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        env = SensitivityWrapper(
-            env,
-            regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"],
-        )
+        if env.type == "mujoco":
+            env = MujocoSensitivityWrapper(
+                env,
+                regularization_weight=config[
+                    "SENSITIVITY_REGULARIZATION_WEIGHT"
+                ],
+            )
+        else:
+            env = SensitivityWrapper(
+                env,
+                regularization_weight=config[
+                    "SENSITIVITY_REGULARIZATION_WEIGHT"
+                ],
+            )
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)

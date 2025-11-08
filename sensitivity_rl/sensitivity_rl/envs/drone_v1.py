@@ -18,12 +18,14 @@ from envs.base import Sensitivity
 
 from utils import angle_normalize
 
+
 def l1_smooth(x):
     delta = 1.0
     error_norm = jnp.linalg.norm(x + 1e-6)
     quadratic = jnp.minimum(error_norm, delta)
     linear = error_norm - quadratic
     return 0.5 * quadratic**2 + delta * linear
+
 
 @jax.jit
 def skew(vec):
@@ -128,12 +130,15 @@ class DroneV1(environment.Environment):
     """JAX Compatible version of Drone-v1 target approaching."""
 
     def __init__(self):
+        self.type = ""
         self.state_dim = 13
         self.obs_dim = 13
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
-        self.hovering_action = jnp.array([self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0])
+        self.hovering_action = jnp.array(
+            [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]
+        )
 
         self.params_min = [
             0.02,  # mass
@@ -141,8 +146,8 @@ class DroneV1(environment.Environment):
         ]
         self.params_max = [
             0.05,  # mass
-            jnp.array([1e-4, 1e-4, 1e-4]),  # inertia 
-        ]  
+            jnp.array([1e-4, 1e-4, 1e-4]),  # inertia
+        ]
         super().__init__()
 
     @property
@@ -185,8 +190,6 @@ class DroneV1(environment.Environment):
         state = env_state.state
         pos_diff_old = state.pos - env_state.target_pos
 
-
-
         state_next = self.step_dynamics(key, state, action, params)
 
         pos_diff = state_next.pos - env_state.target_pos
@@ -194,11 +197,14 @@ class DroneV1(environment.Environment):
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.01,
             5.0,  # reward when close to target
-            1.0 * (- l1_smooth( 5.0 * (state_next.pos -  env_state.target_pos))), # distance penalty
+            1.0
+            * (
+                -l1_smooth(5.0 * (state_next.pos - env_state.target_pos))
+            ),  # distance penalty
         )
 
         reward = (
-            - 0.1 * l1_smooth(state_next.omega)
+            -0.1 * l1_smooth(state_next.omega)
             - 0.1 * l1_smooth(state_next.vel)
             + reward_app
             - 0.5 * (l1_smooth(u - self.hovering_action))
@@ -317,7 +323,7 @@ class DroneV1(environment.Environment):
                 shape=(3,),
                 minval=params.env_min_limits,
                 maxval=params.env_max_limits,
-            )
+            ),
         )
 
         env_state = EnvState(

@@ -123,6 +123,7 @@ class DroneV0(environment.Environment):
     """JAX Compatible version of Drone-v0 target approaching."""
 
     def __init__(self):
+        self.type = ""
         self.state_dim = 13
         self.obs_dim = 13
         self.action_dim = self.action_space(self.default_params).shape[0]

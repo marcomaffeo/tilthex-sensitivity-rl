@@ -50,15 +50,18 @@ class Pendulum(environment.Environment):
     """JAX Compatible version of Pendulum-v0 OpenAI gym environment."""
 
     def __init__(self):
+        self.type = ""
         self.state_dim = 2
         self.obs_dim = 3
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = len(jax.tree.leaves(self.default_params))
-        self.params_min = [0.1,  # mass
-                           0.5,  # length
+        self.params_min = [
+            0.1,  # mass
+            0.5,  # length
         ]
-        self.params_max = [10.0,  # mass
-                           2.0,  # length 
+        self.params_max = [
+            10.0,  # mass
+            2.0,  # length
         ]
         super().__init__()
 

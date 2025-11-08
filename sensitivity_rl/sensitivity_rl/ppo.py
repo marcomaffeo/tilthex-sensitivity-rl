@@ -478,10 +478,10 @@ def make_train(config, writer: SummaryWriter):
 
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
-        runner_state, metric = jax.lax.scan(
+        runner_state, _ = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
-        return {"runner_state": runner_state, "metrics": metric}
+        return {"runner_state": runner_state, "metrics": None}
 
     return train
 
@@ -522,6 +522,15 @@ if __name__ == "__main__":
 
     shutil.copy(config_path, run_dir / "config.json")
 
+    # Prepare metrics for hparams logging
+    hparam_dict = {
+        k: v
+        for k, v in config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+    metric_dict = {}
+
+    """
     # Save raw metrics arrays for post-hoc analysis/plotting
     metrics = out["metrics"]
 
@@ -530,13 +539,7 @@ if __name__ == "__main__":
     done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
     ep_returns = ret[done]
 
-    # Prepare metrics for hparams logging
-    hparam_dict = {
-        k: v
-        for k, v in config.items()
-        if isinstance(v, (int, float, bool, str))
-    }
-    metric_dict = {}
+    
     if ep_returns.size > 0:
         metric_dict = {
             "hparam/final_avg_return": float(ep_returns.mean()),
@@ -546,7 +549,7 @@ if __name__ == "__main__":
         print(
             f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
         )
-
+    """
     # Log hyperparameters with final metrics
     writer.add_hparams(hparam_dict, metric_dict, run_name=".")
 

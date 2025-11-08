@@ -57,7 +57,7 @@ class EnvParams(environment.EnvParams):
     )
     ctrl_cost_weight: float = struct.field(pytree_node=False, default=0.1)
     forward_reward_weight: float = struct.field(pytree_node=False, default=1.0)
-    frame_skip: int = struct.field(pytree_node=False, default=5)
+    frame_skip: int = struct.field(pytree_node=False, default=1)
     damping: jax.Array = struct.field(
         pytree_node=True,
         default_factory=lambda: jnp.array([6, 4.5, 3, 4.5, 3, 1.5]),

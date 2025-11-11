@@ -3,6 +3,10 @@ import os
 import shutil
 import json
 
+# --- IMPORTANT ---
+# Set this *before* importing JAX
+# This tells the script to only see the GPU with ID '0' (the first GPU)
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
@@ -25,6 +29,7 @@ from envs.wrappers import (
     LogWrapper,
     VecEnv,
     NormalizeVecReward,
+    NormalizeVecRewardSensitivity,
     ClipAction,
     SensitivityWrapper,
     SensitivityExtWrapper,
@@ -96,7 +101,10 @@ def make_train(config, writer: SummaryWriter):
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        env = NormalizeVecReward(env, config["GAMMA"])
+        if config["SENSITIVITY"]:
+            env = NormalizeVecRewardSensitivity(env, config["GAMMA"])
+        else:
+            env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
         frac = (
@@ -223,14 +231,14 @@ def make_train(config, writer: SummaryWriter):
             )
 
             # Normalize sensitivity rewards
-            traj_batch = traj_batch._replace(
-                reward_s=(traj_batch.reward_s)
-                / (
-                    jnp.max(traj_batch.reward_s)
-                    - jnp.min(traj_batch.reward_s)
-                    + 1e-8
-                )
-            )
+            # traj_batch = traj_batch._replace(
+            #    reward_s=(traj_batch.reward_s)
+            #    / (
+            #        jnp.max(traj_batch.reward_s)
+            #        - jnp.min(traj_batch.reward_s)
+            #        + 1e-8
+            #    )
+            # )
 
             # CALCULATE ADVANTAGE
             train_state, env_state, last_obs, rng = runner_state
@@ -572,10 +580,10 @@ def make_train(config, writer: SummaryWriter):
 
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
-        runner_state, metric = jax.lax.scan(
+        runner_state, _ = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
-        return {"runner_state": runner_state, "metrics": metric}
+        return {"runner_state": runner_state, "metrics": None}
 
     return train
 
@@ -617,14 +625,6 @@ if __name__ == "__main__":
 
     shutil.copy(config_path, run_dir / "config.json")
 
-    # Save raw metrics arrays for post-hoc analysis/plotting
-    metrics = out["metrics"]
-
-    # Minimal console summary
-    ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
-    done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
-    ep_returns = ret[done]
-
     # Prepare metrics for hparams logging
     hparam_dict = {
         k: v
@@ -632,6 +632,18 @@ if __name__ == "__main__":
         if isinstance(v, (int, float, bool, str))
     }
     metric_dict = {}
+    # Log hyperparameters with final metrics
+    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
+
+    """
+    # Save raw metrics arrays for post-hoc analysis/plotting
+    metrics = out["metrics"]
+    
+    # Minimal console summary
+    ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
+    done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
+    ep_returns = ret[done]
+
     if ep_returns.size > 0:
         metric_dict = {
             "hparam/final_avg_return": float(ep_returns.mean()),
@@ -642,9 +654,7 @@ if __name__ == "__main__":
             f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
         )
 
-    # Log hyperparameters with final metrics
-    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
-
+    """
     # close tensorboard writer
     writer.close()
 

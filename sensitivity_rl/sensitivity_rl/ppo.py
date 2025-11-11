@@ -3,6 +3,10 @@ import os
 import shutil
 import json
 
+# --- IMPORTANT ---
+# Set this *before* importing JAX
+# This tells the script to only see the GPU with ID '0' (the first GPU)
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax

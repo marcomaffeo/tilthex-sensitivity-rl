@@ -3,6 +3,10 @@ import os
 import shutil
 import json
 
+# --- IMPORTANT ---
+# Set this *before* importing JAX
+# This tells the script to only see the GPU with ID '0' (the first GPU)
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
@@ -25,6 +29,7 @@ from envs.wrappers import (
     LogWrapper,
     VecEnv,
     NormalizeVecReward,
+    NormalizeVecRewardSensitivity,
     ClipAction,
     SensitivityWrapper,
     SensitivityExtWrapper,
@@ -96,7 +101,10 @@ def make_train(config, writer: SummaryWriter):
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        env = NormalizeVecReward(env, config["GAMMA"])
+        if config["SENSITIVITY"]:
+            env = NormalizeVecRewardSensitivity(env, config["GAMMA"])
+        else:
+            env = NormalizeVecReward(env, config["GAMMA"])
 
     def linear_schedule(count):
         frac = (
@@ -290,14 +298,14 @@ def make_train(config, writer: SummaryWriter):
             )
 
             # Normalize sensitivity rewards
-            traj_batch = traj_batch._replace(
-                reward_s=(traj_batch.reward_s)
-                / (
-                    jnp.max(traj_batch.reward_s)
-                    - jnp.min(traj_batch.reward_s)
-                    + 1e-8
-                )
-            )
+            # traj_batch = traj_batch._replace(
+            #    reward_s=(traj_batch.reward_s)
+            #    / (
+            #        jnp.max(traj_batch.reward_s)
+            #        - jnp.min(traj_batch.reward_s)
+            #        + 1e-8
+            #    )
+            # )
 
             # CALCULATE ADVANTAGE
             (

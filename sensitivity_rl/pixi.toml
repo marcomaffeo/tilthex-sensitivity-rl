@@ -1,6 +1,6 @@
 # pixi.toml - Pixi environment and task configuration for sensitivity_rl
 
-[project]
+[workspace]
 name = "sensitivity-rl"
 description = "PPO in JAX with parametric sensitivity optimization."
 channels = ["conda-forge"]

@@ -7,25 +7,51 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt  # For displaying frames
 from flax import struct
+from flax import serialization
 from gymnax.environments import environment, spaces
+import sys
+
+sys.path.append(str(Path(__file__).parent.parent))
+from networks import ActorCritic
 
 
 @struct.dataclass
 class EnvParams(environment.EnvParams):
     damping: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([6, 4.5, 3, 4.5, 3, 1.5]),
+        default_factory=lambda: jnp.array([5, 2.5, 2, 2.5, 3, 1.5]),
     )
     # TODO: check this
     friction: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([0.4, 0.1, 0.1]),
+        default_factory=lambda: jnp.array([0.1, 0.02, 0.03]),
     )
 
 
 params = EnvParams()
 # JAX configuration for numerical stability
 jax.config.update("jax_enable_x64", True)  # Use 64-bit precision
+
+# --- Load trained ActorCritic network parameters ---
+print("Loading trained ActorCritic parameters...")
+params_path = (
+    Path(__file__).parent.parent.parent
+    / "runs"
+    / "halfcheetah_v5"
+    / "SPPOVSA_20251110-145428"
+    / "params.msgpack"
+)
+with open(params_path, "rb") as f:
+    trained_params = serialization.from_bytes(None, f.read())
+
+# Initialize the ActorCritic network with the same architecture as training
+network = ActorCritic(
+    action_dim=6,  # HalfCheetah has 6 actuators
+    activation="tanh",
+    actor_layer_sizes=(256, 256),
+    critic_layer_sizes=(256, 256),
+)
+print("ActorCritic network loaded successfully!")
 
 # --- 1. One-time Setup: Load Model (CPU -> GPU) ---
 
@@ -58,7 +84,7 @@ print(f"Base model loaded. Preparing {BATCH_SIZE} parallel environments.")
 
 # --- 2. Define JAX-native Environment Functions (Same as before) ---
 def get_observation(data: mjx.Data) -> jax.Array:
-    return jnp.concatenate([data.qpos[1:], data.qvel])
+    return jnp.concatenate([data.qpos, data.qvel])
 
 
 def reset_env_with_dr(
@@ -159,31 +185,25 @@ if renderer:
     pixels = renderer.render()
     frames.append(pixels)
 
-# Compute Jacobians
-df_du = jax.jacfwd(wraped_step_env, argnums=2)
-df_dp = jax.jacfwd(wraped_step_env, argnums=3)
-df_dp_p = jax.jit(df_dp)
-
 # --- Step ---
 print("Stepping...")
 num_steps = 1000
 for i in range(num_steps):
-    rng_key, action_key = jax.random.split(rng_key)
-    action_batch = jax.random.uniform(
-        action_key, shape=(BATCH_SIZE, base_model.nu), minval=-1.0, maxval=1.0
-    )
+    # Use the trained network to select actions
+    # Get observation for first environment
+    first_env_obs = jax.tree_util.tree_map(lambda x: x[0], obs_batch)
+
+    # Get action from trained policy (deterministic mode - use mean)
+    pi, value = network.apply(trained_params, first_env_obs)
+    action_selected = pi.mean()  # Use mean for deterministic policy
+
+    # Broadcast action to all environments in batch
+    action_batch = jnp.tile(action_selected[None, :], (BATCH_SIZE, 1))
 
     models_batch, data_batch, obs_batch, reward_batch, done_batch = vmap_step(
         models_batch, data_batch, action_batch, params
     )
-    params_v = jax.flatten_util.ravel_pytree(params)[0]
-    dfdp = df_dp_p(
-        base_model,
-        base_data,
-        action_batch[0],
-        params_v,
-    )
-    print(dfdp.shape)
+
     # --- Render Current State (e.g., every 5 steps) ---
     if renderer and (i % 5 == 0 or i == num_steps - 1):
         # Get data for the first env back to CPU
@@ -211,7 +231,7 @@ if frames:
     try:
         import imageio
 
-        gif_path = "halfcheetah_mjx_dr.gif"
+        gif_path = "halfcheetah_trained_policy.gif"
         print(f"Saving simulation as GIF to {gif_path}...")
         # Duration for each frame in seconds. 0.05s means 20 frames per second.
         # If your steps are 0.01s, 0.05s duration per frame means 5 simulation steps per frame.

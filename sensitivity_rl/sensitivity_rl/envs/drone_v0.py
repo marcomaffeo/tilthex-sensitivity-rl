@@ -188,16 +188,16 @@ class DroneV0(environment.Environment):
         pos_diff = state_next.pos - env_state.target_pos
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.01,
-            5.0,  # reward when close to target
+            jnp.linalg.norm(pos_diff) < 0.02,
+            10.0,  # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
         reward = (
-            -0.08 * jnp.linalg.norm(state_next.omega)
+            -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             - 0.05 * (jnp.linalg.norm(u - self.hovering_action) ** 2)
-            - 0.01 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
+            - 0.5 * (jnp.linalg.norm(u - env_state.last_u) ** 2)
         )
 
         reward = reward.squeeze()
@@ -258,7 +258,7 @@ class DroneV0(environment.Environment):
 
         total_torque = (
             1e-3 * u[1:4] - skew(ang_vel) @ params.I @ ang_vel
-        )  # multiplication by normalization factor
+        )  # multiplication by normalization factor for the torques
 
         si_mat = jnp.diag(
             jnp.concatenate(

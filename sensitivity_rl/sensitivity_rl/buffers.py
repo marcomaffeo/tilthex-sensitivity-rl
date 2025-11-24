@@ -108,16 +108,94 @@ class ReplayTransition(NamedTuple):
     obs: jnp.ndarray
     next_obs: jnp.ndarray
 
+    def init_mean(self):
+        return jnp.array(0.0)
+
+    def init_var(self):
+        return jnp.array(0.0)
+
+    def compute_mean_std(self, current_mean, current_var, new_size):
+        delta = current_mean[0] - self.reward
+        new_mean = current_mean[0] + delta * self.reward.shape[0] / new_size
+        m_a = current_var[0] * new_size
+        m_b = jnp.var(self.reward) * self.reward.shape[0]
+        M2 = (
+            m_a
+            + m_b
+            + jnp.square(delta) * (new_size - self.reward.shape[0]) / new_size
+        )
+        new_var = M2 / new_size
+
+        return jnp.array(new_mean), jnp.array(new_var)
+
+
+class ReplaySensTransition(NamedTuple):
+    done: jnp.ndarray
+    action: jnp.ndarray
+    reward: jnp.ndarray
+    obs: jnp.ndarray
+    next_obs: jnp.ndarray
+    sens : jnp.ndarray
+    sens_next: jnp.ndarray
+    F_sens_x: jnp.ndarray
+    F_sens_x_next: jnp.ndarray
+    df_du: jnp.ndarray
+    df_du_next: jnp.ndarray
+    dobs_dx: jnp.ndarray
+    dobs_dx_next: jnp.ndarray
+    log_sens_norm: jnp.ndarray
+    log_sens_next_norm: jnp.ndarray
+
+    def init_mean(self):
+        return jnp.array([0.0, 0.0])
+
+    def init_var(self):
+        return jnp.array([0.0, 0.0])
+
+    def compute_mean_std(self, current_mean, current_var, new_size):
+        delta = current_mean[0] - self.reward
+        new_mean = current_mean[0] + delta * self.reward.shape[0] / new_size
+        m_a = current_var[0] * new_size
+        m_b = jnp.var(self.reward) * self.reward.shape[0]
+        M2 = (
+            m_a
+            + m_b
+            + jnp.square(delta) * (new_size - self.reward.shape[0]) / new_size
+        )
+        new_var = M2 / new_size
+
+        delta = current_mean[1] - self.log_sens_norm
+        new_mean_sens = (
+            current_mean[1] + delta * self.reward.shape[0] / new_size
+        )
+        m_a = current_var[1] * new_size
+        m_b = jnp.var(self.log_sens_norm) * self.reward.shape[0]
+        M2 = (
+            m_a
+            + m_b
+            + jnp.square(delta) * (new_size - self.reward.shape[0]) / new_size
+        )
+        new_var_sens = M2 / new_size
+
+        return jnp.concatenate([new_mean, new_mean_sens]), jnp.concatenate(
+            [new_var, new_var_sens]
+        )
+
 
 class ReplayBufferState(NamedTuple):
-    transitions: ReplayTransition  # shape [buffer_size, ...]
+    transitions: (
+        ReplayTransition | ReplaySensTransition
+    )  # shape [buffer_size, ...]
     position: jnp.ndarray  # scalar int32
     size: jnp.ndarray  # scalar int32
+    mean: jnp.ndarray  # mean of the transitions
+    var: jnp.ndarray  # standard deviation of the transitions
 
 
 @jax.jit
 def add_batch_to_buffer(
-    buffer_state: ReplayBufferState, new_transitions: ReplayTransition
+    buffer_state: ReplayBufferState,
+    new_transitions: ReplayTransition | ReplaySensTransition,
 ) -> ReplayBufferState:
     batch_size = new_transitions.obs.shape[0]
     buffer_size = buffer_state.transitions.obs.shape[0]
@@ -133,13 +211,19 @@ def add_batch_to_buffer(
 
     new_position = (buffer_state.position + batch_size) % buffer_size
     new_size = jnp.minimum(buffer_state.size + batch_size, buffer_size)
+    # Update mean and std of the transitions
+    new_mean, new_var = new_transitions.compute_mean_std(
+        buffer_state.mean, buffer_state.var, new_size
+    )
 
-    return ReplayBufferState(updated_transitions, new_position, new_size)
+    return ReplayBufferState(
+        updated_transitions, new_position, new_size, new_mean, new_var
+    )
 
 
 def sample_batch_from_buffer(
     buffer_state: ReplayBufferState, batch_size: int, rng: jax.Array
-) -> ReplayTransition:
+) -> ReplayTransition | ReplaySensTransition:
     max_index = buffer_state.size
     rng, key = jax.random.split(rng)
     indices = jax.random.randint(key, (batch_size,), 0, max_index)
@@ -151,13 +235,19 @@ def sample_batch_from_buffer(
 
 
 def create_empty_buffer(
-    buffer_size: int, example_transition: ReplayTransition
+    buffer_size: int,
+    example_transition: ReplayTransition | ReplaySensTransition,
 ) -> ReplayBufferState:
     """Create an empty buffer state given a sample transition for shape inference"""
     empty_transitions = jax.tree_util.tree_map(
         lambda x: jnp.zeros((buffer_size,) + x.shape[1:], dtype=x.dtype),
         example_transition,
     )
+
     return ReplayBufferState(
-        empty_transitions, jnp.array(0, jnp.int32), jnp.array(0, jnp.int32)
+        empty_transitions,
+        jnp.array(0, jnp.int32),
+        jnp.array(0, jnp.int32),
+        example_transition.init_mean(),
+        example_transition.init_var(),
     )

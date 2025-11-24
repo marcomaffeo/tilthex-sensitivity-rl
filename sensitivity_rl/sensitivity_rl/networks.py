@@ -86,6 +86,34 @@ class SoftQNetwork(nn.Module):
             name="output",
         )(x)
         return q_value
+    
+class SensQNetwork(nn.Module):
+    layer_sizes: tuple = (256, 256)
+    activation: str = "relu"
+
+    @nn.compact
+    def __call__(self, state, action, sens):
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        x = jnp.concatenate([state, action, sens], axis=-1)
+        for idx, layer_dim in enumerate(self.layer_sizes):
+            x = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"dense{idx + 1}",
+            )(x)
+            x = activation(x)
+        q_value = nn.Dense(
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
+            name="output",
+        )(x)
+        return q_value
 
 
 class Actor(nn.Module):

@@ -3,6 +3,10 @@ import os
 import shutil
 import json
 
+# --- IMPORTANT ---
+# Set this *before* importing JAX
+# This tells the script to only see the GPU with ID '0' (the first GPU)
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
@@ -275,6 +279,53 @@ def make_train(config, writer: SummaryWriter):
             ),
         )
 
+        # Sensitivity evaluation function
+        def evaluate_sensitivity(actor_params, rng):
+            """Run NUM_EVAL_STEPS environment steps to collect sensitivity metrics."""
+            num_eval_steps = config.get("NUM_STEPS", 200)
+
+            # Reset evaluation environment
+            rng, _rng = jax.random.split(rng)
+            reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
+            eval_obs, eval_env_state = env.reset(reset_rng, env_params)
+
+            if config["SENSITIVITY"]:
+                env.update_network_params(actor_params)
+
+            def eval_step(carry, _):
+                eval_env_state, eval_obs, rng = carry
+
+                # Select action using current policy
+                rng, _rng = jax.random.split(rng)
+                pi = actor.apply(actor_params, eval_obs)
+                action, _, _ = get_sac_action_dist(
+                    pi, scale_action, bias_action, _rng
+                )
+
+                # Step environment
+                rng, _rng = jax.random.split(rng)
+                rng_step = jax.random.split(_rng, config["NUM_ENVS"])
+                next_obs, next_env_state, _, _, info = env.step(
+                    rng_step, eval_env_state, action, env_params
+                )
+
+                carry = (next_env_state, next_obs, rng)
+                return carry, info["sensitivity_state"]
+
+            # Run evaluation rollout
+            _, infos = jax.lax.scan(
+                eval_step,
+                (eval_env_state, eval_obs, rng),
+                None,
+                length=num_eval_steps,
+            )
+
+            sensitivity_mean = infos.mean()
+            sensitivity_max = infos.max(axis=(0, 1)).mean()
+
+            return sensitivity_mean, sensitivity_max
+
+        @jax.jit
         def env_step(runner_state, unused):
             (
                 train_state_actor,
@@ -343,6 +394,7 @@ def make_train(config, writer: SummaryWriter):
             )
             return runner_state, None
 
+        @jax.jit
         def _update_step(runner_state, unused):
 
             # COLLECT ONE TRANSITION
@@ -607,6 +659,31 @@ def make_train(config, writer: SummaryWriter):
                 (qf1_target_params, qf2_target_params),
             )
 
+            # --- Sensitivity Evaluation (every 100 iterations) ---
+            eval_frequency = config.get("EVAL_SENSITIVITY_FREQUENCY", 100)
+
+            def run_sensitivity_eval(carry):
+                rng, actor_params = carry
+                rng, _rng = jax.random.split(rng)
+                sens_mean, sens_max = evaluate_sensitivity(actor_params, _rng)
+                return (rng, sens_mean, sens_max)
+
+            def no_sensitivity_eval(carry):
+                rng, _ = carry
+                return (rng, jnp.array(0.0), jnp.array(0.0))
+
+            should_eval = jnp.logical_and(
+                (total_steps % eval_frequency) == 0,
+                config.get("SENSITIVITY", False),
+            )
+
+            rng, sensitivity_mean_eval, sensitivity_max_eval = jax.lax.cond(
+                should_eval,
+                run_sensitivity_eval,
+                no_sensitivity_eval,
+                (rng, train_state_actor.params),
+            )
+
             # --- Logging ---
             metric = info  # Use the 'info' from env_step
             mean_actor_loss = jnp.mean(actor_losses)
@@ -645,6 +722,9 @@ def make_train(config, writer: SummaryWriter):
                 mean_ent,
                 metric,
                 timestep,
+                sens_mean,
+                sens_max,
+                should_log_sens,
             ):
                 if metric["timestep"][metric["returned_episode"]].size != 0:
                     episodic_return = metric["returned_episode_returns"][
@@ -687,24 +767,19 @@ def make_train(config, writer: SummaryWriter):
                 writer.add_scalar(
                     "train/entropy", float(mean_ent), int(timestep)
                 )
-                if config["SENSITIVITY"]:
-                    if "sensitivity_state" in metric:
-                        sensitivity_state_max = (
-                            metric["sensitivity_state"].max(axis=0).mean()
-                        )
-                        sensitivity_state_mean = metric[
-                            "sensitivity_state"
-                        ].mean()
-                        writer.add_scalar(
-                            "returns/sensitivity_state_max",
-                            float(sensitivity_state_max),
-                            int(timestep),
-                        )
-                        writer.add_scalar(
-                            "returns/sensitivity_state_mean",
-                            float(sensitivity_state_mean),
-                            int(timestep),
-                        )
+
+                # Log sensitivity metrics when evaluation was performed
+                if should_log_sens:
+                    writer.add_scalar(
+                        "returns/sensitivity_state_mean",
+                        float(sens_mean),
+                        int(timestep),
+                    )
+                    writer.add_scalar(
+                        "returns/sensitivity_state_max",
+                        float(sens_max),
+                        int(timestep),
+                    )
 
             jax.debug.callback(
                 log_callback,
@@ -715,6 +790,9 @@ def make_train(config, writer: SummaryWriter):
                 mean_entropy,
                 metric,
                 total_steps,
+                sensitivity_mean_eval,
+                sensitivity_max_eval,
+                should_eval,
             )
             # --- End Logging ---
 

@@ -12,13 +12,13 @@
     "ENT_COEF": 0.0, 
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
-    "ACTIVATION": "tanh",
+    "ACTIVATION": "relu",
     "ACTOR_LAYER_SIZES": [256, 256],
     "CRITIC_LAYER_SIZES": [256, 256],
     "ANNEAL_LR": false,
     "NORMALIZE_ENV": true,
     "DEBUG": true,
     "SENSITIVITY": true,
-    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.5,
+    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.0,
     "SEED": 30
 }

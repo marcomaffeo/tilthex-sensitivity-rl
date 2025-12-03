@@ -6,7 +6,7 @@ import json
 # --- IMPORTANT ---
 # Set this *before* importing JAX
 # This tells the script to only see the GPU with ID '0' (the first GPU)
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import jax
@@ -72,6 +72,7 @@ jax.config.update(
 
 from buffers import (
     ReplaySensTransition,
+    ReplaySensOnlyTransition,
     create_empty_buffer,
     add_batch_to_buffer,
     sample_batch_from_buffer,
@@ -132,19 +133,35 @@ def make_train(config, writer: SummaryWriter):
             activation=config["ACTIVATION"],
             layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         )
-        qf1 = SensQNetwork(
+        qf1 = SoftQNetwork(
             activation=config["ACTIVATION"],
             layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         )
-        qf2 = SensQNetwork(
+        qf2 = SoftQNetwork(
             activation=config["ACTIVATION"],
             layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         )
-        qf1_target = SensQNetwork(
+        qf1_sens = SensQNetwork(
             activation=config["ACTIVATION"],
             layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         )
-        qf2_target = SensQNetwork(
+        qf2_sens = SensQNetwork(
+            activation=config["ACTIVATION"],
+            layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
+        )
+        qf1_target = SoftQNetwork(
+            activation=config["ACTIVATION"],
+            layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
+        )
+        qf2_target = SoftQNetwork(
+            activation=config["ACTIVATION"],
+            layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
+        )
+        qf1_sens_target = SensQNetwork(
+            activation=config["ACTIVATION"],
+            layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
+        )
+        qf2_sens_target = SensQNetwork(
             activation=config["ACTIVATION"],
             layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         )
@@ -175,23 +192,41 @@ def make_train(config, writer: SummaryWriter):
                 )
                 actor_params = actor.init(_rng, init_x)
             qf1_params = qf1.init(
-                _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape)
             )
             qf2_params = qf2.init(
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape)
+            )
+            qf1_sens_params = qf1_sens.init(
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
+            )
+            qf2_sens_params = qf2_sens.init(
                 _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
             )
             qf1_target_params = qf1_params
             qf2_target_params = qf2_params
+            qf1_sens_target_params = qf1_sens_params
+            qf2_sens_target_params = qf2_sens_params
+            target_action_params = actor_params
         else:
             actor_params = actor.init(_rng, init_x)
             qf1_params = qf1.init(
-                _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape)
             )
             qf2_params = qf2.init(
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape)
+            )
+            qf1_sens_params = qf1_sens.init(
+                _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
+            )
+            qf2_sens_params = qf2_sens.init(
                 _rng, init_x, jnp.zeros(env.action_space(env_params).shape), jnp.zeros((env.param_dim*env.state_dim))
             )
             qf1_target_params = qf1_params
             qf2_target_params = qf2_params
+            qf1_sens_target_params = qf1_sens_params
+            qf2_sens_target_params = qf2_sens_params
+            target_action_params = actor_params
 
         if config["ANNEAL_LR"]:
             tx = optax.chain(
@@ -206,6 +241,14 @@ def make_train(config, writer: SummaryWriter):
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(learning_rate=linear_schedule, eps=1e-5),
             )
+            tx_q1_sens = optax.chain(
+                optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+                optax.adam(learning_rate=linear_schedule, eps=1e-5),
+            )
+            tx_q2_sens = optax.chain(
+                optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+                optax.adam(learning_rate=linear_schedule, eps=1e-5),
+            )
         else:
             tx = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
@@ -216,6 +259,14 @@ def make_train(config, writer: SummaryWriter):
                 optax.adam(config["Q_LR"], eps=1e-5),
             )
             tx_q2 = optax.chain(
+                optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+                optax.adam(config["Q_LR"], eps=1e-5),
+            )
+            tx_q1_sens = optax.chain(
+                optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
+                optax.adam(config["Q_LR"], eps=1e-5),
+            )
+            tx_q2_sens = optax.chain(
                 optax.clip_by_global_norm(config["MAX_GRAD_NORM"]),
                 optax.adam(config["Q_LR"], eps=1e-5),
             )
@@ -235,6 +286,16 @@ def make_train(config, writer: SummaryWriter):
             params=qf2_params,
             tx=tx_q2,
         )
+        train_state_qf1_sens = TrainState.create(
+            apply_fn=qf1_sens.apply,
+            params=qf1_sens_params,
+            tx=tx_q1_sens,
+        )
+        train_state_qf2_sens = TrainState.create(
+            apply_fn=qf2_sens.apply,
+            params=qf2_sens_params,
+            tx=tx_q2_sens,
+        )
 
         target_entropy = -jnp.prod(
             jnp.array(env.action_space(env_params).shape)
@@ -251,6 +312,21 @@ def make_train(config, writer: SummaryWriter):
             optax.adam(config["ALPHA_LR"], eps=1e-5),
         )
         ent_coef_opt_state = ent_coef_optimizer.init(log_ent_coef)
+
+        # Initialize sensitivity regularization coefficient
+        target_sensitivity = jnp.array(config.get("TARGET_SENSITIVITY", 150.0))
+        if config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 4.0) == "auto":
+            log_sens_coef = jnp.array(4.0)
+            sens_coef = jnp.exp(log_sens_coef)
+        else:
+            sens_coef = config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 1.0)
+            log_sens_coef = jnp.log(jnp.array(sens_coef))
+
+        sens_coef_optimizer = optax.chain(
+            optax.clip_by_global_norm(0.01),
+            optax.adam(config.get("SENS_LR", 1e-5), eps=1e-5),
+        )
+        sens_coef_opt_state = sens_coef_optimizer.init(log_sens_coef)
 
         if config["SENSITIVITY"]:
             env.set_actor(
@@ -285,6 +361,20 @@ def make_train(config, writer: SummaryWriter):
                 next_obs=jnp.zeros(
                     (1,) + env.observation_space(env_params).shape
                 ),
+            ),
+        )
+
+        # Create second buffer specifically for sensitivity data with potentially smaller size
+        sens_buffer_size = int(config.get("SENSITIVITY_BUFFER_SIZE", config["BUFFER_SIZE"]))
+        rb_sens = create_empty_buffer(
+            buffer_size=sens_buffer_size,
+            example_transition=ReplaySensOnlyTransition(
+                done=jnp.zeros((1,)),
+                action=jnp.zeros((1,) + env.action_space(env_params).shape),
+                obs=jnp.zeros((1,) + env.observation_space(env_params).shape),
+                next_obs=jnp.zeros(
+                    (1,) + env.observation_space(env_params).shape
+                ),
                 sens=jnp.zeros((1,) + (int(env.state_dim), int(env.param_dim))),
                 sens_next=jnp.zeros((1,) + (int(env.state_dim), int(env.param_dim))),
                 F_sens_x=jnp.zeros(
@@ -310,6 +400,12 @@ def make_train(config, writer: SummaryWriter):
             ),
         )
 
+        # Initialize statistics for normalization with exponential moving average
+        # Statistics: [log_pi_min, log_pi_max, q_min, q_max, sens_min, sens_max]
+        # Initialize with reasonable defaults that will be updated during training
+        normalization_stats = jnp.array([-10.0, 0.0, -500.0, 100.0, -50.0, 50.0])
+        stats_alpha = config.get("STATS_ALPHA", 0.01)  # Forgetting factor for EMA
+
         # Sensitivity evaluation function
         def evaluate_sensitivity(actor_params, rng):
             """Run NUM_EVAL_STEPS environment steps to collect sensitivity metrics."""
@@ -329,8 +425,8 @@ def make_train(config, writer: SummaryWriter):
                 # Select action using current policy
                 rng, _rng = jax.random.split(rng)
                 pi = actor.apply(actor_params, eval_obs)
-                action, _, _ = get_sac_action_dist(
-                    pi, scale_action, bias_action, _rng
+                action, _, _, _ = get_sac_action_dist(
+                    pi, scale_action, bias_action, _rng, jnp.zeros((eval_obs.shape[0],) + env.action_space(env.default_params).shape), True
                 )
 
                 # Step environment
@@ -362,26 +458,52 @@ def make_train(config, writer: SummaryWriter):
                 train_state_actor,
                 train_state_qf1,
                 train_state_qf2,
+                train_state_qf1_sens,
+                train_state_qf2_sens,
                 ent_coef_opt_state,
+                sens_coef_opt_state,
                 qf1_target_params,
                 qf2_target_params,
+                qf1_sens_target_params,
+                qf2_sens_target_params,
+                target_action_params,
                 log_ent_coef,
+                log_sens_coef,
                 env_state,
                 last_obs,
                 last_info,
                 rb,
+                rb_sens,
+                normalization_stats,
                 rng,
                 total_steps,
             ) = runner_state
 
-            if config["SENSITIVITY"]:
-                env.update_network_params(train_state_actor.params)
+            # Update target action params conditionally
+            def sens_param_update(operand):
+                params, old_target_params = operand
+                return params
+            
+            def not_sens_param_update(operand):
+                params, old_target_params = operand
+                return old_target_params
+            
+            target_action_params = jax.lax.cond(
+                total_steps % config["NUM_STEPS"] == 0,
+                sens_param_update,
+                not_sens_param_update,
+                operand=(train_state_actor.params, target_action_params)
+            )
+            
+            # Update env network params with the selected target_action_params
+            # This side effect happens outside the cond
+            env.update_network_params(target_action_params)
 
             # SELECT ACTION
             rng, _rng = jax.random.split(rng)
             pi = actor.apply(train_state_actor.params, last_obs)
-            action_pi, _, _ = get_sac_action_dist(
-                pi, scale_action, bias_action, _rng
+            action_pi, _, _, _ = get_sac_action_dist(
+                pi, scale_action, bias_action, _rng, jnp.zeros((last_obs.shape[0],) + env.action_space(env.default_params).shape), True
             )
             action_rand = jax.random.uniform(
                 _rng,
@@ -409,10 +531,20 @@ def make_train(config, writer: SummaryWriter):
 
             obsv = jax.lax.stop_gradient(obsv)
             env_state = jax.lax.stop_gradient(env_state)
+            
             transition = ReplaySensTransition(
                 done,
                 action,
                 reward,
+                last_obs,
+                obsv,
+            )
+            rb = add_batch_to_buffer(rb, transition)
+            
+            # Add sensitivity data to the dedicated sensitivity buffer
+            sens_transition = ReplaySensOnlyTransition(
+                done,
+                action,
                 last_obs,
                 obsv,
                 sens,
@@ -423,10 +555,10 @@ def make_train(config, writer: SummaryWriter):
                 env_state.sensitivity.df_du,
                 dobs_dx,
                 env_state.sensitivity.dobs_dx,
-                log_norm,
                 env_state.sensitivity.log_norm_old,
+                env_state.sensitivity.log_norm,
             )
-            rb = add_batch_to_buffer(rb, transition)
+            rb_sens = add_batch_to_buffer(rb_sens, sens_transition)
 
             total_steps = total_steps + config["NUM_ENVS"]
 
@@ -434,14 +566,23 @@ def make_train(config, writer: SummaryWriter):
                 train_state_actor,
                 train_state_qf1,
                 train_state_qf2,
+                train_state_qf1_sens,
+                train_state_qf2_sens,
                 ent_coef_opt_state,
+                sens_coef_opt_state,
                 qf1_target_params,
                 qf2_target_params,
+                qf1_sens_target_params,
+                qf2_sens_target_params,
+                target_action_params,
                 log_ent_coef,
+                log_sens_coef,
                 env_state,
                 obsv,
                 info,
                 rb,
+                rb_sens,
+                normalization_stats,
                 rng,
                 total_steps,
             )
@@ -457,14 +598,23 @@ def make_train(config, writer: SummaryWriter):
                 train_state_actor,
                 train_state_qf1,
                 train_state_qf2,
+                train_state_qf1_sens,
+                train_state_qf2_sens,
                 ent_coef_opt_state,
+                sens_coef_opt_state,
                 qf1_target_params,
                 qf2_target_params,
+                qf1_sens_target_params,
+                qf2_sens_target_params,
+                target_action_params,
                 log_ent_coef,
+                log_sens_coef,
                 env_state,
                 obsv,
                 info,
                 rb,
+                rb_sens,
+                normalization_stats,
                 rng,
                 total_steps,
             ) = runner_state
@@ -474,12 +624,19 @@ def make_train(config, writer: SummaryWriter):
             batch = sample_batch_from_buffer(
                 rb, config["BATCH_SIZE"], _rng_batch
             )
+            
+            # Sample batch from sensitivity buffer for sensitivity Q-network updates
+            rng, _rng_sens_batch = jax.random.split(rng)
+            batch_sens = sample_batch_from_buffer(
+                rb_sens, config["BATCH_SIZE"], _rng_sens_batch
+            )
 
             ent_coef = jnp.exp(log_ent_coef)
 
             rng, _rng_sens = jax.random.split(rng)
             rng_sens = jax.random.split(_rng_sens, config["BATCH_SIZE"])
 
+            """
             _, updated_sens_reward = update_sensitivity_batch(
                 rng_sens,
                 train_state_actor.params,
@@ -490,21 +647,29 @@ def make_train(config, writer: SummaryWriter):
                 batch.F_sens_x_next,
             )
             updated_sens_reward = -(
-                updated_sens_reward
+                updated_sens_reward - batch.log_sens_next_norm
             )
-            updated_sens_reward = jax.lax.stop_gradient(updated_sens_reward)
             
+
+            # Normalize updated_sens_reward using buffer statistics
+            #sens_mean = rb.mean[1]
+            #sens_std = jnp.sqrt(rb.var[1]) + 1e-8
+            #updated_sens_reward = (updated_sens_reward) / sens_std
+            updated_sens_reward = jax.lax.stop_gradient(updated_sens_reward)
+            """
             # Compute target Q-values
             rng, _rng_target = jax.random.split(rng)
             next_state_actions = actor.apply(
                 train_state_actor.params, batch.next_obs
             )
-            next_state_actions_sample, next_state_log_pi, _ = (
+            next_state_actions_sample, next_state_log_pi, _, _ = (
                 get_sac_action_dist(
                     next_state_actions,
                     scale_action,
                     bias_action,
                     _rng_target,
+                    jnp.zeros((batch.next_obs.shape[0],) +env.action_space(env.default_params).shape),
+                    True,
                 )
             )
 
@@ -513,19 +678,20 @@ def make_train(config, writer: SummaryWriter):
                 qf1_target_params,
                 batch.next_obs,
                 next_state_actions_sample,
-                batch.sens_next.reshape(batch.next_obs.shape[0], -1),
             )
             qf2_next_target = qf2_target.apply(
                 qf2_target_params,
                 batch.next_obs,
                 next_state_actions_sample,
-                batch.sens_next.reshape(batch.next_obs.shape[0], -1),
             )
+            min_qf_next_target_norm = jnp.minimum(qf1_next_target, qf2_next_target).reshape(-1, 1)   
+            
+            # Combine normalized Q with entropy and sensitivity
             min_qf_next_target = (
-                jnp.minimum(qf1_next_target, qf2_next_target).reshape(-1, 1)
+                min_qf_next_target_norm
                 - ent_coef * next_state_log_pi
-                + config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 1.0)
-                * updated_sens_reward[..., None]
+                #+ sens_coef
+                #* updated_sens_reward[..., None]
             )
 
             rewards_col = batch.reward[..., None]
@@ -537,16 +703,37 @@ def make_train(config, writer: SummaryWriter):
             )
             next_q_value = jax.lax.stop_gradient(next_q_value)
 
+            # Update min/max statistics with EMA
+            # log_pi stats
+            log_pi_min_batch = jnp.min(next_state_log_pi)
+            log_pi_max_batch = jnp.max(next_state_log_pi)
+            normalization_stats = normalization_stats.at[0].set(
+                jnp.minimum(normalization_stats[0], (1 - stats_alpha) * normalization_stats[0] + stats_alpha * log_pi_min_batch)
+            )
+            normalization_stats = normalization_stats.at[1].set(
+                jnp.maximum(normalization_stats[1], (1 - stats_alpha) * normalization_stats[1] + stats_alpha * log_pi_max_batch)
+            )
+            
+            # Q-value stats
+            q_min_batch = jnp.min(min_qf_next_target)
+            q_max_batch = jnp.max(min_qf_next_target)
+            normalization_stats = normalization_stats.at[2].set(
+                jnp.minimum(normalization_stats[2], (1 - stats_alpha) * normalization_stats[2] + stats_alpha * q_min_batch)
+            )
+            normalization_stats = normalization_stats.at[3].set(
+                jnp.maximum(normalization_stats[3], (1 - stats_alpha) * normalization_stats[3] + stats_alpha * q_max_batch)
+            )
+
             # --- Q-function update ---
             def q1_loss_fn(qf1_params):
-                qf1_a_values = qf1.apply(qf1_params, batch.obs, batch.action, batch.sens.reshape(batch.obs.shape[0], -1))
+                qf1_a_values = qf1.apply(qf1_params, batch.obs, batch.action)
                 qf1_loss = jnp.mean(
                     (qf1_a_values.reshape(-1, 1) - next_q_value) ** 2
                 )
                 return qf1_loss
 
             def q2_loss_fn(qf2_params):
-                qf2_a_values = qf2.apply(qf2_params, batch.obs, batch.action, batch.sens.reshape(batch.obs.shape[0], -1))
+                qf2_a_values = qf2.apply(qf2_params, batch.obs, batch.action)
                 qf2_loss = jnp.mean(
                     (qf2_a_values.reshape(-1, 1) - next_q_value) ** 2
                 )
@@ -562,59 +749,170 @@ def make_train(config, writer: SummaryWriter):
             )
             train_state_qf2 = train_state_qf2.apply_gradients(grads=q2_grads)
 
+            # --- Q_sens-function update (using sensitivity buffer) ---
+            # Compute sensitivity Q-value targets using batch_sens
+            rng, _rng_sens_target = jax.random.split(rng)
+            next_state_actions_sens = actor.apply(
+                train_state_actor.params, batch_sens.next_obs
+            )
+            next_state_actions_sens_sample, _, _, _ = (
+                get_sac_action_dist(
+                    next_state_actions_sens,
+                    scale_action,
+                    bias_action,
+                    _rng_sens_target,
+                    jnp.zeros((batch_sens.next_obs.shape[0],) + env.action_space(env.default_params).shape),
+                    True,
+                )
+            )
+
+            qf1_sens_next_target_sens = qf1_sens_target.apply(
+                qf1_sens_target_params,
+                batch_sens.next_obs,
+                next_state_actions_sens_sample,
+                batch_sens.sens_next.reshape(batch_sens.next_obs.shape[0], -1)
+            )
+            qf2_sens_next_target_sens = qf2_sens_target.apply(
+                qf2_sens_target_params,
+                batch_sens.next_obs,
+                next_state_actions_sens_sample,
+                batch_sens.sens_next.reshape(batch_sens.next_obs.shape[0], -1)
+            )
+            min_qf_sens_next_target_sens = (
+                jnp.minimum(qf1_sens_next_target_sens, qf2_sens_next_target_sens).reshape(-1, 1)
+            )
+
+            dones_col_sens = batch_sens.done[..., None]
+            next_q_sens_value = (
+               batch_sens.log_sens_norm[..., None]  + (1 - dones_col_sens) * config["GAMMA"] * (min_qf_sens_next_target_sens)
+            )
+            next_q_sens_value = jax.lax.stop_gradient(next_q_sens_value)
+            
+            # Sensitivity component stats (from batch_sens)
+            sens_component = min_qf_sens_next_target_sens
+            sens_min_batch = jnp.min(sens_component)
+            sens_max_batch = jnp.max(sens_component)
+            normalization_stats = normalization_stats.at[4].set(
+                jnp.minimum(normalization_stats[4], (1 - stats_alpha) * normalization_stats[4] + stats_alpha * sens_min_batch)
+            )
+            normalization_stats = normalization_stats.at[5].set(
+                jnp.maximum(normalization_stats[5], (1 - stats_alpha) * normalization_stats[5] + stats_alpha * sens_max_batch)
+            )
+            normalization_stats = jax.lax.stop_gradient(normalization_stats)
+            
+            def q1_sens_loss_fn(qf1_sens_params):
+                qf1_sens_a_values = qf1_sens.apply(qf1_sens_params, batch_sens.obs, batch_sens.action, batch_sens.sens.reshape(batch_sens.obs.shape[0], -1))
+                qf1_sens_loss = jnp.mean(
+                    (qf1_sens_a_values.reshape(-1, 1) - next_q_sens_value) ** 2
+                )
+                return qf1_sens_loss
+
+            def q2_sens_loss_fn(qf2_sens_params):
+                qf2_sens_a_values = qf2_sens.apply(qf2_sens_params, batch_sens.obs, batch_sens.action, batch_sens.sens.reshape(batch_sens.obs.shape[0], -1))
+                qf2_sens_loss = jnp.mean(
+                    (qf2_sens_a_values.reshape(-1, 1) - next_q_sens_value) ** 2
+                )
+                return qf2_sens_loss
+
+            (q1_sens_loss, q1_sens_grads) = jax.value_and_grad(q1_sens_loss_fn)(
+                train_state_qf1_sens.params
+            )
+            train_state_qf1_sens = train_state_qf1_sens.apply_gradients(grads=q1_sens_grads)
+
+            (q2_sens_loss, q2_sens_grads) = jax.value_and_grad(q2_sens_loss_fn)(
+                train_state_qf2_sens.params
+            )
+            train_state_qf2_sens = train_state_qf2_sens.apply_gradients(grads=q2_sens_grads)
+
             # --- Conditional Actor and Alpha update ---
             # This function defines the single update step for actor and alpha
             def actor_alpha_update_body(carry, _):
-                (train_state_actor, log_ent_coef, ent_coef_opt_state, rng) = (
+                (train_state_actor, log_ent_coef, log_sens_coef, ent_coef_opt_state, sens_coef_opt_state, rng) = (
                     carry
                 )
                 rng, _rng_actor = jax.random.split(rng)
                 rng, _rng_sens = jax.random.split(rng)
                 rng_sens = jax.random.split(_rng_sens, config["BATCH_SIZE"])
 
-                # Use batch, ent_coef, train_state_qf1/2 from outer scope
+                # Use batch, ent_coef, sens_coef, train_state_qf1/2 from outer scope
                 # Note: This uses the *just updated* Q-network parameters
+                sens_coef_local = jnp.exp(log_sens_coef)
 
                 def actor_loss_fn(actor_params):
-
+                    
                     sens_state, updated_sens_reward = update_sensitivity_batch(
                         rng_sens,
                         actor_params,
-                        batch.df_du,
-                        batch.dobs_dx,
-                        batch.obs,
-                        batch.log_sens_norm,
-                        batch.F_sens_x,
+                        batch_sens.df_du,
+                        batch_sens.dobs_dx,
+                        batch_sens.obs,
+                        batch_sens.log_sens_norm,
+                        batch_sens.F_sens_x,
                     )
-                    updated_sens_reward = (
-                        updated_sens_reward 
+
+                    updated_sens_reward_r =  (
+                        updated_sens_reward - batch_sens.log_sens_norm
                     )
+                    
+                    # Normalize updated_sens_reward using buffer statistics
+                    #sens_std = jnp.sqrt(normalization_stats_local[3]) + 1e-8
+                    #updated_sens_reward_norm = (updated_sens_reward ) / sens_std
+                    
                     # Stop gradient to prevent nested differentiation (jacfwd inside grad)
                     # updated_sens_reward = jax.lax.stop_gradient(updated_sens_reward)
-                    sens_state = jax.lax.stop_gradient(sens_state)
+                    #sens_state = jax.lax.stop_gradient(sens_state)
                     
                     pi = actor.apply(actor_params, batch.obs)
-                    actions, log_pi, _ = get_sac_action_dist(
-                        pi, scale_action, bias_action, _rng_actor
+                    actions, log_pi, _, action_pre_tanh = get_sac_action_dist(
+                        pi, scale_action, bias_action, _rng_actor, jnp.zeros((batch.obs.shape[0],) + env.action_space(env.default_params).shape), True
                     )
+                    #sens log pi
+                    pi_sens = actor.apply(target_action_params, batch.obs)
+                    _, log_pi_sens, _, _ = get_sac_action_dist(
+                        pi_sens, scale_action, bias_action, _rng_actor, action_pre_tanh, False
+                    )
+
                     qf1_pi = qf1.apply(
-                        train_state_qf1.params, batch.obs, actions, sens_state.reshape(batch.obs.shape[0], -1)
+                        train_state_qf1.params, batch.obs, actions
                     )
                     qf2_pi = qf2.apply(
-                        train_state_qf2.params, batch.obs, actions, sens_state.reshape(batch.obs.shape[0], -1)
+                        train_state_qf2.params, batch.obs, actions
                     )
-                    min_qf_pi = jnp.minimum(qf1_pi, qf2_pi)
+                    min_qf_pi_raw = jnp.minimum(qf1_pi, qf2_pi)
 
+                    qf1_sens_pi = qf1_sens.apply(
+                        train_state_qf1_sens.params, batch_sens.obs, actions, sens_state.reshape(batch_sens.obs.shape[0], -1)
+                    )
+                    qf2_sens_pi = qf2_sens.apply(
+                        train_state_qf2_sens.params, batch_sens.obs, actions, sens_state.reshape(batch_sens.obs.shape[0], -1)
+                    )
+                    min_qf_sens_pi_raw = jnp.minimum(qf1_sens_pi, qf2_sens_pi)
+
+                    # Compute sensitivity component
+                    sens_component = min_qf_sens_pi_raw
+
+                    # Normalize components to [-1, 1] using min-max scaling
+                    # For log_pi (entropy term)
+                    log_pi_range = normalization_stats[1] - normalization_stats[0] + 1e-6
+                    log_pi_normalized = (log_pi - normalization_stats[0]) / log_pi_range
+                    
+                    # For Q-values
+                    q_range = normalization_stats[3] - normalization_stats[2] + 1e-6
+                    q_normalized = (min_qf_pi_raw - normalization_stats[2]) / q_range
+                    
+                    # For sensitivity component
+                    sens_range = normalization_stats[5] - normalization_stats[4] + 1e-6
+                    sens_normalized = (sens_component - normalization_stats[4]) / sens_range 
+                    # Actor loss
                     actor_loss = jnp.mean(
-                        ent_coef * log_pi
-                        - min_qf_pi.reshape(-1, 1)
-                        + config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 1.0)
-                        * updated_sens_reward[..., None]
+                        ent_coef * log_pi_normalized
+                        - q_normalized.reshape(-1, 1)
+                        + sens_coef_local * (sens_normalized.reshape(-1,1))*jnp.exp((log_pi-log_pi_sens))
                     )
 
-                    return actor_loss, log_pi
+                    return actor_loss, (log_pi, updated_sens_reward)
 
-                (actor_loss, log_pi), actor_grads = jax.value_and_grad(
+                (actor_loss, (log_pi, updated_sens_reward_for_loss)), actor_grads = jax.value_and_grad(
                     actor_loss_fn, has_aux=True
                 )(train_state_actor.params)
 
@@ -626,8 +924,8 @@ def make_train(config, writer: SummaryWriter):
                 rng, _rng_alpha = jax.random.split(rng)
                 # Use new actor params for alpha loss
                 pi_for_alpha = actor.apply(train_state_actor.params, batch.obs)
-                _, log_pi_for_alpha, _ = get_sac_action_dist(
-                    pi_for_alpha, scale_action, bias_action, _rng_alpha
+                _, log_pi_for_alpha, _, _ = get_sac_action_dist(
+                    pi_for_alpha, scale_action, bias_action, _rng_alpha, jnp.zeros((batch.obs.shape[0],) + env.action_space(env.default_params).shape), True
                 )
                 log_pi_for_alpha = jax.lax.stop_gradient(log_pi_for_alpha)
 
@@ -650,18 +948,47 @@ def make_train(config, writer: SummaryWriter):
                     log_ent_coef,
                 )
 
+                # Sensitivity coefficient update
+                # Use stop_gradient on updated_sens_reward to avoid nested differentiation
+                sens_norm = jax.lax.stop_gradient(updated_sens_reward_for_loss)
+                sens_norm = jnp.mean(sens_norm)
+                
+                def sens_coef_loss_fn(sens_params):
+                    # Loss increases sens_coef when sens_norm < target, decreases when > target
+                    sens_loss = (
+                        -jnp.exp(sens_params)
+                        * (sens_norm - target_sensitivity)
+                    )
+                    return sens_loss, None
+
+                (sens_loss, _), sens_grads = jax.value_and_grad(
+                    sens_coef_loss_fn, has_aux=True
+                )(log_sens_coef)
+                sens_updates, sens_coef_opt_state = sens_coef_optimizer.update(
+                    sens_grads, sens_coef_opt_state
+                )
+                log_sens_coef = jax.lax.select(
+                    config.get("SENSITIVITY_REGULARIZATION_WEIGHT", 1.0) == "auto",
+                    optax.apply_updates(log_sens_coef, sens_updates),
+                    log_sens_coef,
+                )
+                
+                log_sens_coef = jnp.minimum(log_sens_coef, jnp.array(jnp.log(5.0)))  # Cap sens_coef to avoid overflow
+
                 carry = (
                     train_state_actor,
                     log_ent_coef,
+                    log_sens_coef,
                     ent_coef_opt_state,
+                    sens_coef_opt_state,
                     rng,
                 )
-                losses = (actor_loss, alpha_loss, log_pi.mean())
+                losses = (actor_loss, alpha_loss, sens_loss, log_pi.mean(), sens_norm)
                 return carry, losses
 
             # This function just passes the state through, doing nothing
             def no_actor_alpha_update_body(carry, _):
-                losses = (0.0, 0.0, 0.0)  # actor_loss, alpha_loss, entropy
+                losses = (0.0, 0.0, 0.0, 0.0, 0.0)  # actor_loss, alpha_loss, sens_loss, entropy, sens_norm
                 return carry, losses
 
             # Get policy frequency from config, default to 1 (update every step)
@@ -669,7 +996,9 @@ def make_train(config, writer: SummaryWriter):
             initial_carry = (
                 train_state_actor,
                 log_ent_coef,
+                log_sens_coef,
                 ent_coef_opt_state,
+                sens_coef_opt_state,
                 rng,
             )
 
@@ -678,7 +1007,7 @@ def make_train(config, writer: SummaryWriter):
 
                 # Scan the *actual* update body
                 (
-                    (new_ts_actor, new_log_ent, new_ent_opt_state, new_rng),
+                    (new_ts_actor, new_log_ent, new_log_sens, new_ent_opt_state, new_sens_opt_state, new_rng),
                     losses,
                 ) = jax.lax.scan(
                     actor_alpha_update_body,
@@ -689,7 +1018,9 @@ def make_train(config, writer: SummaryWriter):
                 new_carry = (
                     new_ts_actor,
                     new_log_ent,
+                    new_log_sens,
                     new_ent_opt_state,
+                    new_sens_opt_state,
                     new_rng,
                 )
                 return new_carry, losses
@@ -699,7 +1030,7 @@ def make_train(config, writer: SummaryWriter):
 
                 # Scan the "do nothing" body
                 (
-                    (new_ts_actor, new_log_ent, new_ent_opt_state, new_rng),
+                    (new_ts_actor, new_log_ent, new_log_sens, new_ent_opt_state, new_sens_opt_state, new_rng),
                     losses,
                 ) = jax.lax.scan(
                     no_actor_alpha_update_body,
@@ -707,10 +1038,13 @@ def make_train(config, writer: SummaryWriter):
                     None,
                     length=policy_frequency,
                 )
+
                 new_carry = (
                     new_ts_actor,
                     new_log_ent,
+                    new_log_sens,
                     new_ent_opt_state,
+                    new_sens_opt_state,
                     new_rng,
                 )
                 return new_carry, losses
@@ -719,8 +1053,8 @@ def make_train(config, writer: SummaryWriter):
             # Both branches take the 'initial_carry' and return
             # (final_carry, losses_tree) with the *same structure*.
             (
-                (train_state_actor, log_ent_coef, ent_coef_opt_state, rng),
-                (actor_losses, alpha_losses, entropies),
+                (train_state_actor, log_ent_coef, log_sens_coef, ent_coef_opt_state, sens_coef_opt_state, rng),
+                (actor_losses, alpha_losses, sens_losses, entropies, sens_norms),
             ) = jax.lax.cond(
                 (total_steps % policy_frequency) == 0,
                 do_policy_update,  # Function to call if True
@@ -735,6 +1069,8 @@ def make_train(config, writer: SummaryWriter):
                 (
                     qf1_target_params,
                     qf2_target_params,
+                    qf1_sens_target_params,
+                    qf2_sens_target_params,
                 ) = params
                 tau = config.get("POLYAK_TAU", 0.005)
                 qf1_target_params = jax.tree.map(
@@ -747,9 +1083,21 @@ def make_train(config, writer: SummaryWriter):
                     qf2_target_params,
                     train_state_qf2.params,
                 )
+                qf1_sens_target_params = jax.tree.map(
+                    lambda target, online: tau * online + (1 - tau) * target,
+                    qf1_sens_target_params,
+                    train_state_qf1_sens.params,
+                )
+                qf2_sens_target_params = jax.tree.map(
+                    lambda target, online: tau * online + (1 - tau) * target,
+                    qf2_sens_target_params,
+                    train_state_qf2_sens.params,
+                )
                 return (
                     qf1_target_params,
                     qf2_target_params,
+                    qf1_sens_target_params,
+                    qf2_sens_target_params,
                 )
 
             def no_update_targets(params):
@@ -758,6 +1106,8 @@ def make_train(config, writer: SummaryWriter):
             (
                 qf1_target_params,
                 qf2_target_params,
+                qf1_sens_target_params,
+                qf2_sens_target_params,
             ) = jax.lax.cond(
                 (total_steps % target_network_frequency) == 0,
                 update_targets,
@@ -765,6 +1115,8 @@ def make_train(config, writer: SummaryWriter):
                 (
                     qf1_target_params,
                     qf2_target_params,
+                    qf1_sens_target_params,
+                    qf2_sens_target_params,
                 ),
             )
 
@@ -799,14 +1151,15 @@ def make_train(config, writer: SummaryWriter):
             mean_alpha_loss = jnp.mean(
                 alpha_losses
             )  # Not logged in CleanRL, but good to have
+            mean_sens_loss = jnp.mean(sens_losses)
             mean_entropy = jnp.mean(entropies)
             mean_total_loss = (
                 q1_loss + q2_loss + mean_actor_loss
-            )  # alpha_loss is separate
+            )  # alpha_loss and sens_loss are separate
 
             if config.get("DEBUG"):
 
-                def callback(info):
+                def callback(info, sens_norm):
                     return_values = info["returned_episode_returns"][
                         info["returned_episode"]
                     ]
@@ -814,26 +1167,32 @@ def make_train(config, writer: SummaryWriter):
                         info["timestep"][info["returned_episode"]]
                         * config["NUM_ENVS"]
                     )
+                    
+
                     if timesteps.size == 0:
                         return
                     print(
                         f"global step={timesteps[-1]}, episodic return={return_values.mean()}"
                     )
-
-                jax.debug.callback(callback, metric)
-
+                    
+                jax.debug.callback(callback, metric, sens_norms)
             # Log metrics to tensorboard
             def log_callback(
                 mean_total,
                 mean_qf1,
                 mean_qf2,
+                mean_qf1_sens,
+                mean_qf2_sens,
                 mean_actor,
                 mean_ent,
+                mean_sens_loss_val,
+                sens_coef_val,
                 metric,
                 timestep,
                 sens_mean,
                 sens_max,
                 should_log_sens,
+                policy_frequency=policy_frequency,
             ):
                 if metric["timestep"][metric["returned_episode"]].size != 0:
                     episodic_return = metric["returned_episode_returns"][
@@ -861,47 +1220,65 @@ def make_train(config, writer: SummaryWriter):
                         int(timestep),
                     )
 
-                writer.add_scalar(
-                    "train/total_loss", float(mean_total), int(timestep)
-                )
-                writer.add_scalar(
-                    "train/qf1_loss", float(mean_qf1), int(timestep)
-                )
-                writer.add_scalar(
-                    "train/qf2_loss", float(mean_qf2), int(timestep)
-                )
-                writer.add_scalar(
-                    "train/policy_loss", float(mean_actor), int(timestep)
-                )
-                writer.add_scalar(
-                    "train/entropy", float(mean_ent), int(timestep)
-                )
-
-                # Log sensitivity metrics when evaluation was performed
-                if should_log_sens:
+                if (timestep % policy_frequency) == 0:
                     writer.add_scalar(
-                        "returns/sensitivity_state_mean",
-                        float(sens_mean),
-                        int(timestep),
+                        "train/total_loss", float(mean_total), int(timestep)
                     )
                     writer.add_scalar(
-                        "returns/sensitivity_state_max",
-                        float(sens_max),
-                        int(timestep),
+                        "train/qf1_loss", float(mean_qf1), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/qf2_loss", float(mean_qf2), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/qf1_sens_loss", float(mean_qf1_sens), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/qf2_sens_loss", float(mean_qf2_sens), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/policy_loss", float(mean_actor), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/entropy", float(mean_ent), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/sens_coef_loss", float(mean_sens_loss_val), int(timestep)
+                    )
+                    writer.add_scalar(
+                        "train/sens_coef", float(sens_coef_val), int(timestep)
                     )
 
+                    # Log sensitivity metrics when evaluation was performed
+                    if should_log_sens:
+                        writer.add_scalar(
+                            "returns/sensitivity_state_mean",
+                            float(sens_mean),
+                            int(timestep),
+                        )
+                        writer.add_scalar(
+                            "returns/sensitivity_state_max",
+                            float(sens_max),
+                            int(timestep),
+                        )
+            
             jax.debug.callback(
                 log_callback,
                 mean_total_loss,
                 q1_loss,  # q1_loss is scalar, not from scan
                 q2_loss,  # q2_loss is scalar, not from scan
+                q1_sens_loss,  # q1_sens_loss is scalar
+                q2_sens_loss,  # q2_sens_loss is scalar
                 mean_actor_loss,
                 mean_entropy,
+                mean_sens_loss,
+                jnp.exp(log_sens_coef),
                 metric,
                 total_steps,
                 sensitivity_mean_eval,
                 sensitivity_max_eval,
                 should_eval,
+                config.get("POLICY_FREQUENCY", 1),
             )
             # --- End Logging ---
 
@@ -909,14 +1286,23 @@ def make_train(config, writer: SummaryWriter):
                 train_state_actor,
                 train_state_qf1,
                 train_state_qf2,
+                train_state_qf1_sens,
+                train_state_qf2_sens,
                 ent_coef_opt_state,
+                sens_coef_opt_state,
                 qf1_target_params,
                 qf2_target_params,
+                qf1_sens_target_params,
+                qf2_sens_target_params,
+                target_action_params,
                 log_ent_coef,
+                log_sens_coef,
                 env_state,
                 obsv,
                 metric,  # Pass the metric (info) forward
                 rb,
+                rb_sens,
+                normalization_stats,
                 rng,
                 total_steps,
             )
@@ -927,14 +1313,23 @@ def make_train(config, writer: SummaryWriter):
             train_state_actor,
             train_state_qf1,
             train_state_qf2,
+            train_state_qf1_sens,
+            train_state_qf2_sens,
             ent_coef_opt_state,
+            sens_coef_opt_state,
             qf1_target_params,
             qf2_target_params,
+            qf1_sens_target_params,
+            qf2_sens_target_params,
+            target_action_params,
             log_ent_coef,
+            log_sens_coef,
             env_state,
             obsv,
             info,
             rb,
+            rb_sens,
+            normalization_stats,
             _rng,
             total_steps,
         )
@@ -994,12 +1389,20 @@ if __name__ == "__main__":
         train_state_actor,
         train_state_qf1,
         train_state_qf2,
+        train_state_qf1_sens,
+        train_state_qf2_sens,
+        _,
         _,
         qf1_target_params,
         qf2_target_params,
+        qf1_sens_target_params,
+        qf2_sens_target_params,
+        target_action_params,
         log_ent_coef,
+        log_sens_coef,
         env_state,
         obsv,
+        _,
         _,
         _,
         _rng,
@@ -1018,6 +1421,16 @@ if __name__ == "__main__":
     params_qf2 = train_state_qf2.params
     (run_dir / "params_qf2.msgpack").write_bytes(
         serialization.to_bytes(params_qf2)
+    )
+
+    params_qf1_sens = train_state_qf1_sens.params
+    (run_dir / "params_qf1_sens.msgpack").write_bytes(
+        serialization.to_bytes(params_qf1_sens)
+    )
+
+    params_qf2_sens = train_state_qf2_sens.params
+    (run_dir / "params_qf2_sens.msgpack").write_bytes(
+        serialization.to_bytes(params_qf2_sens)
     )
 
     shutil.copy(config_path, run_dir / "config.json")

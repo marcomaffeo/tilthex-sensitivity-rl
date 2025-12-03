@@ -145,6 +145,7 @@ class Actor(nn.Module):
             bias_init=constant(0.0),
             name="output_mean",
         )(x)
+        '''
         log_std = nn.Dense(
             self.action_dim,
             kernel_init=orthogonal(0.01),
@@ -155,19 +156,35 @@ class Actor(nn.Module):
         log_std = self.LOG_STD_MIN + 0.5 * (
             self.LOG_STD_MAX - self.LOG_STD_MIN
         ) * (log_std + 1)
-        pi = distrax.MultivariateNormalDiag(mean, jnp.exp(log_std))
+        '''
+        actor_logtstd = self.param(
+            "actor_log_std", nn.initializers.zeros, (self.action_dim,)
+        )
+        pi = distrax.MultivariateNormalDiag(mean, jnp.exp(actor_logtstd))
         return pi
 
 
-def get_sac_action_dist(pi, scale_action, bias_action, _rng):
+def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: bool):
     """
     Sample from a Gaussian policy pi, apply tanh squashing, and rescale to the
     environment action space with (scale_action, bias_action). Also compute the
     corrected log-probability including the Jacobian of the tanh and the
     rescaling term, matching CleanRL/SpinUp conventions:
         log_prob = N(x_t|mu, sigma) - sum(log(scale * (1 - tanh(x_t)^2) + 1e-6))
+    
+    Args:
+        sample: If True, sample from pi (action must be None). If False, use provided action.
     """
-    x_t = pi.sample(seed=_rng)
+    # Use jax.lax.cond for JIT-compatible conditional branching
+    def sample_fn(action):
+        return pi.sample(seed=_rng)
+    
+    def use_action_fn(action):
+        pi.sample(seed=_rng)
+        return action
+    
+    x_t = jax.lax.cond(sample, sample_fn, use_action_fn, action)
+    
     y_t = jnp.tanh(x_t)
     # Include both tanh correction and action rescaling in the log-prob
     # Note: scale_action is per-dimension; broadcast works as expected
@@ -175,10 +192,10 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng):
         scale_action * (1 - y_t**2) + 1e-6
     ).sum(-1)
     mean_tanh = jnp.tanh(pi.mean())
-    action = y_t * scale_action + bias_action
+    action_out = y_t * scale_action + bias_action
     mean = mean_tanh * scale_action + bias_action
     log_prob = jnp.expand_dims(log_prob, -1)
-    return action, log_prob, mean
+    return action_out, log_prob, mean, x_t
 
 
 def get_ddpg_action_dist(pi, scale_action, bias_action, _rng):

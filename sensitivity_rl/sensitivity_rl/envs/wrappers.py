@@ -475,7 +475,7 @@ class SensitivityWrapper(GymnaxWrapper):
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
-        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
+        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp/jnp.exp(sens_state.sensitivity.log_norm)
         reward_norm_next = jnp.linalg.matrix_norm(
             sens_s_next[9:10, :], ord="fro"
         )
@@ -672,7 +672,7 @@ class SensitivityExtWrapper(GymnaxWrapper):
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
-        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
+        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp/jnp.exp(sens_state.sensitivity.log_norm)
         reward_norm_next = jnp.linalg.matrix_norm(
             sens_s_next[9:10, :], ord="fro"
         )
@@ -819,8 +819,8 @@ class SensitivityOffWrapper(GymnaxWrapper):
 
     def compute_action(self, rng, obs, network_params):
         pi = self._actor.apply(network_params, obs)
-        action, _, _ = self.get_action(
-            pi, self.action_scale, self.action_bias, rng
+        action, _, _, _ = self.get_action(
+            pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
         )
         return action
 
@@ -857,7 +857,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
         # Update action sensitivity
         F_sens_u = df_du @ dmu_dobs @ dobs_dx @ sens_s
-        F_sens_x = df_dx @ sens_s + df_dp
+        F_sens_x = df_dx @ sens_s + df_dp/jnp.exp(sens_state.sensitivity.log_norm)
         # Update sensitivities using chain rule
         sens_s_next = F_sens_x + F_sens_u
         reward_norm_next = jnp.linalg.matrix_norm(
@@ -892,6 +892,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         sens_a = df_du @ dmu_dobs @ dobs_dx  # du/dp
         sens_s_next = F_sens_x + sens_a
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
+        sens_s_next = sens_s_next / (norm_next + 1e-6)
 
         # Return the incremental log norm change
         return sens_s_next, sens_log_norm + jnp.log(norm_next + 1e-6)

@@ -5,6 +5,9 @@ import json
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -496,7 +499,9 @@ if __name__ == "__main__":
     with config_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
 
-    rng = jax.random.PRNGKey(config.get("SEED", 30))
+    config["SENSITIVITY_REGULARIZATION_WEIGHT"] = float(0.0)  # Default value
+
+    rng = jax.random.key(config.get("SEED", 30))
 
     # Create/rotate run directory
     runs_root = Path("runs")

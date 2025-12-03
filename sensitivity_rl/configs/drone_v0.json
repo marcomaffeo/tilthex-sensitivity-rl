@@ -9,7 +9,7 @@
     "GAMMA": 0.98,
     "GAE_LAMBDA": 0.95,
     "CLIP_EPS": 0.1,
-    "ENT_COEF": 0.005,
+    "ENT_COEF": 0.001,
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
     "ACTIVATION": "tanh",

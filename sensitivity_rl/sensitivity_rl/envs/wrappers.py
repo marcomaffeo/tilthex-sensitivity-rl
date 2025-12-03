@@ -409,19 +409,19 @@ class SensitivityWrapper(GymnaxWrapper):
         # )
 
         # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one)
-        reward = reward - self.regularization_weight * (
-            jnp.clip(
-                jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
-            - 0.99
-            * jnp.clip(
-                jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
-        )
+        # reward = reward - self.regularization_weight * (
+        #     jnp.clip(
+        #         jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
+        #         0,
+        #         100000,
+        #     )
+        #     - 0.99
+        #     * jnp.clip(
+        #         jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
+        #         0,
+        #         100000,
+        #     )
+        # )
 
         sens_state = SensitivityEnvState(
             env_state=env_state, sensitivity=next_sensitivity
@@ -802,7 +802,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         #    reward,
         # )
 
-        # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one)
+        # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one) This is currently disabled
         reward = reward - self.regularization_weight * (
             jnp.clip(
                 jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),

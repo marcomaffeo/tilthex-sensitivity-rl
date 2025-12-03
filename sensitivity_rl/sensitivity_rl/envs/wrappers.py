@@ -334,12 +334,16 @@ class SensitivityWrapper(GymnaxWrapper):
     ):
         """Compute the next environment state and update sensitivities."""
         state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
-        params = jax.flatten_util.ravel_pytree(params)[0]
+        nominal_params = jax.flatten_util.ravel_pytree(
+            self._env.default_params
+        )[0]
+    
         # Compute Jacobians
-        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
-        df_du = self.df_du(key, sens_state.env_state, state, action, params)
-        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
-        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, nominal_params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, nominal_params)
+        # df_dp is "normalized" by multiplying by nominal params
+        df_dp = self.df_dp(key, sens_state.env_state, state, action, nominal_params) * nominal_params
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, nominal_params)
 
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
@@ -527,12 +531,15 @@ class SensitivityExtWrapper(GymnaxWrapper):
     ):
         """Compute the next environment state and update sensitivities."""
         state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
-        params = jax.flatten_util.ravel_pytree(params)[0]
+        nominal_params = jax.flatten_util.ravel_pytree(
+            self._env.default_params
+        )[0]
+    
         # Compute Jacobians
-        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
-        df_du = self.df_du(key, sens_state.env_state, state, action, params)
-        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
-        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, nominal_params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, nominal_params)
+        df_dp = self.df_dp(key, sens_state.env_state, state, action, nominal_params) * nominal_params
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, nominal_params)
 
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
@@ -714,25 +721,16 @@ class SensitivityOffWrapper(GymnaxWrapper):
     ):
         """Compute the next environment state and update sensitivities."""
         state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
-        params = jax.flatten_util.ravel_pytree(params)[0]
+        nominal_params = jax.flatten_util.ravel_pytree(
+            self._env.default_params
+        )[0].leaves()
+    
         # Compute Jacobians
-        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
-        df_du = self.df_du(key, sens_state.env_state, state, action, params)
-        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
-        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, nominal_params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, nominal_params)
+        df_dp = self.df_dp(key, sens_state.env_state, state, action, nominal_params) * nominal_params
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, nominal_params)
 
-        """
-        jax.debug.callback(
-            lambda x, y, z, w, d: (
-                print(f"Sensitivity jacobians: {x},{y},{z},{w}") if d else None
-            ),
-            jnp.linalg.matrix_norm(df_dx, ord="fro"),
-            jnp.linalg.matrix_norm(df_du, ord="fro"),
-            jnp.linalg.matrix_norm(df_dp, ord="fro"),
-            jnp.linalg.matrix_norm(dobs_dx, ord="fro"),
-            done,
-        )
-        """
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs

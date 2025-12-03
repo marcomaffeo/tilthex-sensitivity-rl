@@ -110,7 +110,6 @@ class EnvParams(environment.EnvParams):
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
     m: float = 0.027
-    # TODO: check this
     I: jax.Array = struct.field(
         pytree_node=True,
         default_factory=lambda: jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5]),

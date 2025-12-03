@@ -79,6 +79,21 @@ CUDA (Linux, CUDA 12):
 3) `pixi run clean` (deletes all training results)
 
 
+## Usage
+### Training
+The training of the non-robustified policy with ppo can be launched with 
+`pixi run -e cuda train_ppo --config configs/drone_v0_ppo.json`
+
+This will create logs in the runs directory and plots of the drone position in perturbed and nominal case
+
+The robustified version can then be run with 
+`pixi run -e cuda train_sppo --config configs/drone_v0.json`
+
+
+### Visualize training logs
+In a second shell, open the connection with tensorboard and follow the link printed on the terminal to open a web browser
+`pixi run tensorboard --logdir ./runs/drone_v0/ --bind_all`
+
 ## Notes
 
 - Default environment (no `-e`) installs CPU JAX and should work on macOS and Linux without a GPU.

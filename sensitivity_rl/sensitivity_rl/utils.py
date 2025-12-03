@@ -3,16 +3,29 @@ import jax.numpy as jnp
 from pathlib import Path
 from typing import Any, Mapping, Tuple
 from flax import serialization
-from envs.base import Sensitivity
+from envs.base import Sensitivity, SensitivityOff
 import shutil
 
 
 def default_sensitivity(env) -> Sensitivity:
     """Default sensitivity parameters."""
     return Sensitivity(
+        log_norm=jnp.array(jnp.log(1e-6)),
         state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
         action=jnp.zeros((env.action_dim, env.param_dim)),  # du/dp
         policy_gains=jnp.zeros((env.action_dim, env.obs_dim)),  # dmu/dobs
+    )
+
+
+def default_sensitivity_off(env) -> Sensitivity:
+    """Default sensitivity parameters."""
+    return SensitivityOff(
+        log_norm=jnp.array(jnp.log(1e-6)),
+        log_norm_old=jnp.array(jnp.log(1e-6)),
+        state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
+        F_sens_x=jnp.zeros((env.state_dim, env.param_dim)),  # dmu/dobs
+        df_du=jnp.zeros((env.state_dim, env.action_dim)),  # dx/du
+        dobs_dx=jnp.zeros((env.obs_dim, env.param_dim)),  # dobs/dp
     )
 
 

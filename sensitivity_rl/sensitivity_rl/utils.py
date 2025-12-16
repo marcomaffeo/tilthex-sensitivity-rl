@@ -11,7 +11,6 @@ def default_sensitivity(env) -> Sensitivity:
     """Default sensitivity parameters."""
     return Sensitivity(
         log_norm=jnp.array(0.0),
-        reward_norm=jnp.array(0.0),
         state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
         action=jnp.zeros((env.action_dim, env.param_dim)),  # du/dp
         policy_gains=jnp.zeros((env.action_dim, env.obs_dim)),  # dmu/dobs

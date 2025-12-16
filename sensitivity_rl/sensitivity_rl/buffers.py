@@ -156,6 +156,7 @@ class ReplaySensTransition(NamedTuple):
 
         return jnp.array([new_mean]), jnp.array([new_var])
 
+
 class ReplaySensOnlyTransition(NamedTuple):
     """Transition containing only sensitivity-related data"""
     done: jnp.ndarray

@@ -4,6 +4,8 @@ import shutil
 import json
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
 
 import jax
 import jax.numpy as jnp

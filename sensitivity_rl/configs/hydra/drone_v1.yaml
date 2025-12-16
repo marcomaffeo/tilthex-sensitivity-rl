@@ -1,0 +1,22 @@
+# Configuration for Drone V1 environment
+defaults:
+  - config
+
+# Environment settings
+ENV_NAME: drone_v1
+
+# Learning parameters
+NUM_ENVS: 1000
+NUM_STEPS: 200
+TOTAL_TIMESTEPS: 2e7
+NUM_MINIBATCHES: 64
+
+# RL Algorithm parameters
+GAMMA: 0.95
+CLIP_EPS: 0.4
+
+# Network architecture
+ACTIVATION: tanh
+
+# Sensitivity settings
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.0

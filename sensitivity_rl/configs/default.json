@@ -3,7 +3,7 @@
     "LR": 0.001,
     "NUM_ENVS": 50,
     "NUM_STEPS": 1000,
-    "TOTAL_TIMESTEPS": 2e7,
+    "TOTAL_TIMESTEPS": 1e7,
     "UPDATE_EPOCHS": 10,
     "NUM_MINIBATCHES": 25,
     "GAMMA": 0.99,
@@ -19,6 +19,6 @@
     "NORMALIZE_ENV": true,
     "DEBUG": true,
     "SENSITIVITY": true,
-    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.0,
-    "SEED": 30
+    "SENSITIVITY_REGULARIZATION_WEIGHT": 0.9,
+    "SEED": 0
 }

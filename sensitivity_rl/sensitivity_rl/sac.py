@@ -8,6 +8,9 @@ import json
 # This tells the script to only see the GPU with ID '0' (the first GPU)
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax
 import jax.numpy as jnp
@@ -845,6 +848,72 @@ def make_train(config, writer: SummaryWriter):
         return {"runner_state": runner_state, "metrics": None}
 
     return train
+
+
+def run_experiment(config: dict, run_dir: Path, rng_key: jax.random.PRNGKey):
+    """Run a single experiment with the given config.
+    
+    Args:
+        config: Configuration dictionary
+        run_dir: Directory to save results
+        rng_key: JAX random key
+    """
+    # tensorboard writer
+    writer = SummaryWriter(f"{run_dir}")
+
+    train_jit = jax.jit(make_train(config, writer))
+    out = train_jit(rng_key)
+
+    # Save params
+    (
+        train_state_actor,
+        train_state_qf1,
+        train_state_qf2,
+        train_state_qf1_sens,
+        train_state_qf2_sens,
+        train_state_alpha,
+        env_state,
+        obs,
+        buffer_state,
+        buffer_state_sens,
+        rng,
+    ) = out["runner_state"]
+    
+    (run_dir / "params_actor.msgpack").write_bytes(
+        serialization.to_bytes(train_state_actor.params)
+    )
+    (run_dir / "params_qf1.msgpack").write_bytes(
+        serialization.to_bytes(train_state_qf1.params)
+    )
+    (run_dir / "params_qf2.msgpack").write_bytes(
+        serialization.to_bytes(train_state_qf2.params)
+    )
+    if config["SENSITIVITY"]:
+        (run_dir / "params_qf1_sens.msgpack").write_bytes(
+            serialization.to_bytes(train_state_qf1_sens.params)
+        )
+        (run_dir / "params_qf2_sens.msgpack").write_bytes(
+            serialization.to_bytes(train_state_qf2_sens.params)
+        )
+
+    # Save config as JSON
+    with open(run_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+    
+    # Prepare metrics for hparams logging
+    hparam_dict = {
+        k: v
+        for k, v in config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+    metric_dict = {}
+    
+    # Log hyperparameters with final metrics
+    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
+
+    writer.close()
+    
+    return run_dir
 
 
 LOG_STD_MAX = 2

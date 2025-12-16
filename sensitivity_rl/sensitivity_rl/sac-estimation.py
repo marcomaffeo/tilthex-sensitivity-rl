@@ -8,6 +8,8 @@ import json
 # This tells the script to only see the GPU with ID '0' (the first GPU)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
 
 import jax
 import jax.numpy as jnp
@@ -674,6 +676,7 @@ def make_train(config, writer: SummaryWriter):
             )
 
             next_state_log_pi = jax.lax.stop_gradient(next_state_log_pi)
+            
             qf1_next_target = qf1_target.apply(
                 qf1_target_params,
                 batch.next_obs,
@@ -784,7 +787,7 @@ def make_train(config, writer: SummaryWriter):
 
             dones_col_sens = batch_sens.done[..., None]
             next_q_sens_value = (
-               batch_sens.log_sens_norm[..., None]  + (1 - dones_col_sens) * config["GAMMA"] * (min_qf_sens_next_target_sens)
+               batch_sens.log_sens_next_norm[..., None]-batch_sens.log_sens_norm[..., None]  + (1 - dones_col_sens) * config["GAMMA"] * (min_qf_sens_next_target_sens)
             )
             next_q_sens_value = jax.lax.stop_gradient(next_q_sens_value)
             
@@ -903,11 +906,17 @@ def make_train(config, writer: SummaryWriter):
                     # For sensitivity component
                     sens_range = normalization_stats[5] - normalization_stats[4] + 1e-6
                     sens_normalized = (sens_component - normalization_stats[4]) / sens_range 
+                    
+                    # Clip the log difference to prevent inf when taking exp
+                    log_diff = jnp.clip(log_pi - log_pi_sens, -50.0, 50.0)
+                    ratio = jnp.exp(log_diff)
+
+                    Q_sens_loss =(sens_normalized.reshape(-1,1))*ratio
                     # Actor loss
                     actor_loss = jnp.mean(
                         ent_coef * log_pi_normalized
                         - q_normalized.reshape(-1, 1)
-                        + sens_coef_local * (sens_normalized.reshape(-1,1))*jnp.exp((log_pi-log_pi_sens))
+                        + sens_coef_local * (Q_sens_loss + updated_sens_reward_r)
                     )
 
                     return actor_loss, (log_pi, updated_sens_reward)
@@ -1355,34 +1364,24 @@ LOG_STD_MAX = 2
 LOG_STD_MIN = -5
 
 
-if __name__ == "__main__":
-    args = parse_args()
-
-    config_path = args.config.resolve()
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with config_path.open("r", encoding="utf-8") as f:
-        config = json.load(f)
-
-    rng = jax.random.PRNGKey(config.get("SEED", 30))
-
-    # Create/rotate run directory
-    runs_root = Path("runs")
-    runs_root.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = runs_root / config["ENV_NAME"] / f"SAC_QS_{ts}"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Saving latest results to: {run_dir}")
-
-    update_latest_symlink(run_dir, runs_root)
-
+def run_experiment(config: dict, run_dir: Path, rng_key: jax.random.PRNGKey):
+    """Run a single experiment with the given config.
+    
+    Args:
+        config: Configuration dictionary
+        run_dir: Directory to save results
+        rng_key: JAX random key
+    """
     # tensorboard writer
     writer = SummaryWriter(f"{run_dir}")
 
     train_jit = jax.jit(make_train(config, writer))
     # train_jit = make_train(config, writer)
-    out = train_jit(rng)
+    out = train_jit(rng_key)
+
+    train_jit = jax.jit(make_train(config, writer))
+    # train_jit = make_train(config, writer)
+    out = train_jit(rng_key)
 
     # Save params
     (
@@ -1402,6 +1401,7 @@ if __name__ == "__main__":
         log_sens_coef,
         env_state,
         obsv,
+        _,
         _,
         _,
         _,
@@ -1433,7 +1433,10 @@ if __name__ == "__main__":
         serialization.to_bytes(params_qf2_sens)
     )
 
-    shutil.copy(config_path, run_dir / "config.json")
+    # Save config as JSON
+    with open(run_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+    
     # Prepare metrics for hparams logging
     hparam_dict = {
         k: v
@@ -1442,64 +1445,36 @@ if __name__ == "__main__":
     }
     metric_dict = {}
 
-    """
-    # Save raw metrics arrays for post-hoc analysis/plotting
-    metrics = out["metrics"]
-
-    # Minimal console summary
-    ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
-    done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
-    ep_returns = ret[done]
-
-        if ep_returns.size > 0:
-        metric_dict = {
-            "hparam/final_avg_return": float(ep_returns.mean()),
-            "hparam/final_max_return": float(ep_returns.max()),
-            "hparam/final_episodes": float(ep_returns.size),
-        }
-        print(
-            f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
-        )
-    """
     # Log hyperparameters with final metrics
     writer.add_hparams(hparam_dict, metric_dict, run_name=".")
 
     # close tensorboard writer
     writer.close()
+    
+    return run_dir
 
-    # Run rollouts for evaluation
-    eval_config = {
-        "NUM_ROLLOUTS": 10,
-        "MAX_STEPS": 200,
-        "DETERMINISTIC": True,
-        "SEED": 42,
-    }
 
-    import subprocess
+if __name__ == "__main__":
+    args = parse_args()
 
-    # Call with positional and named args
-    subprocess.run(
-        [
-            "python3",
-            os.path.dirname(__file__) + "/rollouts.py",
-            "--run_dirs",
-            f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
-        ]
-    )
+    config_path = args.config.resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    subprocess.run(
-        [
-            "python3",
-            (
-                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
-                if config["ENV_NAME"] == "drone_v0"
-                or config["ENV_NAME"] == "drone_v1"
-                else os.path.dirname(__file__)
-                + "/plots/plot_pendulum_rollouts.py"
-            ),
-        ]
-    )
+    with config_path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    rng = jax.random.PRNGKey(config.get("SEED", 30))
+
+    # Create/rotate run directory
+    runs_root = Path("runs")
+    runs_root.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = runs_root / config["ENV_NAME"] / f"SAC_QS_{ts}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Saving latest results to: {run_dir}")
+
+    update_latest_symlink(run_dir, runs_root)
+    
+    # Run the experiment
+    run_experiment(config, run_dir, rng)

@@ -1,0 +1,22 @@
+# Configuration for Drone V0 environment
+defaults:
+  - config
+
+# Environment settings
+ENV_NAME: drone_v0
+
+# Learning parameters
+NUM_ENVS: 1000
+NUM_STEPS: 200
+TOTAL_TIMESTEPS: 2e7
+
+# RL Algorithm parameters
+GAMMA: 0.95
+ENT_COEF: 0.01
+POLYAK_TAU: 0.005
+
+# Network architecture
+ACTIVATION: tanh
+
+# Sensitivity settings
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.0

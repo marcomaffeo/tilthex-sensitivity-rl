@@ -2,12 +2,19 @@ import argparse
 import os
 import shutil
 import json
+from omegaconf import DictConfig, OmegaConf
+import hydra
 
 # --- IMPORTANT ---
 # Set this *before* importing JAX
 # This tells the script to only see the GPU with ID '0' (the first GPU)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+# Set JAX platforms to use (cuda for GPU, cpu for fallback)
+os.environ["JAX_PLATFORMS"] = "cuda,cpu"
+
 
 import jax
 import jax.numpy as jnp
@@ -59,6 +66,45 @@ def parse_args():
         help="Path to JSON config file (defaults to configs/default.json)",
     )
     return parser.parse_args()
+
+
+def run_experiment(config: dict, run_dir: Path, rng_key: jax.random.PRNGKey):
+    """Run a single experiment with the given config.
+    
+    Args:
+        config: Configuration dictionary
+        run_dir: Directory to save results
+        rng_key: JAX random key
+    """
+    # tensorboard writer
+    writer = SummaryWriter(f"{run_dir}")
+
+    train_jit = jax.jit(make_train(config, writer))
+    out = train_jit(rng_key)
+
+    # Save params
+    train_state, _, env_state, obsv, _, _rng = out["runner_state"]
+    params = train_state.params
+    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+
+    # Save config as JSON
+    with open(run_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+    
+    # Prepare metrics for hparams logging
+    hparam_dict = {
+        k: v
+        for k, v in config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+    metric_dict = {}
+    
+    # Log hyperparameters with final metrics
+    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
+
+    writer.close()
+    
+    return run_dir
 
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
@@ -715,20 +761,19 @@ def make_train(config, writer: SummaryWriter):
 
     return train
 
-
-if __name__ == "__main__":
-
-    args = parse_args()
-
-    config_path = args.config.resolve()
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with config_path.open("r", encoding="utf-8") as f:
-        config = json.load(f)
-
+@hydra.main(version_base=None, config_path="../configs/hydra", config_name="config")
+def main(cfg: DictConfig):
+    """Main function decorated with Hydra.
+    
+    Args:
+        cfg: Hydra configuration object
+    """
+    # Convert OmegaConf to regular dict for compatibility
+    config = OmegaConf.to_container(cfg, resolve=True)
+    
+    # Initialize random key
     rng = jax.random.PRNGKey(config.get("SEED", 30))
-
+    
     # Create/rotate run directory
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
@@ -738,51 +783,9 @@ if __name__ == "__main__":
     print(f"Saving latest results to: {run_dir}")
 
     update_latest_symlink(run_dir, runs_root)
-
-    # tensorboard writer
-    writer = SummaryWriter(f"{run_dir}")
-
-    train_jit = jax.jit(make_train(config, writer))
-    # train_jit = make_train(config, writer)
-    out = train_jit(rng)
-
-    # Save params
-    train_state, _, env_state, obsv, _, _rng = out["runner_state"]
-    params = train_state.params
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
-
-    shutil.copy(config_path, run_dir / "config.json")
-    # Prepare metrics for hparams logging
-    hparam_dict = {
-        k: v
-        for k, v in config.items()
-        if isinstance(v, (int, float, bool, str))
-    }
-    metric_dict = {}
-    """
-    # Save raw metrics arrays for post-hoc analysis/plotting
-    metrics = out["metrics"]
-
-    # Minimal console summary
-    ret = np.array(metrics["returned_episode_returns"]).reshape(-1)
-    done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
-    ep_returns = ret[done]
-
-    if ep_returns.size > 0:
-        metric_dict = {
-            "hparam/final_avg_return": float(ep_returns.mean()),
-            "hparam/final_max_return": float(ep_returns.max()),
-            "hparam/final_episodes": float(ep_returns.size),
-        }
-        print(
-            f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
-        )
-    """
-    # Log hyperparameters with final metrics
-    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
-
-    # close tensorboard writer
-    writer.close()
+    
+    # Run the experiment
+    run_experiment(config, run_dir, rng)
 
     # Run rollouts for evaluation
     eval_config = {
@@ -811,15 +814,6 @@ if __name__ == "__main__":
         ]
     )
 
-    subprocess.run(
-        [
-            "python3",
-            (
-                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
-                if config["ENV_NAME"] == "drone_v0"
-                or config["ENV_NAME"] == "drone_v1"
-                else os.path.dirname(__file__)
-                + "/plots/plot_pendulum_rollouts.py"
-            ),
-        ]
-    )
+if __name__ == "__main__":
+    main()
+    

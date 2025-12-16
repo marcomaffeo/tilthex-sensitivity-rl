@@ -1,0 +1,9 @@
+# Default configuration for SPPO-VS-Estimation-Aug
+defaults:
+  - method: ppo
+  - env: halfcheetah_v5
+  - _self_
+
+# Override any method/env settings below if needed
+# Random seed
+SEED: 0

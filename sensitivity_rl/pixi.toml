@@ -26,6 +26,7 @@ gymnax = "*"
 flax = "*"
 optax = "*"
 chex = "*"
+hydra-core = "*"
 #sensitivity-rl = { path = ".", editable = true }
 mujoco-mjx = "*"
 mujoco = "*"

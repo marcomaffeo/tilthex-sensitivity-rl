@@ -67,23 +67,24 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["sac-estimation"]
+METHODS = ["sppo-vs-estimation-aug"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["halfcheetah_v5"]
+ENVIRONMENTS = ["drone_v1"]
 
 # Parameter sweeps - these will be applied to all method/environment combinations
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0, 1, 2, 3, 4],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.1, 0.12],
-    "TOTAL_TIMESTEPS": [1_000_000],
+    "SEED": [0, 3, 4],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.5, 0.7],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
-    # "GAMMA": [0.95, 0.99],
+    "GAMMA": [0.96, 0.98, 0.99],
     # "GAE_LAMBDA": [0.9, 0.95],
-    # "CLIP_EPS": [0.1, 0.2],
+    "CLIP_EPS": [0.1, 0.2],
+    "UPDATE_EPOCHS": [5, 10],
+    "ENT_COEF": [0.005, 0.001, 0.0],
 }
 
 # Method name mapping for config selection

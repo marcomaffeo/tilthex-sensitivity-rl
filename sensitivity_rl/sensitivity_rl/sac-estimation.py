@@ -863,7 +863,7 @@ def make_train(config, writer: SummaryWriter):
                     
                     # Stop gradient to prevent nested differentiation (jacfwd inside grad)
                     # updated_sens_reward = jax.lax.stop_gradient(updated_sens_reward)
-                    #sens_state = jax.lax.stop_gradient(sens_state)
+                    sens_state = jax.lax.stop_gradient(sens_state)
                     
                     pi = actor.apply(actor_params, batch.obs)
                     actions, log_pi, _, action_pre_tanh = get_sac_action_dist(
@@ -911,12 +911,24 @@ def make_train(config, writer: SummaryWriter):
                     log_diff = jnp.clip(log_pi - log_pi_sens, -50.0, 50.0)
                     ratio = jnp.exp(log_diff)
 
-                    Q_sens_loss =(sens_normalized.reshape(-1,1))*ratio
+                    # PPO-style ratio clipping
+                    ratio_clipped = jnp.clip(
+                        ratio,
+                        1.0 - config["CLIP_EPS"],
+                        1.0 + config["CLIP_EPS"],
+                    )
+
+                    Q_sens_loss = (sens_normalized.reshape(-1,1)) * ratio
+                    Q_sens_loss_clipped = (sens_normalized.reshape(-1,1)) * ratio_clipped
+                    
+                    # Take minimum (most pessimistic) of clipped and unclipped
+                    Q_sens_loss_final = jnp.minimum(Q_sens_loss, Q_sens_loss_clipped)
+                    
                     # Actor loss
                     actor_loss = jnp.mean(
                         ent_coef * log_pi_normalized
                         - q_normalized.reshape(-1, 1)
-                        + sens_coef_local * (Q_sens_loss + updated_sens_reward_r)
+                        + sens_coef_local * (Q_sens_loss_final + updated_sens_reward_r)
                     )
 
                     return actor_loss, (log_pi, updated_sens_reward)

@@ -1,7 +1,7 @@
 # Base configuration
 defaults:
   - method: ppo
-  - env: halfcheetah_v5
+  - env: drone_v1
   - _self_
 
 # Random seed

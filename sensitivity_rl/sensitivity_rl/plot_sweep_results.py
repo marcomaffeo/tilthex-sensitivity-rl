@@ -327,6 +327,231 @@ def create_summary_table(sweep_dir: Path,
     print("="*80 + "\n")
 
 
+def compute_pareto_front(objectives: np.ndarray) -> np.ndarray:
+    """
+    Compute Pareto front from multi-objective data.
+    
+    Args:
+        objectives: Array of shape (n_points, 2) where both columns are to be maximized:
+                   - First column: maximize episodic return
+                   - Second column: maximize negative sensitivity (i.e., minimize sensitivity)
+        
+    Returns:
+        Boolean array indicating which points are on the Pareto front
+    """
+    is_pareto = np.ones(objectives.shape[0], dtype=bool)
+    for i, point in enumerate(objectives):
+        # A point is dominated if there exists another point that is >= in all objectives
+        # and strictly > in at least one objective
+        dominated_by = np.all(objectives >= point, axis=1) & np.any(objectives > point, axis=1)
+        if np.any(dominated_by):
+            is_pareto[i] = False
+    return is_pareto
+
+
+def plot_pareto_front(sweep_dir: Path,
+                      grouped_experiments: Dict[Tuple, List[Path]],
+                      output_dir: Path):
+    """
+    Create Pareto front plot for episodic return vs sensitivity.
+    
+    Args:
+        sweep_dir: Path to sweep directory
+        grouped_experiments: Dictionary of parameter groups to experiment directories
+        output_dir: Directory to save plots
+    """
+    metrics = [
+        'returns/episodic_return_true',
+        'returns/sensitivity_state_mean'
+    ]
+    
+    # Collect data for all parameter combinations
+    data_points = []
+    param_labels = []
+    
+    for param_key, exp_dirs in sorted(grouped_experiments.items()):
+        if len(exp_dirs) == 0:
+            continue
+        
+        params_dict = dict(param_key)
+        
+        # Collect final values for both metrics
+        return_values = []
+        sensitivity_values = []
+        
+        for exp_dir in exp_dirs:
+            data = load_tensorboard_data(exp_dir, metrics)
+            
+            # Get final values (average of last 10%)
+            if 'returns/episodic_return_true' in data and len(data['returns/episodic_return_true'][1]) > 0:
+                values = data['returns/episodic_return_true'][1]
+                n = max(1, len(values) // 10)
+                return_values.append(np.mean(values[-n:]))
+            
+            if 'returns/sensitivity_state_mean' in data and len(data['returns/sensitivity_state_mean'][1]) > 0:
+                values = data['returns/sensitivity_state_mean'][1]
+                n = max(1, len(values) // 10)
+                # Store positive sensitivity value (will negate later for Pareto computation)
+                sensitivity_values.append(np.mean(values[-n:]))
+        
+        if return_values and sensitivity_values:
+            mean_return = np.mean(return_values)
+            mean_sensitivity = np.mean(sensitivity_values)
+            
+            # Store for Pareto computation: [maximize return, minimize sensitivity]
+            # We negate sensitivity to convert minimization to maximization
+            data_points.append([mean_return, -mean_sensitivity])
+            
+            # Create label
+            label_parts = []
+            for k, v in sorted(params_dict.items()):
+                if k not in ['method', 'env', 'seed']:
+                    if isinstance(v, float):
+                        label_parts.append(f"{k}={v:.3g}")
+                    else:
+                        label_parts.append(f"{k}={v}")
+            
+            if label_parts:
+                param_labels.append(", ".join(label_parts))
+            else:
+                param_labels.append("Default")
+    
+    if not data_points:
+        print("Warning: No data points found for Pareto front")
+        return None
+    
+    # Convert to numpy array
+    data_points = np.array(data_points)
+    
+    # Compute Pareto front
+    is_pareto = compute_pareto_front(data_points)
+    pareto_points = data_points[is_pareto]
+    pareto_labels = [param_labels[i] for i in range(len(param_labels)) if is_pareto[i]]
+    
+    # Sort Pareto points by return value for nice plotting
+    sort_idx = np.argsort(pareto_points[:, 0])
+    pareto_points = pareto_points[sort_idx]
+    pareto_labels = [pareto_labels[i] for i in sort_idx]
+    
+    # Create plot
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Plot all points (using negative sensitivity for y-axis, so lower is better = more negative)
+    ax.scatter(data_points[:, 0], data_points[:, 1],
+               c='lightgray', s=100, alpha=0.6, label='All configurations', zorder=1)
+    
+    # Plot Pareto front points
+    ax.scatter(pareto_points[:, 0], pareto_points[:, 1],
+               c='red', s=200, marker='*', edgecolors='darkred', linewidth=1.5,
+               label='Pareto front', zorder=3)
+    
+    # Plot Pareto front line
+    ax.plot(pareto_points[:, 0], pareto_points[:, 1],
+            'r--', linewidth=2, alpha=0.5, zorder=2)
+    
+    # Find best trade-off point (compute trade-off scores)
+    return_vals = [p[0] for p in pareto_points]
+    sensitivity_vals = [-p[1] for p in pareto_points]  # Convert to positive for scoring
+    
+    best_idx = 0
+    best_score = -1
+    for i in range(len(pareto_points)):
+        norm_return = (return_vals[i] - min(return_vals)) / (max(return_vals) - min(return_vals) + 1e-10)
+        norm_sensitivity = 1 - (sensitivity_vals[i] - min(sensitivity_vals)) / (max(sensitivity_vals) - min(sensitivity_vals) + 1e-10)
+        tradeoff_score = (norm_return + norm_sensitivity) / 2
+        if tradeoff_score > best_score:
+            best_score = tradeoff_score
+            best_idx = i
+    
+    # Highlight best trade-off point
+    best_point = pareto_points[best_idx]
+    best_label = pareto_labels[best_idx]
+    ax.scatter([best_point[0]], [best_point[1]],
+               c='gold', s=400, marker='*', edgecolors='orange', linewidth=2.5,
+               label='Best trade-off', zorder=4)
+    ax.annotate(f'Best: {best_label}', (best_point[0], best_point[1]),
+               xytext=(15, 15), textcoords='offset points',
+               fontsize=10, fontweight='bold',
+               bbox=dict(boxstyle='round,pad=0.5', facecolor='gold', alpha=0.8),
+               arrowprops=dict(arrowstyle='->', connectionstyle='arc3,rad=0.2', color='orange', lw=2))
+    
+    ax.set_xlabel('Episodic Return (Higher is Better)', fontsize=14, fontweight='bold')
+    ax.set_ylabel('Negative Sensitivity Mean (Higher is Better = Lower Sensitivity)', fontsize=14, fontweight='bold')
+    ax.set_title('Pareto Front: Maximize Return vs Minimize Sensitivity\n(Optimal trade-offs)',
+                fontsize=16, fontweight='bold')
+    ax.legend(loc='best', fontsize=12)
+    ax.grid(True, alpha=0.3)
+    
+    # Save plot
+    output_file = output_dir / 'pareto_front.png'
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    print(f"Saved Pareto front plot: {output_file}")
+    
+    # Return Pareto front data for table
+    pareto_data = []
+    for i, (point, label) in enumerate(zip(pareto_points, pareto_labels)):
+        pareto_data.append({
+            'config': label,
+            'episodic_return': point[0],
+            'sensitivity_mean_negative': point[1],  # Keep negative for clarity
+            'sensitivity_mean': -point[1]  # Also store positive for reference
+        })
+    
+    return pareto_data
+
+
+def create_pareto_table(pareto_data: List[Dict], output_dir: Path):
+    """
+    Create a table with Pareto front configurations showing trade-offs.
+    
+    Args:
+        pareto_data: List of dictionaries with Pareto front points
+        output_dir: Directory to save table
+    """
+    if not pareto_data:
+        print("No Pareto front data to create table")
+        return
+    
+    # Save as JSON
+    output_file = output_dir / 'pareto_front_table.json'
+    with open(output_file, 'w') as f:
+        json.dump(pareto_data, f, indent=2)
+    
+    print(f"Saved Pareto front table: {output_file}")
+    
+    # Print table to console
+    print("\n" + "="*110)
+    print("PARETO FRONT TABLE - BEST TRADE-OFFS (Maximize Return & Minimize Sensitivity)")
+    print("="*110)
+    print(f"{'Configuration':<40} {'Return':>15} {'-Sensitivity':>15} {'Sensitivity':>15} {'Trade-off Score':>15}")
+    print("-"*110)
+    
+    for item in pareto_data:
+        # Normalize values for trade-off score (higher return, lower sensitivity = better)
+        # Simple approach: normalize to [0,1] and compute weighted sum
+        return_vals = [d['episodic_return'] for d in pareto_data]
+        sensitivity_vals = [d['sensitivity_mean'] for d in pareto_data]
+        
+        # Normalize return (higher is better)
+        norm_return = (item['episodic_return'] - min(return_vals)) / (max(return_vals) - min(return_vals) + 1e-10)
+        # Normalize sensitivity (lower is better, so invert)
+        norm_sensitivity = 1 - (item['sensitivity_mean'] - min(sensitivity_vals)) / (max(sensitivity_vals) - min(sensitivity_vals) + 1e-10)
+        
+        # Weighted trade-off score (equal weights)
+        tradeoff_score = (norm_return + norm_sensitivity) / 2
+        
+        print(f"{item['config']:<40} {item['episodic_return']:>15.2f} {item['sensitivity_mean_negative']:>15.6f} {item['sensitivity_mean']:>15.6f} {tradeoff_score:>15.4f}")
+    
+    print("="*110)
+    print("\nNOTE: -Sensitivity column shows negative values (higher = better = lower actual sensitivity)")
+    print("      Sensitivity column shows positive values (lower = better)")
+    print("Trade-off Score: Balanced metric considering both high return and low sensitivity (range: 0-1, higher is better)")
+    print("="*110 + "\n")
+
+
 def plot_sweep_results(sweep_dir: Path, output_subdir: str = "plots"):
     """
     Main function to generate all plots and summaries for a sweep.
@@ -379,6 +604,12 @@ def plot_sweep_results(sweep_dir: Path, output_subdir: str = "plots"):
     # Create summary table
     print("\nGenerating summary table...")
     create_summary_table(sweep_dir, grouped_experiments, output_dir)
+    
+    # Create Pareto front plot and table
+    print("\nGenerating Pareto front analysis...")
+    pareto_data = plot_pareto_front(sweep_dir, grouped_experiments, output_dir)
+    if pareto_data:
+        create_pareto_table(pareto_data, output_dir)
     
     print(f"\n{'='*80}")
     print(f"PLOTTING COMPLETED")

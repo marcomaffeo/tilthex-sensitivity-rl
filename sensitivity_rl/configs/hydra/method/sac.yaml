@@ -4,7 +4,7 @@
 # Learning parameters
 POLICY_LR: 3e-4
 Q_LR: 1e-3
-ALPHA_LR: 5e-4
+ALPHA_LR: 1e-4
 
 # SAC-specific parameters
 BUFFER_SIZE: 1e6

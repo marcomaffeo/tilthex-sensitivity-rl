@@ -173,11 +173,11 @@ def make_train(config, writer: SummaryWriter):
             activation=config["ACTIVATION"],
             actor_layer_sizes=config.get("ACTOR_LAYER_SIZES", [256, 256]),
             critic_layer_sizes=config.get("CRITIC_LAYER_SIZES", [256, 256]),
-            gru_hidden_size=config.get("GRU_HIDDEN_SIZE", 128),
+            gru_hidden_size=config.get("GRU_HIDDEN_SIZE", 64),
         )
         rng, _rng = jax.random.split(rng)
         init_x = jnp.zeros(env.observation_space(env_params).shape)
-        init_gru_hidden = jnp.zeros((1, config.get("GRU_HIDDEN_SIZE", 128)))
+        init_gru_hidden = jnp.zeros((1, config.get("GRU_HIDDEN_SIZE", 64)))
 
         # Load actor parameters from file if specified, otherwise initialize randomly
         if config.get("LOAD_ACTOR_PARAMS_PATH"):
@@ -252,7 +252,7 @@ def make_train(config, writer: SummaryWriter):
 
         # Initialize GRU hidden state
         gru_hidden = jnp.zeros(
-            (config["NUM_ENVS"], config.get("GRU_HIDDEN_SIZE", 128))
+            (config["NUM_ENVS"], config.get("GRU_HIDDEN_SIZE", 64))
         )
 
         # TRAIN LOOP
@@ -345,12 +345,12 @@ def make_train(config, writer: SummaryWriter):
 
             # Normalize sensitivity rewards
             # traj_batch = traj_batch._replace(
-            #    reward_s=(traj_batch.reward_s)
-            #    / (
-            #        jnp.max(traj_batch.reward_s)
-            #        - jnp.min(traj_batch.reward_s)
-            #        + 1e-8
-            #    )
+            #     reward_s=(traj_batch.reward_s)
+            #     / (
+            #         jnp.max(traj_batch.reward_s)
+            #         - jnp.min(traj_batch.reward_s)
+            #         + 1e-8
+            #     )
             # )
 
             # CALCULATE ADVANTAGE
@@ -793,12 +793,12 @@ def main(cfg: DictConfig):
         "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
-        "PARAM_SAMPLES": 10,
+        "PARAM_SAMPLES": 1,
     }
 
     import subprocess
 
-    # Call with positional and named args
+    print("Running evaluation rollouts (nominal)...")
     subprocess.run(
         [
             "python3",
@@ -811,6 +811,53 @@ def main(cfg: DictConfig):
             f"{eval_config['NUM_ROLLOUTS']}",
             "--param_samples",
             f"{eval_config['PARAM_SAMPLES']}",
+        ]
+    )
+
+    subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
+                if config["ENV_NAME"] == "drone_v0"
+                or config["ENV_NAME"] == "drone_v1"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+            "--output",
+            "nominal.png",
+        ]
+    )
+
+    print("Running evaluation rollouts (perturbed)...")
+    eval_config["PARAM_SAMPLES"] = 10
+    subprocess.run(
+        [
+            "python3",
+            os.path.dirname(__file__) + "/rollouts.py",
+            "--run_dirs",
+            f"{run_dir}",
+            "--max_step",
+            f"{eval_config['MAX_STEPS']}",
+            "--num_rollouts",
+            f"{eval_config['NUM_ROLLOUTS']}",
+            "--param_samples",
+            f"{eval_config['PARAM_SAMPLES']}",
+        ]
+    )
+
+    subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
+                if config["ENV_NAME"] == "drone_v0"
+                or config["ENV_NAME"] == "drone_v1"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+            "--output",
+            "perturbed.png",
         ]
     )
 

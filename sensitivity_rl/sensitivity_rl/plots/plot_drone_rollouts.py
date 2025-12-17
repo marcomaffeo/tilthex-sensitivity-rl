@@ -56,7 +56,7 @@ def _extract_series(to_load: Path) -> dict:
 
 
 def plot_drone_rollouts(
-    series_list: List[dict], output: Path | None = None
+    series_list: List[dict], rollout_dir: Path | None = None, output: Path | None = None
 ) -> None:
     plt.style.use("seaborn-v0_8")
     fig = plt.figure(figsize=(14, 8))
@@ -101,13 +101,11 @@ def plot_drone_rollouts(
     ax_path.set_zlabel("z [m]")
     ax_path.grid(True, alpha=0.3)
 
-    fig.suptitle("Quadrotor trajectories and control inputs")
-
     if output is None:
         plt.show()
     else:
-        output.parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(output, dpi=150)
+        rollout_dir.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(rollout_dir.parent / output, dpi=150)
         plt.close(fig)
 
 
@@ -127,6 +125,13 @@ def main() -> None:
         default=100,
         help="Maximum number of trajectories to include (default: 100)",
     )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help="Output file to save the plot (if not provided, plots in with the same directory name as rollouts_dir)"
+    )
+
     args = parser.parse_args()
 
     rollouts_dir = args.rollouts_dir
@@ -157,7 +162,7 @@ def main() -> None:
             "No valid quadrotor trajectories were loaded. Nothing to plot."
         )
 
-    plot_drone_rollouts(series_to_plot, rollouts_dir)
+    plot_drone_rollouts(series_to_plot, rollouts_dir, args.output)
 
 
 if __name__ == "__main__":

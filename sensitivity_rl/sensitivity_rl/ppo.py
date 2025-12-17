@@ -612,12 +612,12 @@ def main(cfg: DictConfig):
         "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
-        "PARAM_SAMPLES": 10,
+        "PARAM_SAMPLES": 1,
     }
 
     import subprocess
 
-    # Call with positional and named args
+    print("Running evaluation rollouts (nominal)...")
     subprocess.run(
         [
             "python3",
@@ -643,6 +643,40 @@ def main(cfg: DictConfig):
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),
+            "--output",
+            "nominal.png",
+        ]
+    )
+
+    print("Running evaluation rollouts (perturbed)...")
+    eval_config["PARAM_SAMPLES"] = 10
+    subprocess.run(
+        [
+            "python3",
+            os.path.dirname(__file__) + "/rollouts.py",
+            "--run_dirs",
+            f"{run_dir}",
+            "--max_step",
+            f"{eval_config['MAX_STEPS']}",
+            "--num_rollouts",
+            f"{eval_config['NUM_ROLLOUTS']}",
+            "--param_samples",
+            f"{eval_config['PARAM_SAMPLES']}",
+        ]
+    )
+
+    subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
+                if config["ENV_NAME"] == "drone_v0"
+                or config["ENV_NAME"] == "drone_v1"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+            "--output",
+            "perturbed.png",
         ]
     )
 

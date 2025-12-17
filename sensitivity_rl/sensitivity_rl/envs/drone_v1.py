@@ -132,11 +132,11 @@ class DroneV1(environment.Environment):
 
         self.params_min = [
             1.0,  # mass
-            jnp.array([0.015, 0.015, 0.01])  # inertia
+            jnp.array([0.01, 0.01, 0.01])  # inertia
         ]
         self.params_max = [
             1.8,  # mass
-            jnp.array([0.03, 0.03, 0.03])  # inertia
+            jnp.array([0.05, 0.05, 0.05])  # inertia
         ]
         super().__init__()
 

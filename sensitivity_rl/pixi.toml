@@ -53,14 +53,16 @@ cuda = { features = ["cuda12"], solve-group = "default" }
 # Train PPO and write latest artifacts into runs/latest
 train = "python sensitivity_rl/ppo.py"
 
+train_ppo = "python sensitivity_rl/ppo.py"
+train_sppo = "python sensitivity_rl/sppo-vs-estimation-aug.py"
+
 # Generate evaluation rollouts from a trained policy. Example:
 #   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic
 rollouts = "python sensitivity_rl/rollouts.py"
 
 plot_drone = "python sensitivity_rl/plots/plot_drone_rollouts.py"
 
-# Quick Jacobian/sensitivity checks
-test-sensitivity = "python sensitivity_rl/test_sensitivity.py"
+
 
 # Deletes all results
 clean = "rm -r ./runs/*"

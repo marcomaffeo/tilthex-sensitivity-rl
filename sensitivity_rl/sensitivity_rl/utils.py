@@ -10,7 +10,7 @@ import shutil
 def default_sensitivity(env) -> Sensitivity:
     """Default sensitivity parameters."""
     return Sensitivity(
-        log_norm=jnp.array(0.0),
+        log_norm=jnp.array(jnp.log(1e-6)),
         state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
         action=jnp.zeros((env.action_dim, env.param_dim)),  # du/dp
         policy_gains=jnp.zeros((env.action_dim, env.obs_dim)),  # dmu/dobs
@@ -20,8 +20,8 @@ def default_sensitivity(env) -> Sensitivity:
 def default_sensitivity_off(env) -> Sensitivity:
     """Default sensitivity parameters."""
     return SensitivityOff(
-        log_norm=jnp.array(0.0),
-        log_norm_old=jnp.array(0.0),
+        log_norm=jnp.array(jnp.log(1e-6)),
+        log_norm_old=jnp.array(jnp.log(1e-6)),
         state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
         F_sens_x=jnp.zeros((env.state_dim, env.param_dim)),  # dmu/dobs
         df_du=jnp.zeros((env.state_dim, env.action_dim)),  # dx/du

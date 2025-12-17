@@ -3,7 +3,7 @@
 
 # Learning parameters
 LR: 0.001
-UPDATE_EPOCHS: 10
+UPDATE_EPOCHS: 4
 NUM_MINIBATCHES: 25
 
 # RL Algorithm parameters
@@ -16,7 +16,7 @@ VF_COEF: 0.5
 MAX_GRAD_NORM: 0.5
 
 # Network architecture
-ACTIVATION: relu
+ACTIVATION: tanh
 ACTOR_LAYER_SIZES: [256, 256]
 CRITIC_LAYER_SIZES: [256, 256]
 

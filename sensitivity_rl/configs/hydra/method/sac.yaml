@@ -25,8 +25,8 @@ CLIP_EPS: 0.1
 
 # Network architecture
 ACTIVATION: relu
-ACTOR_LAYER_SIZES: [256, 256]
-CRITIC_LAYER_SIZES: [256, 256]
+ACTOR_LAYER_SIZES: [128, 128]
+CRITIC_LAYER_SIZES: [128, 128]
 
 # Training settings
 ANNEAL_LR: false

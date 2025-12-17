@@ -8,6 +8,7 @@ from .drone_obstacle import DroneObstacle
 from .drone_flip import DroneFlipV0
 from .halfcheetah import HalfCheetahV5
 from .reacher import ReacherV5
+from .tilthex_v0 import TilthexV0
 
 ENV_REGISTRY = {
     "pendulum": Pendulum,
@@ -19,6 +20,7 @@ ENV_REGISTRY = {
     "drone_flip_v0": DroneFlipV0,
     "halfcheetah_v5": HalfCheetahV5,
     "reacher_v5": ReacherV5,
+    "tilthex_v0": TilthexV0,
 }
 
 __all__ = [
@@ -32,4 +34,5 @@ __all__ = [
     "DroneObstacle",
     "HalfCheetahV5",
     "ReacherV5",
+    "TilthexV0"
 ]

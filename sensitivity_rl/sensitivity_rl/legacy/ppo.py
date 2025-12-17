@@ -37,7 +37,7 @@ from pathlib import Path
 from datetime import datetime
 from flax import serialization
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1
+from envs import Pendulum, DroneV0, DroneV1, TilthexV0
 from gymnax.environments import environment
 from envs.wrappers import (
     GymnaxWrapper,
@@ -655,6 +655,20 @@ def main(cfg: DictConfig):
         ]
     )
 
+    subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_tilthex_rollouts.py"
+                if config["ENV_NAME"] == "tilthex_v0"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+             "--output",
+            "nominal.png",
+        ]
+    )
+
     print("Running evaluation rollouts (perturbed)...")
     eval_config["PARAM_SAMPLES"] = 10
     subprocess.run(
@@ -689,3 +703,17 @@ def main(cfg: DictConfig):
 
 if __name__ == "__main__":
     main()
+=======
+    subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_tilthex_rollouts.py"
+                if config["ENV_NAME"] == "tilthex_v0"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+            "--output",
+            "perturbed.png",
+        ]
+    )

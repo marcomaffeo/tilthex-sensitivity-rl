@@ -5,26 +5,21 @@ parametric sensitivity metric optimization.
 Source: github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
 """
 
-from typing import Any
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
-from flax import struct
-
-from gymnax.environments import environment, spaces
-from gymnax.environments.environment import TEnvState, TEnvParams
-
 from envs.base import Sensitivity
-
+from flax import struct
+from gymnax.environments import environment, spaces
+from gymnax.environments.environment import TEnvParams, TEnvState
 from utils import angle_normalize
 
 
 @jax.jit
 def skew(vec):
-    return jnp.array(
-        [[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]]
-    )
+    return jnp.array([[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]])
 
 
 @jax.jit
@@ -167,6 +162,9 @@ class DroneV0(environment.Environment):
         )
         return obs_st, state_st, reward, done, info
 
+    def rescale_action(self, action, params):
+        return action
+
     @partial(jax.jit, static_argnums=(0))
     def step_env(
         self,
@@ -251,8 +249,7 @@ class DroneV0(environment.Environment):
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
 
         total_force = (
-            jnp.array([0.0, 0.0, u[0]])
-            - params.m * params.g * orientation_mat[2, :]
+            jnp.array([0.0, 0.0, u[0]]) - params.m * params.g * orientation_mat[2, :]
         )  # transpose + 3rd col = 3rd row
 
         total_torque = (
@@ -260,9 +257,7 @@ class DroneV0(environment.Environment):
         )  # multiplication by normalization factor for the torques
 
         si_mat = jnp.diag(
-            jnp.concatenate(
-                [params.m * jnp.ones(3, dtype=jnp.float32), params.I]
-            )
+            jnp.concatenate([params.m * jnp.ones(3, dtype=jnp.float32), params.I])
         )
         si_mat_inv = jnp.linalg.inv(si_mat)
 

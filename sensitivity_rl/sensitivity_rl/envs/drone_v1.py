@@ -1,37 +1,20 @@
-"""Drone_v1
-
-
-Source: github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
+"""Drone V1 Environment.
+JAX implementation of the Mikrokopter drone environment.
 """
 
-from typing import Any
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
 from flax import struct
-
 from gymnax.environments import environment, spaces
-from gymnax.environments.environment import TEnvState, TEnvParams
-
-from envs.base import Sensitivity
-
-from utils import angle_normalize
-
-
-def l1_smooth(x):
-    delta = 1.0
-    error_norm = jnp.linalg.norm(x + 1e-6)
-    quadratic = jnp.minimum(error_norm, delta)
-    linear = error_norm - quadratic
-    return 0.5 * quadratic**2 + delta * linear
+from gymnax.environments.environment import TEnvParams, TEnvState
 
 
 @jax.jit
 def skew(vec):
-    return jnp.array(
-        [[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]]
-    )
+    return jnp.array([[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]])
 
 
 @jax.jit
@@ -101,12 +84,20 @@ class EnvState(environment.EnvState):
 
 @struct.dataclass
 class EnvParams(environment.EnvParams):
-    min_torque: jax.Array = struct.field(
+    min_action: jax.Array = struct.field(
         pytree_node=False,
-        default_factory=lambda: jnp.array([0, -2.5, -2.5, -2]),
+        default_factory=lambda: jnp.array([-1.0, -1.0, -1.0, -1.0]),
     )
-    max_torque: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([1, 2.5, 2.5, 2])
+    max_action: jax.Array = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0, 1.0])
+    )
+
+    min_input: jax.Array = struct.field(
+        pytree_node=False,
+        default_factory=lambda: jnp.array([4.0, -3.0, -3.0, -1.0]),
+    )
+    max_input: jax.Array = struct.field(
+        pytree_node=False, default_factory=lambda: jnp.array([25.0, 3.0, 3.0, 1.0])
     )
     env_max_limits: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0])
@@ -116,18 +107,17 @@ class EnvParams(environment.EnvParams):
     )
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    m: float = 0.027
-    # TODO: check this
+    m: float = 1.4
     I: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([2.3951e-5, 2.3951e-5, 3.2347e-5]),
+        default_factory=lambda: jnp.array([0.022, 0.022, 0.020]),
     )
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
 class DroneV1(environment.Environment):
-    """JAX Compatible version of Drone-v1 target approaching."""
+    """JAX Compatible version of mikrokopter drone converging to a target."""
 
     def __init__(self):
         self.type = ""
@@ -137,16 +127,16 @@ class DroneV1(environment.Environment):
         self.param_dim = 4  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
         self.hovering_action = jnp.array(
-            [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]
+            [self.default_params.m * self.default_params.g / self.default_params.max_input[0], 0.0, 0.0, 0.0]
         )
 
         self.params_min = [
-            0.02,  # mass
-            jnp.array([1e-5, 1e-5, 1e-5]),  # inertia
+            1.0,  # mass
+            jnp.array([0.01, 0.01, 0.01])  # inertia
         ]
         self.params_max = [
-            0.05,  # mass
-            jnp.array([1e-4, 1e-4, 1e-4]),  # inertia
+            1.8,  # mass
+            jnp.array([0.05, 0.05, 0.05])  # inertia
         ]
         super().__init__()
 
@@ -154,6 +144,12 @@ class DroneV1(environment.Environment):
     def default_params(self) -> EnvParams:
         """Default environment parameters for Drone-v1."""
         return EnvParams()
+
+    def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
+        action_span = params.max_action - params.min_action
+        input_span = params.max_input - params.min_input
+        normalized = (action - params.min_action) / action_span
+        return params.min_input + normalized * input_span
 
     @partial(jax.jit, static_argnames=("self",))
     def step(
@@ -185,30 +181,29 @@ class DroneV1(environment.Environment):
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
         """Integrate pendulum ODE and return transition."""
 
-        u = jnp.clip(action, params.min_torque, params.max_torque)
+        clipped_action = jnp.clip(action, params.min_action, params.max_action)
+        input = self.rescale_action(clipped_action, params)
 
         state = env_state.state
-        pos_diff_old = state.pos - env_state.target_pos
 
-        state_next = self.step_dynamics(key, state, action, params)
+        state_next = self.step_dynamics(key, state, input, params)
 
         pos_diff = state_next.pos - env_state.target_pos
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.01,
-            5.0,  # reward when close to target
-            1.0
-            * (
-                -l1_smooth(5.0 * (state_next.pos - env_state.target_pos))
-            ),  # distance penalty
+            jnp.linalg.norm(pos_diff) < 0.02,
+            10.0,  # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
+        thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
+        thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
+
         reward = (
-            -0.1 * l1_smooth(state_next.omega)
-            - 0.1 * l1_smooth(state_next.vel)
+            -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
-            - 0.5 * (l1_smooth(u - self.hovering_action))
-            # - 0.005 * (l1_smooth(u - env_state.last_u) ** 2)
+            - 0.01 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
+            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
         reward = reward.squeeze()
@@ -216,7 +211,7 @@ class DroneV1(environment.Environment):
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
-            last_u=u.reshape(-1),
+            last_u=input.reshape(-1),
             time=env_state.time + 1,
         )
 
@@ -254,7 +249,7 @@ class DroneV1(environment.Environment):
             next state after time dt
         """
 
-        u = jnp.clip(action, params.min_torque, params.max_torque)
+        u = jnp.clip(action, params.min_input, params.max_input)
 
         quat = state.attitude
         ang_vel = state.omega
@@ -263,21 +258,21 @@ class DroneV1(environment.Environment):
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
 
         total_force = (
-            jnp.array([0.0, 0.0, u[0]])
-            - params.m * params.g * orientation_mat[2, :]
+            jnp.array([0.0, 0.0, u[0]]) - params.m * params.g * orientation_mat[2, :]
         )  # transpose + 3rd col = 3rd row
 
         total_torque = (
-            1e-3 * u[1:4] - skew(ang_vel) @ params.I @ ang_vel
-        )  # multiplication by normalization factor
+            u[1:4] - skew(ang_vel) @ params.I @ ang_vel
+        ) 
 
         si_mat = jnp.diag(
-            jnp.concatenate(
-                [params.m * jnp.ones(3, dtype=jnp.float32), params.I]
-            )
+            jnp.concatenate([params.m * jnp.ones(3, dtype=jnp.float32), params.I])
         )
         si_mat_inv = jnp.linalg.inv(si_mat)
 
+        si_mat = jnp.diag(
+            jnp.concatenate([params.m * jnp.ones(3, dtype=jnp.float32), params.I])
+        )
         acc = si_mat_inv @ jnp.concatenate([total_force, total_torque])
 
         pos = state.pos + params.dt * state.vel
@@ -362,20 +357,20 @@ class DroneV1(environment.Environment):
     @property
     def name(self) -> str:
         """Environment name."""
-        return "Pendulum-Sensitivity"
+        return "Drone-v1"
 
     @property
     def num_actions(self) -> int:
         """Number of actions possible in environment."""
-        return 1
+        return 4
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Box:
         """Action space of the environment."""
         if params is None:
             params = self.default_params
         return spaces.Box(
-            low=params.min_torque,
-            high=params.max_torque,
+            low=params.min_action,
+            high=params.max_action,
             shape=(4,),
             dtype=jnp.float32,
         )

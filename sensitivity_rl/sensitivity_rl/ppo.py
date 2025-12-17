@@ -8,8 +8,8 @@ import hydra
 # --- IMPORTANT ---
 # Set this *before* importing JAX
 # This tells the script to only see the GPU with ID '0' (the first GPU)
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
 os.environ["JAX_PLATFORMS"] = "cuda,cpu"

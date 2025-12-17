@@ -528,36 +528,34 @@ class SensitivityWrapper(GymnaxWrapper):
         nominal_params = jax.flatten_util.ravel_pytree(self._env.default_params)[0]
 
         # Compute Jacobians
-        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
-        df_du = self.df_du(key, sens_state.env_state, state, action, params)
-        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
-        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
-
-        """
-        jax.debug.callback(
-            lambda x, y, z, w, d: (
-                print(f"Sensitivity jacobians: {x},{y},{z},{w}") if d else None
-            ),
-            jnp.linalg.matrix_norm(df_dx, ord="fro"),
-            jnp.linalg.matrix_norm(df_du, ord="fro"),
-            jnp.linalg.matrix_norm(df_dp, ord="fro"),
-            jnp.linalg.matrix_norm(dobs_dx, ord="fro"),
-            done,
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, nominal_params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, nominal_params)
+        # df_dp is "normalized" by multiplying by nominal params
+        df_dp = (
+            self.df_dp(key, sens_state.env_state, state, action, nominal_params)
         )
-        """
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, nominal_params)
+
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
-
-        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
-
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         # Update sensitivities using chain rule
         sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
-        sens_s_next = jnp.clip(sens_s_next, -100000, 100000)
+        sens_s_next = (
+            df_dx @ sens_s
+            + df_du @ sens_a
+            + df_dp / jnp.exp(sens_state.sensitivity.log_norm)
+        )
+
+        # not normalized
+        norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
+        # normalize
+        sens_s_next = sens_s_next / (norm_next + 1e-6)
         # Pack updated sensitivitie
         return Sensitivity(
+            log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             state=sens_s_next,
             action=sens_a,
             policy_gains=dmu_dobs,
@@ -597,19 +595,19 @@ class SensitivityWrapper(GymnaxWrapper):
         # )
 
         # Sensitivity difference reward regularization (next sensitivity whould be smaller than previous one)
-        reward = reward - self.regularization_weight * (
-            jnp.clip(
-                jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
-            - 0.99
-            * jnp.clip(
-                jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
-        )
+        # reward = reward - self.regularization_weight * (
+        #     jnp.clip(
+        #         jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
+        #         0,
+        #         100000,
+        #     )
+        #     - 0.99
+        #     * jnp.clip(
+        #         jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
+        #         0,
+        #         100000,
+        #     )
+        # )
 
         sens_state = SensitivityEnvState(
             env_state=env_state, sensitivity=next_sensitivity
@@ -711,39 +709,32 @@ class SensitivityExtWrapper(GymnaxWrapper):
         nominal_params = jax.flatten_util.ravel_pytree(self._env.default_params)[0]
 
         # Compute Jacobians
-        df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
-        df_du = self.df_du(key, sens_state.env_state, state, action, params)
-        df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
-        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
-
-        """
-        jax.debug.callback(
-            lambda x, y, z, w, d: (
-                print(f"Sensitivity jacobians: {x},{y},{z},{w}") if d else None
-            ),
-            jnp.linalg.matrix_norm(df_dx, ord="fro"),
-            jnp.linalg.matrix_norm(df_du, ord="fro"),
-            jnp.linalg.matrix_norm(df_dp, ord="fro"),
-            jnp.linalg.matrix_norm(dobs_dx, ord="fro"),
-            done,
+        df_dx = self.df_dx(key, sens_state.env_state, state, action, nominal_params)
+        df_du = self.df_du(key, sens_state.env_state, state, action, nominal_params)
+        df_dp = (
+            self.df_dp(key, sens_state.env_state, state, action, nominal_params) 
         )
-        """
+        dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, nominal_params)
+
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
-        
-        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
-        dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
-        
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
-        sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
-        
         # Update sensitivities using chain rule
-        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp
-        sens_s_next = jnp.clip(sens_s_next, -100000, 100000)
+        sens_s_next = (
+            df_dx @ sens_s
+            + df_du @ sens_a
+            + df_dp / jnp.exp(sens_state.sensitivity.log_norm)
+        )
+
+        # not normalized
+        norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
+        # normalize
+        sens_s_next = sens_s_next / (norm_next + 1e-6)
         # Pack updated sensitivitie
         return Sensitivity(
+            log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             state=sens_s_next,
             action=sens_a,
             policy_gains=dmu_dobs,
@@ -772,21 +763,9 @@ class SensitivityExtWrapper(GymnaxWrapper):
 
         info["trw"] = reward
 
-        info["sensitivity_state"] = jnp.clip(
-            jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"), 0, 100000
-        )
-        info["sensitivity_state_rw"] = -(
-            jnp.clip(
-                jnp.linalg.matrix_norm(next_sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
-            - 0.99
-            * jnp.clip(
-                jnp.linalg.matrix_norm(sens_state.sensitivity.state, ord="fro"),
-                0,
-                100000,
-            )
+        info["sensitivity_state"] = next_sensitivity.log_norm
+        info["sensitivity_state_rw"] = - (
+            next_sensitivity.log_norm - sens_state.sensitivity.log_norm
         )
 
         sens_state = SensitivityEnvState(
@@ -907,10 +886,6 @@ class SensitivityOffWrapper(GymnaxWrapper):
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
-        
-        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
-        dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
-        
         # Update action sensitivity
         F_sens_u = df_du @ dmu_dobs @ dobs_dx @ sens_s
         F_sens_u = jnp.where(jnp.isnan(F_sens_u), 1e3, F_sens_u)

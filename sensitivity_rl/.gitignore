@@ -2,6 +2,7 @@
 runs/
 results/
 videos/
+outputs/
 
 .DS_Store
 

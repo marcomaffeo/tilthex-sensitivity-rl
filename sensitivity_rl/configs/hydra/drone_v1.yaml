@@ -6,14 +6,14 @@ defaults:
 ENV_NAME: drone_v1
 
 # Learning parameters
-NUM_ENVS: 1000
+NUM_ENVS: 2048
 NUM_STEPS: 200
 TOTAL_TIMESTEPS: 2e7
-NUM_MINIBATCHES: 64
+NUM_MINIBATCHES: 128
 
 # RL Algorithm parameters
 GAMMA: 0.95
-CLIP_EPS: 0.4
+CLIP_EPS: 0.2
 
 # Network architecture
 ACTIVATION: tanh

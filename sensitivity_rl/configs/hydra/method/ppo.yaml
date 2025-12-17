@@ -27,7 +27,7 @@ DEBUG: true
 
 # Sensitivity settings
 SENSITIVITY: true
-SENSITIVITY_REGULARIZATION_WEIGHT: 0.5
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.0
 
 # GRU settings (for value sensitivity network)
 GRU_HIDDEN_SIZE: 128

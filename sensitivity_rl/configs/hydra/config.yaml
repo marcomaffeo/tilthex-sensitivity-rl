@@ -6,4 +6,4 @@ defaults:
 
 # Override any method/env settings below if needed
 # Random seed
-SEED: 0
+SEED: 3

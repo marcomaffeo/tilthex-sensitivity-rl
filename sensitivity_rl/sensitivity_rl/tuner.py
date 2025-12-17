@@ -76,15 +76,16 @@ ENVIRONMENTS = ["drone_v1"]
 # Parameter sweeps - these will be applied to all method/environment combinations
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0, 3, 4],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.5, 0.7],
+    "SEED": [0],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
-    "GAMMA": [0.96, 0.98, 0.99],
+    "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2],
-    "UPDATE_EPOCHS": [5, 10],
-    "ENT_COEF": [0.005, 0.001, 0.0],
+    "CLIP_EPS": [0.1],
+    "UPDATE_EPOCHS": [5],
+    "ENT_COEF": [0.005],
+    "TOTAL_TIMESTEPS": [100_000],
 }
 
 # Method name mapping for config selection
@@ -100,7 +101,7 @@ METHOD_CONFIG_NAMES = {
 # Number of experiments to run in parallel (set based on your CPU/GPU resources)
 # Set to 1 for sequential execution, or higher for parallel execution
 # Note: Each parallel job will run in a separate process
-NUM_PARALLEL_JOBS = 5
+NUM_PARALLEL_JOBS = 1
 
 # Set to True to run evaluation rollouts after each experiment
 RUN_EVAL_ROLLOUTS = True

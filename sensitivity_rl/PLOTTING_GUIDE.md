@@ -9,10 +9,11 @@ The `plot_sweep_results.py` script automatically generates plots and summary tab
 - **Automatic aggregation** across random seeds
 - **Mean and standard deviation** plots with confidence bands
 - **Multiple metrics** tracked:
+  - Tradeoff Pareto Front 
   - Episodic Return (True Reward)
   - Sensitivity State Mean
   - Sensitivity State Max
-- **Summary table** with final performance metrics
+- **Summary table** with final performance metrics and pareto front points
 - **Flexible usage**: Can be run from tuner or standalone
 
 ## Usage
@@ -53,7 +54,10 @@ After running, you'll find in the `plots/` subdirectory:
 1. **`returns_episodic_return_true.png`** - Learning curves for true episodic returns
 2. **`returns_sensitivity_state_mean.png`** - Sensitivity state mean over training
 3. **`returns_sensitivity_state_max.png`** - Maximum sensitivity state over training
-4. **`summary.json`** - Final metrics table (JSON format)
+4. **`pareto_front.png`** - Tradeoff sensitivity norm and return
+5. **`summary.json`** - Final metrics table (JSON format)
+6. **`pareto_front_table.json`** - Final Pareto Front table points (JSON format)
+
 
 ## Plot Interpretation
 

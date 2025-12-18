@@ -85,17 +85,11 @@ def make_train(config, writer: SummaryWriter):
     if config["SENSITIVITY"]:
         if env.type == "mujoco":
             env = MujocoSensitivityWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
+                env
             )
         else:
             env = SensitivityWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
+                env
             )
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)

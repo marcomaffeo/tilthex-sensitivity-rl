@@ -39,8 +39,8 @@ from envs.wrappers import (
     NormalizeVecRewardSensitivity,
     ClipAction,
     SensitivityWrapper,
-    SensitivityExtWrapper,
-    MujocoSensitivityExtWrapper,
+    ComputeSensitivityReward,
+    MujocoSensitivityWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -128,29 +128,17 @@ def make_train(config, writer: SummaryWriter):
     env = GymnaxWrapper(env)
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
-    if config["SENSITIVITY"]:
-        if env.type == "mujoco":
-            env = MujocoSensitivityExtWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
-            )
-        else:
-            env = SensitivityExtWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
-            )
+    if env.type == "mujoco":
+        env = MujocoSensitivityWrapper(env)
+    else:
+        env = SensitivityWrapper(env)
+    env = ComputeSensitivityReward(env)
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        if config["SENSITIVITY"]:
-            env = NormalizeVecRewardSensitivity(env, config["GAMMA"])
-        else:
-            env = NormalizeVecReward(env, config["GAMMA"])
+        env = NormalizeVecRewardSensitivity(env, config["GAMMA"])
+
 
     def linear_schedule(count):
         frac = (

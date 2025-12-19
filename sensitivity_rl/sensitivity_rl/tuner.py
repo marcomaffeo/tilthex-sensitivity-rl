@@ -31,6 +31,7 @@ This will run 3 × 3 × 2 = 18 experiments.
 
 import os
 import sys
+import copy
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -48,6 +49,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from omegaconf import OmegaConf
 import jax
+from flax import serialization
+from torch.utils.tensorboard import SummaryWriter
+
+from algorithms import ALGORITHM_REGISTRY
+from train import make_train, run_evaluation
 
 # Import plotting function
 try:
@@ -57,9 +63,6 @@ except ImportError:
     print("Warning: plot_sweep_results module not found. Plotting will be skipped.")
     PLOTTING_AVAILABLE = False
 
-# =============================================================================
-# SWEEP PARAMETERS - Edit this section to define your parameter sweeps
-# =============================================================================
 
 # =============================================================================
 # SWEEP PARAMETERS - Edit this section to define your parameter sweeps
@@ -67,7 +70,7 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["sppo-vs-estimation-aug"]
+METHODS = ["ppo"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
@@ -76,22 +79,23 @@ ENVIRONMENTS = ["drone_v1"]
 # Parameter sweeps - these will be applied to all method/environment combinations
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0],
+    "SEED": [0, 1],
     "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1],
-    "UPDATE_EPOCHS": [5],
-    "ENT_COEF": [0.005],
-    "TOTAL_TIMESTEPS": [100_000],
+    "CLIP_EPS": [0.1, 0.2],
+    "UPDATE_EPOCHS": [4],
+    "ENT_COEF": [0.005, 0.001],
+    "TOTAL_TIMESTEPS": [50_000_000],
 }
 
 # Method name mapping for config selection
 # Maps script names to config group names
 METHOD_CONFIG_NAMES = {
     "ppo": "ppo",
+    "sppo_aug": "ppo",
     "sppo-vs-estimation": "ppo",
     "sppo-vs-estimation-aug": "ppo",
     "sac-estimation": "sac",
@@ -104,10 +108,10 @@ METHOD_CONFIG_NAMES = {
 NUM_PARALLEL_JOBS = 1
 
 # Set to True to run evaluation rollouts after each experiment
-RUN_EVAL_ROLLOUTS = True
+RUN_EVAL_ROLLOUTS = False
 
 # Set to True to generate plots after sweep completes
-GENERATE_PLOTS = True
+GENERATE_PLOTS = False
 
 # Evaluation settings
 EVAL_CONFIG = {
@@ -143,6 +147,66 @@ def generate_param_combinations(sweep_params: Dict[str, List[Any]]) -> List[Dict
     return combinations
 
 
+# Fields that should be coerced to integers (Hydra may parse as float)
+INT_FIELDS = {
+    "SEED",
+    "NUM_ENVS",
+    "NUM_STEPS",
+    "TOTAL_TIMESTEPS",
+    "NUM_MINIBATCHES",
+    "NUM_ROLLOUTS",
+    "MAX_STEPS",
+    "PARAM_SAMPLES",
+}
+
+
+def normalize_config(config: Dict[str, Any], method: str) -> Dict[str, Any]:
+    """Ensure config types are JSON/JAX friendly and annotate algorithm."""
+    cfg = copy.deepcopy(config)
+    cfg["ALGORITHM"] = method
+
+    for key in INT_FIELDS:
+        if key in cfg:
+            try:
+                cfg[key] = int(cfg[key])
+            except (TypeError, ValueError):
+                pass
+    return cfg
+
+
+def run_experiment_job(method: str, config_dict: Dict[str, Any], run_dir: Path, rng: jax.random.PRNGKey):
+    """Run a single experiment using the unified AlgorithmSpec pipeline."""
+    if method not in ALGORITHM_REGISTRY:
+        raise ValueError(f"Unknown method '{method}'. Available: {list(ALGORITHM_REGISTRY.keys())}")
+
+    # Clear JAX caches to avoid pytree metadata conflicts between experiments
+    jax.clear_caches()
+
+    spec = ALGORITHM_REGISTRY[method]
+    config = normalize_config(config_dict, method)
+
+
+    writer = SummaryWriter(str(run_dir))
+    train_fn = make_train(config, spec, writer)
+    train_jit = jax.jit(train_fn)
+    final_state = train_jit(rng)
+
+    params = final_state.train_state.params
+    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+
+    with open(run_dir / "config.json", "w") as f:
+        json.dump(config, f, indent=2)
+
+    hparam_dict = {k: v for k, v in config.items() if isinstance(v, (int, float, bool, str))}
+    writer.add_hparams(hparam_dict, {}, run_name=".")
+    writer.close()
+
+    if RUN_EVAL_ROLLOUTS:
+        run_evaluation(config, run_dir)
+
+    return run_dir
+
+
 def _run_experiment_subprocess(args_tuple):
     """
     Wrapper function for running experiment in a subprocess.
@@ -156,15 +220,10 @@ def _run_experiment_subprocess(args_tuple):
     """
     method, config_dict, experiment_name, run_dir, idx, total = args_tuple
     
-    # Set GPU memory limits and cache BEFORE importing JAX
+    # Set GPU memory limits
     import os
     import shutil
     
-    # Clear and set separate cache directory for this process
-    cache_dir = f"/tmp/jax_cache_{idx}"
-    if os.path.exists(cache_dir):
-        shutil.rmtree(cache_dir)
-    os.environ["JAX_COMPILATION_CACHE_DIR"] = cache_dir
     
     # Prevent pre-allocation of all GPU memory
     os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
@@ -178,25 +237,17 @@ def _run_experiment_subprocess(args_tuple):
     
     # Now import JAX and other dependencies
     import jax
-    from importlib import import_module
     import traceback
     
     try:
-        # Import the run_experiment function from the appropriate method script
-        method_module = import_module(method)
-        run_experiment = method_module.run_experiment
-        
-        # Initialize random key
         rng = jax.random.PRNGKey(config_dict.get("SEED", 30))
         
         print(f"\n[{idx}/{total}] Starting experiment: {experiment_name}")
         print(f"[{idx}/{total}] Method: {method}, Env: {config_dict.get('ENV_NAME')}")
         print(f"[{idx}/{total}] GPU Memory Fraction: {memory_fraction:.2%}")
-        print(f"[{idx}/{total}] Cache Directory: {cache_dir}")
         print(f"[{idx}/{total}] Run directory: {run_dir}\n")
         
-        # Run the experiment
-        run_experiment(config_dict, run_dir, rng)
+        run_experiment_job(method, config_dict, run_dir, rng)
         
         print(f"\n[{idx}/{total}] Completed experiment: {experiment_name}")
         print(f"[{idx}/{total}] Results saved to: {run_dir}\n")
@@ -206,7 +257,6 @@ def _run_experiment_subprocess(args_tuple):
     except Exception as e:
         error_msg = f"Experiment {idx} ({method}) failed with error: {e}"
         print(f"\nERROR: {error_msg}")
-        import traceback
         traceback.print_exc()
         return (False, str(run_dir), str(e), experiment_name)
 
@@ -227,20 +277,13 @@ def run_single_experiment(method, config_dict, experiment_name, run_dir, idx, to
         Tuple of (success, run_dir, error_message)
     """
     try:
-        # Import the run_experiment function from the appropriate method script
-        from importlib import import_module
-        method_module = import_module(method)
-        run_experiment = method_module.run_experiment
-        
-        # Initialize random key
         rng = jax.random.PRNGKey(config_dict.get("SEED", 30))
         
         print(f"\n[{idx}/{total}] Starting experiment: {experiment_name}")
         print(f"[{idx}/{total}] Method: {method}, Env: {config_dict.get('ENV_NAME')}")
         print(f"[{idx}/{total}] Run directory: {run_dir}\n")
         
-        # Run the experiment
-        run_experiment(config_dict, run_dir, rng)
+        run_experiment_job(method, config_dict, run_dir, rng)
         
         print(f"\n[{idx}/{total}] Completed experiment: {experiment_name}")
         print(f"[{idx}/{total}] Results saved to: {run_dir}\n")
@@ -308,6 +351,10 @@ def run_sweep_experiments():
     exp_counter = 0
     
     for method in METHODS:
+        if method not in ALGORITHM_REGISTRY:
+            print(f"WARNING: Method '{method}' is not registered. Available: {list(ALGORITHM_REGISTRY.keys())}")
+            continue
+
         for env_name in ENVIRONMENTS:
             # Get the method config name (maps method script to config group)
             method_config = METHOD_CONFIG_NAMES.get(method, "ppo")

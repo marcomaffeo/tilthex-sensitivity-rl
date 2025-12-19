@@ -9,9 +9,7 @@ from gymnax.environments import environment, spaces
 from envs.base import Sensitivity, SensitivityOff
 from utils import (
     angle_normalize,
-    normalize,
-    default_sensitivity,
-    default_sensitivity_off,
+    normalize
 )
 
 
@@ -473,7 +471,7 @@ class SensitivityWrapper(GymnaxWrapper):
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ):
         obs, env_state = self._env.reset(key, params)
-        sensitivity = default_sensitivity(self._env)
+        sensitivity = Sensitivity.default(self._env)
         state = SensitivityEnvState(
             env_state=env_state, sensitivity=sensitivity
         )
@@ -806,8 +804,8 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ):
         obs, env_state = self._env.reset(key, params)
-        sensitivity = default_sensitivity_off(self._env)
-        state = SensitivityOffEnvState(
+        sensitivity = SensitivityOff(self._env)
+        state = SensitivityOffEnvState.default(
             env_state=env_state, sensitivity=sensitivity
         )
         return obs, state

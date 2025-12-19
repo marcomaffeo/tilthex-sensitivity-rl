@@ -44,7 +44,8 @@ from utils import (
     update_latest_symlink,
 )
 from torch.utils.tensorboard import SummaryWriter
-from buffers import _calculate_gae, RolloutTransition
+from common import gae_standard
+from buffers import RolloutTransition
 from networks import ActorCritic
 
 
@@ -216,7 +217,7 @@ def make_train(config, writer: SummaryWriter):
             train_state, env_state, last_obs, rng = runner_state
             _, last_val = network.apply(train_state.params, last_obs)
 
-            advantages, targets = _calculate_gae(config, traj_batch, last_val)
+            advantages, targets = gae_standard(config, traj_batch, last_val)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):

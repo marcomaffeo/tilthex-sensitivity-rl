@@ -50,11 +50,18 @@ cuda = { features = ["cuda12"], solve-group = "default" }
 
 
 [tasks]
-# Train PPO and write latest artifacts into runs/latest
-train = "python sensitivity_rl/ppo.py"
+# Unified training entry point
+# Usage: pixi run train --algorithm ppo --config configs/drone_v0.json
+#        pixi run train --algorithm sppo_aug --config configs/drone_v0.json
+train = "python sensitivity_rl/train.py"
 
-train_ppo = "python sensitivity_rl/ppo.py"
-train_sppo = "python sensitivity_rl/sppo-vs-estimation-aug.py"
+# Convenience aliases for common algorithms
+train_ppo = "python sensitivity_rl/train.py ALGORITHM=ppo"
+train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo_aug"
+
+# Legacy scripts (deprecated, use train.py instead)
+train_ppo_legacy = "python sensitivity_rl/ppo.py"
+train_sppo_legacy = "python sensitivity_rl/sppo-vs-estimation-aug.py"
 
 # Generate evaluation rollouts from a trained policy. Example:
 #   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic

@@ -15,11 +15,12 @@ from envs.wrappers import (
     ClipAction,
     SensitivityWrapper,
     AddSensitivityToReward,
+    ComputeSensitivityReward,
     MujocoSensitivityWrapper,
     ResetEnvWrapper,
     LogWrapper,
     VecEnv,
-    NormalizeVecReward,
+    NormalizeVecRewardSensitivity,
 )
 
 
@@ -32,12 +33,13 @@ def wrap_env(env, config):
         env = MujocoSensitivityWrapper(env)
     else:
         env = SensitivityWrapper(env)
-    env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
+    # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
+    env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
-        env = NormalizeVecReward(env, config["GAMMA"])
+        env = NormalizeVecRewardSensitivity(env, config["GAMMA"])
 
     return env
 
@@ -139,6 +141,10 @@ def make_collect_fn(config, env, env_params, networks):
             rng_step, runner_state.env_state, action, env_params
         )
         
+        # Add sensitivity regularization to reward at the end so that it is normalized
+        sensitivity_reward = info.get("sensitivity_state_rw", jnp.zeros_like(reward))
+        reward += config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_reward
+
         # Reset GRU hidden on episode end
         new_gru_hidden = (1 - done.reshape(-1, 1)) * new_gru_hidden + done.reshape(-1, 1) * jnp.zeros_like(new_gru_hidden)
         

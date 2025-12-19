@@ -70,7 +70,7 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["ppo"]
+METHODS = ["sppo_aug", "ppo"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
@@ -80,14 +80,14 @@ ENVIRONMENTS = ["drone_v1"]
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
     "SEED": [0, 1],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2],
+    "CLIP_EPS": [0.2],
     "UPDATE_EPOCHS": [4],
-    "ENT_COEF": [0.005, 0.001],
+    "ENT_COEF": [0.001],
     "TOTAL_TIMESTEPS": [50_000_000],
 }
 
@@ -108,7 +108,7 @@ METHOD_CONFIG_NAMES = {
 NUM_PARALLEL_JOBS = 1
 
 # Set to True to run evaluation rollouts after each experiment
-RUN_EVAL_ROLLOUTS = False
+RUN_EVAL_ROLLOUTS = True
 
 # Set to True to generate plots after sweep completes
 GENERATE_PLOTS = False

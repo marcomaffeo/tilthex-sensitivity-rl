@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
-from common import gae_standard
+from algorithms.common import gae_standard
 from net_utils import create_optimizer, make_linear_schedule
 from buffers import RolloutTransition, RunnerState, UpdateState
 from networks import ActorCritic

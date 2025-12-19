@@ -5,8 +5,9 @@ parametric sensitivity metric optimization.
 Based on the MuJoCo HalfCheetah environment.
 """
 
-from typing import Any
+from typing import Any, List
 from functools import partial
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -319,3 +320,13 @@ class HalfCheetahV5(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
+
+    @staticmethod
+    def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
+        """Plot HalfCheetah rollout trajectories.
+        
+        Args:
+            series_list: List of trajectory dictionaries.
+            output: Optional path to save the figure.
+        """
+        print("[plot_rollouts] HalfCheetah plotting is not implemented yet.")

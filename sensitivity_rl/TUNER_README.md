@@ -18,7 +18,7 @@ The tuner allows you to:
 
 ```python
 # Choose methods to test
-METHODS = ["sppo-vs-estimation-aug"]
+METHODS = ["sppo_aug"]
 
 # Choose environments
 ENVIRONMENTS = ["drone_v1"]

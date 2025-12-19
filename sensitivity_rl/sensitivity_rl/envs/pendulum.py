@@ -5,10 +5,12 @@ parametric sensitivity metric optimization.
 Source: github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
 """
 
-from typing import Any
+from typing import Any, List
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from flax import struct
 
 from gymnax.environments import environment, spaces
@@ -207,3 +209,65 @@ class Pendulum(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
+
+    @staticmethod
+    def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
+        """Plot pendulum rollout trajectories.
+        
+        Args:
+            series_list: List of trajectory dictionaries with keys:
+                - 'state': array of shape (T+1, 2) with [theta, theta_dot]
+                - 'actions': array of shape (T, action_dim)
+            output: Optional path to save the figure. If None, displays interactively.
+        """
+        import matplotlib.pyplot as plt
+        
+        fig, axes = plt.subplots(2, 2, figsize=(10, 6), constrained_layout=True)
+
+        for series in series_list:
+            state = series.get("state", None)
+            if state is None:
+                continue
+            state = np.asarray(state)
+            theta = state[:, 0]
+            theta_dot = state[:, 1]
+            timesteps = np.arange(theta.shape[0])
+            
+            axes[0, 0].plot(timesteps, theta, alpha=0.4)
+            axes[0, 1].plot(timesteps, theta_dot, alpha=0.4)
+            
+            actions = np.asarray(series.get("actions", []))
+            if actions.size > 0:
+                action = actions[:, 0] if actions.ndim > 1 else actions
+                axes[1, 0].plot(np.arange(action.shape[0]), action, alpha=0.4)
+            
+            axes[1, 1].plot(theta, theta_dot, alpha=0.4)
+
+        axes[0, 0].set_title("Theta")
+        axes[0, 0].set_xlabel("t")
+        axes[0, 0].set_ylabel("theta")
+        axes[0, 0].grid(True, alpha=0.3)
+
+        axes[0, 1].set_title("Theta dot")
+        axes[0, 1].set_xlabel("t")
+        axes[0, 1].set_ylabel("theta_dot")
+        axes[0, 1].grid(True, alpha=0.3)
+
+        axes[1, 0].set_title("Action")
+        axes[1, 0].set_xlabel("t")
+        axes[1, 0].set_ylabel("u")
+        axes[1, 0].grid(True, alpha=0.3)
+
+        axes[1, 1].set_title("Phase portrait")
+        axes[1, 1].set_xlabel("theta")
+        axes[1, 1].set_ylabel("theta_dot")
+        axes[1, 1].grid(True, alpha=0.3)
+
+        fig.suptitle("Pendulum trajectories")
+
+        if output is None:
+            plt.show()
+        else:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output, dpi=150)
+            plt.close(fig)

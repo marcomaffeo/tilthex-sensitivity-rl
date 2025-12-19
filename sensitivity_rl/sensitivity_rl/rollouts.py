@@ -40,6 +40,7 @@ class RolloutConfig:
     deterministic: bool
     seed: int
     param_samples: int
+    plot: bool
 
 
 
@@ -58,7 +59,7 @@ def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
 
 def build_env_from_config(
     config: Dict[str, Any],
-) -> Tuple[GymnaxWrapper, Any, str]:
+) -> Tuple[GymnaxWrapper, Any, str, type]:
     env_name = config.get("ENV_NAME", "drone_v0").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
@@ -73,7 +74,7 @@ def build_env_from_config(
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)
 
-    return wrapped_env, env_params, env_name
+    return wrapped_env, env_params, env_name, env_cls
 
 
 
@@ -187,7 +188,7 @@ def init_model_and_params(
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     config, params_bytes = load_run_artifacts(run_dir)
-    env, env_params, env_name = build_env_from_config(config)
+    env, env_params, env_name, env_cls = build_env_from_config(config)
 
     actor_critic, params = init_model_and_params(
         config, env, env_params, params_bytes
@@ -228,6 +229,8 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         f"[rollouts] Using {param_sample_count} environment parameter set(s)"
         f" for {run_dir.name}"
     )
+
+    all_series = []  # Collect trajectory data for plotting
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
@@ -274,6 +277,11 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
                 env_params_samples[sample_idx],
             )
 
+            # Collect series for plotting
+            series_entry = {"actions": actions}
+            series_entry.update(state_flat)
+            all_series.append(series_entry)
+
             suffix = (
                 " (nominal)"
                 if sample_idx == 0
@@ -287,6 +295,18 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     print(
         f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
     )
+
+    # Generate plots if requested
+    if rcfg.plot and all_series:
+        plot_name = "rollouts"
+        if rcfg.param_samples > 1:
+            plot_name += f"_perturbed"
+        output_path = rollouts_dir.parent / (plot_name + ".png")
+        print(f"[rollouts] Generating plot -> {output_path}")
+        try:
+            env_cls.plot_rollouts(all_series, output_path)
+        except Exception as exc:
+            print(f"[rollouts] Plotting failed: {exc}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -332,6 +352,11 @@ def parse_args() -> argparse.Namespace:
             "Value 1 uses only the nominal parameters."
         ),
     )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate plots of the rollouts after saving trajectories.",
+    )
     return parser.parse_args()
 
 
@@ -343,6 +368,7 @@ def main() -> None:
         deterministic=args.deterministic,
         seed=args.seed,
         param_samples=max(1, args.param_samples),
+        plot=args.plot,
     )
 
     for run_dir_str in args.run_dirs:

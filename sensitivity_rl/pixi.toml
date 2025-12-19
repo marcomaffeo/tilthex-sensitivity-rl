@@ -67,9 +67,6 @@ train_sppo_legacy = "python sensitivity_rl/sppo-vs-estimation-aug.py"
 #   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic
 rollouts = "python sensitivity_rl/rollouts.py"
 
-plot_drone = "python sensitivity_rl/plots/plot_drone_rollouts.py"
-
-
 
 # Deletes all results
 clean = "rm -r ./runs/*"

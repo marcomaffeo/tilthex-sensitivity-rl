@@ -6,7 +6,7 @@ from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
 from buffers import RolloutSensAugTransition, RunnerStateDual, UpdateStateDual
-from common import gae_sensitivity
+from algorithms.common import gae_sensitivity
 from net_utils import create_optimizer, make_linear_schedule
 from networks import ActorCritic, ActorCriticSensAug
 from envs.wrappers import (

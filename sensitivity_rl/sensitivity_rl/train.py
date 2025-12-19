@@ -2,12 +2,15 @@
 """Unified training entry point for PPO-family algorithms.
 
 Usage:
-    # Default Hydra config
-    python train.py --algorithm ppo
+    # Default config (ppo)
+    python train.py
+    
+    # Select algorithm via Hydra override
+    python train.py ++ALGORITHM=sppo_aug
     
     # Override environment and parameters
-    python train.py --algorithm ppo env=drone_v0 SEED=42
-    python train.py --algorithm sppo_aug env=drone_v1 LR=0.0005
+    python train.py ++ALGORITHM=ppo env=drone_v0 SEED=42
+    python train.py ++ALGORITHM=sppo_aug env=drone_v1 LR=0.0005
 """
 
 import os
@@ -49,21 +52,6 @@ jax.config.update(
     "jax_persistent_cache_enable_xla_caches",
     "xla_gpu_per_fusion_autotune_cache_dir",
 )
-
-
-# Parse --algorithm before Hydra takes over
-def get_algorithm_arg():
-    """Extract --algorithm from sys.argv before Hydra processes args."""
-    for i, arg in enumerate(sys.argv):
-        if arg == "--algorithm" and i + 1 < len(sys.argv):
-            algo = sys.argv[i + 1]
-            # Remove these args so Hydra doesn't see them
-            sys.argv.pop(i)
-            sys.argv.pop(i)
-            return algo
-    return "ppo"  # default
-
-ALGORITHM = get_algorithm_arg()
 
 
 
@@ -219,14 +207,8 @@ def run_evaluation(config, run_dir):
         "--max_step", f"{eval_config['MAX_STEPS']}",
         "--num_rollouts", f"{eval_config['NUM_ROLLOUTS']}",
         "--param_samples", f"{eval_config['PARAM_SAMPLES']}",
+        "--plot",
     ])
-
-    plot_script = (
-        f"{script_dir}/plots/plot_drone_rollouts.py"
-        if config["ENV_NAME"] in ("drone_v0", "drone_v1")
-        else f"{script_dir}/plots/plot_pendulum_rollouts.py"
-    )
-    subprocess.run(["python3", plot_script, "--output", "nominal.png"])
 
     print("Running evaluation rollouts (perturbed)...")
     eval_config["PARAM_SAMPLES"] = 10
@@ -236,8 +218,8 @@ def run_evaluation(config, run_dir):
         "--max_step", f"{eval_config['MAX_STEPS']}",
         "--num_rollouts", f"{eval_config['NUM_ROLLOUTS']}",
         "--param_samples", f"{eval_config['PARAM_SAMPLES']}",
+        "--plot",
     ])
-    subprocess.run(["python3", plot_script, "--output", "perturbed.png"])
 
 
 @hydra.main(version_base=None, config_path="../configs/hydra", config_name="config")
@@ -250,7 +232,13 @@ def main(cfg: DictConfig):
     # Convert OmegaConf to regular dict for compatibility
     config = OmegaConf.to_container(cfg, resolve=True)
     
-    spec = ALGORITHM_REGISTRY[ALGORITHM]
+    # Get algorithm from config (default to ppo)
+    algorithm = config.get("ALGORITHM", "ppo").lower()
+    
+    if algorithm not in ALGORITHM_REGISTRY:
+        raise ValueError(f"Unknown algorithm '{algorithm}'. Available: {list(ALGORITHM_REGISTRY.keys())}")
+    
+    spec = ALGORITHM_REGISTRY[algorithm]
     
     # Ensure SENSITIVITY is set for algorithms that need it
     if spec.uses_sensitivity and "SENSITIVITY" not in config:
@@ -262,7 +250,7 @@ def main(cfg: DictConfig):
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    algo_name = ALGORITHM.upper()
+    algo_name = algorithm.upper()
     run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving results to: {run_dir}")

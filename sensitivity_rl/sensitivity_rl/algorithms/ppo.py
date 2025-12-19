@@ -180,8 +180,9 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
     return _update_epoch
 
 
-def calculate_gae(config, traj_batch, last_val, networks, collect_state):
+def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for PPO."""
+    _, last_val = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs)
     advantages, targets = gae_standard(config, traj_batch, last_val)
     return {
         "advantages": advantages,
@@ -292,13 +293,8 @@ def init_runner_state(config, env, env_params, networks, rng):
 
 
 SPEC = AlgorithmSpec(
-    name="ppo",
-    transition_cls=RolloutTransition,
-    make_loss_fn=make_loss_fn,
     wrap_env=wrap_env,
-    network_cls=ActorCritic,
-    uses_sensitivity=False,
-    gae_fn=gae_standard,
+    make_loss_fn=make_loss_fn,
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
@@ -307,4 +303,5 @@ SPEC = AlgorithmSpec(
     extract_losses=extract_losses,
     init_networks=init_networks,
     init_runner_state=init_runner_state,
+    uses_sensitivity=False,
 )

@@ -8,7 +8,7 @@ from .base import AlgorithmSpec
 from buffers import RolloutSensAugTransition, RunnerStateDual, UpdateStateDual
 from algorithms.common import gae_sensitivity
 from net_utils import create_optimizer, make_linear_schedule
-from networks import ActorCritic, ActorCriticSensAug
+from networks import ActorCritic, CriticGRU
 from envs.wrappers import (
     GymnaxWrapper,
     ClipAction,
@@ -245,8 +245,10 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
     return _update_epoch
 
 
-def calculate_gae(config, traj_batch, last_val, networks, collect_state):
+def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
+
+    _, last_val = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs)
     network_vs = networks["network_vs"]
     last_val_s, _ = network_vs.apply(
         collect_state.train_state_vs.params,
@@ -341,10 +343,8 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     )
     
     # Secondary sensitivity value network (GRU-based)
-    network_vs = ActorCriticSensAug(
-        env.action_space(env_params).shape[0],
+    network_vs = CriticGRU(
         activation=config["ACTIVATION"],
-        actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         gru_hidden_size=gru_hidden_size,
     )
@@ -399,13 +399,8 @@ def init_runner_state(config, env, env_params, networks, rng):
 
 
 SPEC = AlgorithmSpec(
-    name="sppo_aug",
-    transition_cls=RolloutSensAugTransition,
-    make_loss_fn=make_loss_fn,
     wrap_env=wrap_env,
-    network_cls=ActorCritic,  # Main network
-    uses_sensitivity=True,
-    gae_fn=gae_sensitivity,
+    make_loss_fn=make_loss_fn,
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
@@ -414,4 +409,5 @@ SPEC = AlgorithmSpec(
     extract_losses=extract_losses,
     init_networks=init_networks,
     init_runner_state=init_runner_state,
+    uses_sensitivity=True,
 )

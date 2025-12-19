@@ -51,7 +51,7 @@ from torch.utils.tensorboard import SummaryWriter
 from common import gae_sensitivity
 from buffers import RolloutSensTransition
 from envs import ENV_REGISTRY
-from networks import ActorCriticSens
+from networks import ActorCriticDual
 
 
 def parse_args():
@@ -122,7 +122,7 @@ def make_train(config, writer: SummaryWriter):
 
     def train(rng):
         # INIT NETWORK
-        network = ActorCriticSens(
+        network = ActorCriticDual(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
             actor_layer_sizes=config.get("ACTOR_LAYER_SIZES", [256, 256]),

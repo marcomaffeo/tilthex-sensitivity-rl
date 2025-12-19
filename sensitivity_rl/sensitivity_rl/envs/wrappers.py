@@ -403,14 +403,14 @@ class SensitivityWrapper(GymnaxWrapper):
 
     def set_actor(self, actor, network_params):
         # Should add a check for dimension compatibility
-        self._actor = actor
+        self.actorCritic = actor
         self.network_params = network_params
 
     def update_network_params(self, network_params):
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
-        pi, _ = self._actor.apply(network_params, obs)
+        pi = self.actorCritic.apply(network_params, obs, method=self.actorCritic.actor)
         action = pi.sample(seed=rng)
         return action
 
@@ -576,6 +576,27 @@ class ComputeSensitivityReward(GymnaxWrapper):
 
         return obs, next_state, reward, done, info
 
+class AddSensitivityToReward(GymnaxWrapper):
+    def __init__(self, env, regularization_weight=0.0):
+        super().__init__(env)
+        self.regularization_weight = regularization_weight
+
+    def step(
+        self,
+        key: chex.PRNGKey,
+        current_state: SensitivityEnvState,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,
+    ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+
+        obs, next_state, reward, done, info = self._env.step(
+            key, current_state, action, params
+        )
+
+        reward += - self.regularization_weight * (next_state.sensitivity.log_norm - current_state.sensitivity.log_norm)
+
+        return obs, next_state, reward, done, info
+
 
 class MinMaxObservationWrapper(GymnaxWrapper):
     """Normalize the observations of the environment to [-1, 1]."""
@@ -687,7 +708,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self, actor, network_params, get_action, action_scale, action_bias
     ):
         # Should add a check for dimension compatibility
-        self._actor = actor
+        self.actorCritic = actor
         self.network_params = network_params
         self.get_action = get_action
         self.action_scale = action_scale
@@ -697,7 +718,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
-        pi = self._actor.apply(network_params, obs)
+        pi = self.actorCritic.apply(network_params, obs)
         action, _, _, _ = self.get_action(
             pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
         )

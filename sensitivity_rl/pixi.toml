@@ -57,7 +57,8 @@ train = "python sensitivity_rl/train.py"
 
 # Convenience aliases for common algorithms
 train_ppo = "python sensitivity_rl/train.py ALGORITHM=ppo"
-train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo_aug"
+train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo SENSITIVITY_REGULARIZATION_WEIGHT=25.0"
+train_sppo_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug"
 
 # Legacy scripts (deprecated, use train.py instead)
 train_ppo_legacy = "python sensitivity_rl/ppo.py"

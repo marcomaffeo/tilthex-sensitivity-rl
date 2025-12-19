@@ -151,11 +151,9 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
                 collect_fn, runner_state, None, config["NUM_STEPS"]
             )
 
-            # CALCULATE ADVANTAGE
-            _, last_val = network.apply(collect_state.train_state.params, collect_state.last_obs)
-            
+            # CALCULATE GAE
             gae_results = spec.calculate_gae(
-                config, traj_batch, last_val, networks, collect_state,
+                config, traj_batch, networks, collect_state,
             )
 
             # UPDATE NETWORK

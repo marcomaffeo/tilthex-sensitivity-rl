@@ -79,6 +79,27 @@ class UpdateStateDual(NamedTuple):
     rng: jnp.ndarray
 
 
+class RolloutGRUTransition(NamedTuple):
+    """Transition for SPPO with single GRU-based ActorCritic."""
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    reward: jnp.ndarray  
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    gru_hidden: jnp.ndarray
+    info: jnp.ndarray
+
+
+class RunnerStateGRU(NamedTuple):
+    """Runner state for GRU-based single-network algorithms (e.g., SPPO)."""
+    train_state: object  # Flax TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    gru_hidden: jnp.ndarray
+    rng: jnp.ndarray
+
+
 class ReplayTransition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray

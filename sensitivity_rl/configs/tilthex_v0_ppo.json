@@ -1,14 +1,14 @@
 {
     "ENV_NAME": "tilthex_v0",
-    "LR": 0.001,
+    "LR": 0.005,
     "NUM_ENVS": 2048,
     "NUM_STEPS": 200,
-    "TOTAL_TIMESTEPS": 50000000,
+    "TOTAL_TIMESTEPS": 100000000,
     "UPDATE_EPOCHS": 4,
     "NUM_MINIBATCHES": 128,
     "GAMMA": 0.98,
     "GAE_LAMBDA": 0.95,
-    "CLIP_EPS": 0.2,
+    "CLIP_EPS": 0.2, 
     "ENT_COEF": 0.001,
     "VF_COEF": 0.5,
     "MAX_GRAD_NORM": 0.5,
@@ -23,3 +23,5 @@
     "SENSITIVITY_REGULARIZATION_WEIGHT": 0.2,
     "SEED": 3
 }
+
+

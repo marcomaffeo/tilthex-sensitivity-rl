@@ -67,25 +67,25 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["sppo-vs-estimation-aug"]
+METHODS = ["sac-estimation"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["drone_v1"]
+ENVIRONMENTS = ["halfcheetah_v5"]
 
 # Parameter sweeps - these will be applied to all method/environment combinations
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0],
+    "SEED": [0,1,2,3],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.1, 0.12],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
-    "GAMMA": [0.98],
+    #"GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1],
-    "UPDATE_EPOCHS": [5],
-    "ENT_COEF": [0.005],
-    "TOTAL_TIMESTEPS": [100_000],
+    #"CLIP_EPS": [0.1],
+    #"UPDATE_EPOCHS": [5],
+    #"ENT_COEF": [0.005],
+    "TOTAL_TIMESTEPS": [1_000_000],
 }
 
 # Method name mapping for config selection
@@ -101,7 +101,7 @@ METHOD_CONFIG_NAMES = {
 # Number of experiments to run in parallel (set based on your CPU/GPU resources)
 # Set to 1 for sequential execution, or higher for parallel execution
 # Note: Each parallel job will run in a separate process
-NUM_PARALLEL_JOBS = 1
+NUM_PARALLEL_JOBS = 5
 
 # Set to True to run evaluation rollouts after each experiment
 RUN_EVAL_ROLLOUTS = True

@@ -863,7 +863,6 @@ def make_train(config, writer: SummaryWriter):
                     
                     # Stop gradient to prevent nested differentiation (jacfwd inside grad)
                     # updated_sens_reward = jax.lax.stop_gradient(updated_sens_reward)
-                    sens_state = jax.lax.stop_gradient(sens_state)
                     
                     pi = actor.apply(actor_params, batch.obs)
                     actions, log_pi, _, action_pre_tanh = get_sac_action_dist(
@@ -884,10 +883,10 @@ def make_train(config, writer: SummaryWriter):
                     min_qf_pi_raw = jnp.minimum(qf1_pi, qf2_pi)
 
                     qf1_sens_pi = qf1_sens.apply(
-                        train_state_qf1_sens.params, batch_sens.obs, actions, sens_state.reshape(batch_sens.obs.shape[0], -1)
+                        train_state_qf1_sens.params, batch_sens.obs, actions, batch_sens.sens.reshape(batch_sens.obs.shape[0], -1)
                     )
                     qf2_sens_pi = qf2_sens.apply(
-                        train_state_qf2_sens.params, batch_sens.obs, actions, sens_state.reshape(batch_sens.obs.shape[0], -1)
+                        train_state_qf2_sens.params, batch_sens.obs, actions, batch_sens.sens.reshape(batch_sens.obs.shape[0], -1)
                     )
                     min_qf_sens_pi_raw = jnp.minimum(qf1_sens_pi, qf2_sens_pi)
 
@@ -915,22 +914,25 @@ def make_train(config, writer: SummaryWriter):
                     ratio_clipped = jnp.clip(
                         ratio,
                         1.0 - config["CLIP_EPS"],
-                        1.0 + config["CLIP_EPS"],
+                        1.0,
                     )
 
                     Q_sens_loss = (sens_normalized.reshape(-1,1)) * ratio
-                    Q_sens_loss_clipped = (sens_normalized.reshape(-1,1)) * ratio_clipped
+                    Q_sens_loss_clipped = (sens_normalized.reshape(-1,1))*ratio_clipped
                     
                     # Take minimum (most pessimistic) of clipped and unclipped
                     Q_sens_loss_final = jnp.minimum(Q_sens_loss, Q_sens_loss_clipped)
                     
+                    q_1 = q_normalized.reshape(-1, 1)* ratio
+                    q_2 = q_normalized.reshape(-1, 1)* ratio_clipped
+                    q_final = jnp.minimum(q_1, q_2)
                     # Actor loss
+                    
                     actor_loss = jnp.mean(
-                        ent_coef * log_pi_normalized
-                        - q_normalized.reshape(-1, 1)
-                        + sens_coef_local * (Q_sens_loss_final + updated_sens_reward_r)
+                        ent_coef * log_pi.reshape(-1, 1)
+                        - q_normalized.reshape(-1, 1) 
+                        + sens_coef_local *(Q_sens_loss_final.reshape(-1, 1) )
                     )
-
                     return actor_loss, (log_pi, updated_sens_reward)
 
                 (actor_loss, (log_pi, updated_sens_reward_for_loss)), actor_grads = jax.value_and_grad(

@@ -819,6 +819,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self.add_sensitivity_to_info = add_sensitivity_to_info
 
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
+        self.action_gains_mean = jax.jacfwd(self.compute_action_mean, argnums=1)
         self._dynamics_jacs_fn = jax.jacfwd(
             self._step_to_state_and_obs_wrapped, argnums=(2, 3, 4)
         )
@@ -842,6 +843,13 @@ class SensitivityOffWrapper(GymnaxWrapper):
             pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
         )
         return action
+    
+    def compute_action_mean(self, rng, obs, network_params):
+        pi = self._actor.apply(network_params, obs)
+        _, _,mean, _ = self.get_action(
+            pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
+        )
+        return mean
 
     # TODO: Understand when doing this, in off-policy each step use a different policy
     def step_sensitivity(
@@ -925,7 +933,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         F_sens_x,
     ):
 
-        dmu_dobs = self.action_gains(key, obs, network_params)  # dmu/dobs
+        dmu_dobs = self.action_gains_mean(key, obs, network_params)  # dmu/dobs
         dmu_dobs = jax.lax.stop_gradient(dmu_dobs)
         sens_a = df_du @ dmu_dobs @ dobs_dx  # du/dp
         sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)

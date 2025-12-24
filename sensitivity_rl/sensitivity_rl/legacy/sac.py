@@ -3,6 +3,18 @@ import os
 import shutil
 import json
 
+import sys
+import os
+
+# 1. Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Get the parent directory
+parent_dir = os.path.dirname(current_dir)
+
+# 3. Add the parent directory to sys.path
+sys.path.append(parent_dir)
+
 # --- IMPORTANT ---
 # Set this *before* importing JAX
 # This tells the script to only see the GPU with ID '0' (the first GPU)

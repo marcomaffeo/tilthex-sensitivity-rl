@@ -5,6 +5,18 @@ import json
 from omegaconf import DictConfig, OmegaConf
 import hydra
 
+import sys
+import os
+
+# 1. Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Get the parent directory
+parent_dir = os.path.dirname(current_dir)
+
+# 3. Add the parent directory to sys.path
+sys.path.append(parent_dir)
+
 # --- IMPORTANT ---
 # Set this *before* importing JAX
 # This tells the script to only see the GPU with ID '0' (the first GPU)
@@ -48,9 +60,10 @@ from utils import (
     update_latest_symlink,
 )
 from torch.utils.tensorboard import SummaryWriter
-from buffers import _calculate_gae_s, RolloutSensTransition
+from common import gae_sensitivity
+from buffers import RolloutSensTransition
 from envs import ENV_REGISTRY
-from networks import ActorCriticSens
+from networks import ActorCriticDual
 
 
 def parse_args():
@@ -121,7 +134,7 @@ def make_train(config, writer: SummaryWriter):
 
     def train(rng):
         # INIT NETWORK
-        network = ActorCriticSens(
+        network = ActorCriticDual(
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
             actor_layer_sizes=config.get("ACTOR_LAYER_SIZES", [256, 256]),
@@ -251,7 +264,7 @@ def make_train(config, writer: SummaryWriter):
                 train_state.params, last_obs
             )
 
-            advantages, advantages_s, targets, targets_s = _calculate_gae_s(
+            advantages, advantages_s, targets, targets_s = gae_sensitivity(
                 config, traj_batch, last_val, last_val_s
             )
 

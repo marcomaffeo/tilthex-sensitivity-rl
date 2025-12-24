@@ -3,6 +3,18 @@ import os
 import shutil
 import json
 
+import sys
+import os
+
+# 1. Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Get the parent directory
+parent_dir = os.path.dirname(current_dir)
+
+# 3. Add the parent directory to sys.path
+sys.path.append(parent_dir)
+
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"

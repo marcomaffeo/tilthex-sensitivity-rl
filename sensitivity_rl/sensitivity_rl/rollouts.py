@@ -29,7 +29,7 @@ from envs import Pendulum, DroneV0, DroneV1
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
-from networks import ActorCritic
+from networks import Actor
 from utils import sample_env_params
 
 
@@ -40,6 +40,7 @@ class RolloutConfig:
     deterministic: bool
     seed: int
     param_samples: int
+    plot: bool
 
 
 
@@ -58,7 +59,7 @@ def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
 
 def build_env_from_config(
     config: Dict[str, Any],
-) -> Tuple[GymnaxWrapper, Any, str]:
+) -> Tuple[GymnaxWrapper, Any, str, type]:
     env_name = config.get("ENV_NAME", "drone_v0").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
@@ -73,7 +74,7 @@ def build_env_from_config(
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)
 
-    return wrapped_env, env_params, env_name
+    return wrapped_env, env_params, env_name, env_cls
 
 
 
@@ -86,16 +87,16 @@ def _flatten_value(x):
     return flat
 
 
-# NOTE: Treating env and actor_critic as static keeps the function JIT-able while
+# NOTE: Treating env and actor as static keeps the function JIT-able while
 # allowing vmap to supply different rng/env_params externally.
 @partial(
     jax.jit,
-    static_argnames=("env", "actor_critic", "max_steps", "deterministic"),
+    static_argnames=("env", "actor", "max_steps", "deterministic"),
 )
 def rollout_episode(
     env,
     env_params,
-    actor_critic,
+    actor,
     params,
     rng_key: jax.Array,
     max_steps: int,
@@ -126,7 +127,7 @@ def rollout_episode(
     def body_fun(i, carry):
         rng, obs, env_state, actions_buf, logs_buf = carry
 
-        pi, _ = actor_critic.apply(params, obs)
+        pi = actor.apply(params, obs)
         if deterministic:
             action = pi.mean()
         else:
@@ -166,30 +167,43 @@ def save_trajectory(
     path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
+def extract_actor_params(params: Dict) -> Dict:
+    """Extract actor parameters from any ActorCritic network params.
+    
+    Works with ActorCritic, ActorCriticDual, ActorCriticGRU - all use
+    the same actor layer naming convention.
+    """
+    flat_params = params.get("params", params)
+    actor_params = {}
+    for key, value in flat_params.items():
+        if key.startswith("actor_") or key == "actor_log_std":
+            actor_params[key] = value
+    return {"params": actor_params}
+
+
 def init_model_and_params(
     config: Dict[str, Any], env, env_params, params_bytes: bytes
 ):
-    params = serialization.msgpack_restore(params_bytes)
+    full_params = serialization.msgpack_restore(params_bytes)
+    actor_params = extract_actor_params(full_params)
 
     actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
-    critic_layer_sizes = tuple(config["CRITIC_LAYER_SIZES"])
 
     action_dim = env.action_space(env_params).shape[0]
-    model = ActorCritic(
+    model = Actor(
         action_dim=action_dim,
         activation=config.get("ACTIVATION", "tanh"),
-        actor_layer_sizes=actor_layer_sizes,
-        critic_layer_sizes=critic_layer_sizes,
+        layer_sizes=actor_layer_sizes,
     )
-    return model, params
+    return model, actor_params
 
 
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     config, params_bytes = load_run_artifacts(run_dir)
-    env, env_params, env_name = build_env_from_config(config)
+    env, env_params, env_name, env_cls = build_env_from_config(config)
 
-    actor_critic, params = init_model_and_params(
+    actor, params = init_model_and_params(
         config, env, env_params, params_bytes
     )
 
@@ -229,13 +243,15 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         f" for {run_dir.name}"
     )
 
+    all_series = []  # Collect trajectory data for plotting
+
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
         episode_keys = jax.random.split(episode_key, param_sample_count)
         actions_batch, state_batch = batched_rollout(
             env,
             env_params_batched,
-            actor_critic,
+            actor,
             params,
             episode_keys,
             rcfg.max_steps,
@@ -274,6 +290,11 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
                 env_params_samples[sample_idx],
             )
 
+            # Collect series for plotting
+            series_entry = {"actions": actions}
+            series_entry.update(state_flat)
+            all_series.append(series_entry)
+
             suffix = (
                 " (nominal)"
                 if sample_idx == 0
@@ -287,6 +308,18 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     print(
         f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
     )
+
+    # Generate plots if requested
+    if rcfg.plot and all_series:
+        plot_name = "rollouts"
+        if rcfg.param_samples > 1:
+            plot_name += f"_perturbed"
+        output_path = rollouts_dir.parent / (plot_name + ".png")
+        print(f"[rollouts] Generating plot -> {output_path}")
+        try:
+            env_cls.plot_rollouts(all_series, output_path)
+        except Exception as exc:
+            print(f"[rollouts] Plotting failed: {exc}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -332,6 +365,11 @@ def parse_args() -> argparse.Namespace:
             "Value 1 uses only the nominal parameters."
         ),
     )
+    parser.add_argument(
+        "--plot",
+        action="store_true",
+        help="Generate plots of the rollouts after saving trajectories.",
+    )
     return parser.parse_args()
 
 
@@ -343,6 +381,7 @@ def main() -> None:
         deterministic=args.deterministic,
         seed=args.seed,
         param_samples=max(1, args.param_samples),
+        plot=args.plot,
     )
 
     for run_dir_str in args.run_dirs:

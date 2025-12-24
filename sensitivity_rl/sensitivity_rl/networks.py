@@ -13,12 +13,19 @@ class ActorCritic(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        """Full forward pass with actor and critic."""
+        pi = self.actor(x)
+        value = self.critic(x)
+        return pi, value
+
+    @nn.compact
+    def actor(self, x):
+        """Actor forward pass."""
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
 
-        # Actor network
         actor = x
         for idx, layer_dim in enumerate(self.actor_layer_sizes):
             actor = nn.Dense(
@@ -37,9 +44,16 @@ class ActorCritic(nn.Module):
         actor_logtstd = self.param(
             "actor_log_std", nn.initializers.zeros, (self.action_dim,)
         )
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        return distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
-        # Critic network
+    @nn.compact
+    def critic(self, x):
+        """Critic forward pass."""
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
         critic = x
         for idx, layer_dim in enumerate(self.critic_layer_sizes):
             critic = nn.Dense(
@@ -55,8 +69,8 @@ class ActorCritic(nn.Module):
             bias_init=constant(0.0),
             name="critic_output",
         )(critic)
+        return jnp.squeeze(critic, axis=-1)
 
-        return pi, jnp.squeeze(critic, axis=-1)
 
 
 class SoftQNetwork(nn.Module):
@@ -117,51 +131,41 @@ class SensQNetwork(nn.Module):
 
 
 class Actor(nn.Module):
+    """Standalone actor network for rollouts/evaluation.
+    
+    Uses the same layer names as ActorCritic/ActorCriticGRU so parameters
+    can be extracted from trained policies.
+    """
     action_dim: int
     layer_sizes: tuple = (256, 256)
-    activation: str = "relu"
-    LOG_STD_MAX = 2
-    LOG_STD_MIN = -5
+    activation: str = "tanh"
 
     @nn.compact
-    def __call__(self, state):
+    def __call__(self, x):
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
 
-        x = state
+        actor = x
         for idx, layer_dim in enumerate(self.layer_sizes):
-            x = nn.Dense(
+            actor = nn.Dense(
                 layer_dim,
                 kernel_init=orthogonal(jnp.sqrt(2)),
                 bias_init=constant(0.0),
-                name=f"dense{idx + 1}",
-            )(x)
-            x = activation(x)
-        mean = nn.Dense(
+                name=f"actor_dense{idx + 1}",
+            )(actor)
+            actor = activation(actor)
+        actor_mean = nn.Dense(
             self.action_dim,
             kernel_init=orthogonal(0.01),
             bias_init=constant(0.0),
-            name="output_mean",
-        )(x)
-        '''
-        log_std = nn.Dense(
-            self.action_dim,
-            kernel_init=orthogonal(0.01),
-            bias_init=constant(0.0),
-            name="output_log_std",
-        )(x)
-        log_std = nn.tanh(log_std)
-        log_std = self.LOG_STD_MIN + 0.5 * (
-            self.LOG_STD_MAX - self.LOG_STD_MIN
-        ) * (log_std + 1)
-        '''
+            name="actor_output",
+        )(actor)
         actor_logtstd = self.param(
             "actor_log_std", nn.initializers.zeros, (self.action_dim,)
         )
-        pi = distrax.MultivariateNormalDiag(mean, jnp.exp(actor_logtstd))
-        return pi
+        return distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
 
 def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: bool):
@@ -204,7 +208,7 @@ def get_ddpg_action_dist(pi, scale_action, bias_action, _rng):
     return mean, None, mean
 
 
-class ActorCriticSens(nn.Module):
+class ActorCriticDual(nn.Module):
     action_dim: int
     activation: str = "tanh"
     actor_layer_sizes: tuple = (256, 256)
@@ -212,12 +216,19 @@ class ActorCriticSens(nn.Module):
 
     @nn.compact
     def __call__(self, x):
+        """Full forward pass with actor and dual critics."""
+        pi = self.actor(x)
+        value, value_s = self.critic(x)
+        return pi, (value, value_s)
+
+    @nn.compact
+    def actor(self, x):
+        """Actor forward pass."""
         if self.activation == "relu":
             activation = nn.relu
         else:
             activation = nn.tanh
 
-        # Actor network with explicit names
         actor = x
         for idx, layer_dim in enumerate(self.actor_layer_sizes):
             actor = nn.Dense(
@@ -236,9 +247,17 @@ class ActorCriticSens(nn.Module):
         actor_logtstd = self.param(
             "actor_log_std", nn.initializers.zeros, (self.action_dim,)
         )
-        pi = distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+        return distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
 
-        # Critic network with explicit names
+    @nn.compact
+    def critic(self, x):
+        """Dual critic forward pass (value and sensitivity value)."""
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        # Main critic
         critic = x
         for idx, layer_dim in enumerate(self.critic_layer_sizes):
             critic = nn.Dense(
@@ -255,7 +274,7 @@ class ActorCriticSens(nn.Module):
             name="critic_output",
         )(critic)
 
-        # Critic network with explicit names
+        # Sensitivity critic
         critic_s = x
         for idx, layer_dim in enumerate(self.critic_layer_sizes):
             critic_s = nn.Dense(
@@ -272,16 +291,13 @@ class ActorCriticSens(nn.Module):
             name="critic_s_output",
         )(critic_s)
 
-        return pi, (
-            jnp.squeeze(critic, axis=-1),
-            jnp.squeeze(critic_s, axis=-1),
-        )
+        return jnp.squeeze(critic, axis=-1), jnp.squeeze(critic_s, axis=-1)
 
 
-class ActorCriticSensAug(nn.Module):
-    action_dim: int
+
+class CriticGRU(nn.Module):
+    """GRU-based critic for value estimation with temporal dependencies."""
     activation: str = "tanh"
-    actor_layer_sizes: tuple = (256, 256)
     critic_layer_sizes: tuple = (256, 256)
     gru_hidden_size: int = 64
 
@@ -322,3 +338,98 @@ class ActorCriticSensAug(nn.Module):
         )(critic_s)
 
         return jnp.squeeze(critic_s, axis=-1), new_hidden_state
+
+
+class ActorCriticGRU(nn.Module):
+    """ActorCritic with GRU-based critic for temporal dependencies.
+    
+    The actor is a standard MLP that doesn't depend on hidden state.
+    The critic uses a GRU to capture temporal information.
+    """
+    action_dim: int
+    activation: str = "tanh"
+    actor_layer_sizes: tuple = (256, 256)
+    critic_layer_sizes: tuple = (256, 256)
+    gru_hidden_size: int = 64
+
+    @nn.compact
+    def __call__(self, x, hidden_state):
+        """Full forward pass with actor and GRU-based critic.
+        
+        Args:
+            x: observation array [batch, obs_dim]
+            hidden_state: GRU hidden state [batch, gru_hidden_size]
+        Returns:
+            pi: action distribution
+            value: critic value estimate [batch]
+            new_hidden_state: updated GRU hidden state [batch, gru_hidden_size]
+        """
+        pi = self.actor(x)
+        value, new_hidden_state = self.critic(x, hidden_state)
+        return pi, value, new_hidden_state
+
+    @nn.compact
+    def actor(self, x):
+        """Actor forward pass (no hidden state needed)."""
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        actor = x
+        for idx, layer_dim in enumerate(self.actor_layer_sizes):
+            actor = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"actor_dense{idx + 1}",
+            )(actor)
+            actor = activation(actor)
+        actor_mean = nn.Dense(
+            self.action_dim,
+            kernel_init=orthogonal(0.01),
+            bias_init=constant(0.0),
+            name="actor_output",
+        )(actor)
+        actor_logtstd = self.param(
+            "actor_log_std", nn.initializers.zeros, (self.action_dim,)
+        )
+        return distrax.MultivariateNormalDiag(actor_mean, jnp.exp(actor_logtstd))
+
+    @nn.compact
+    def critic(self, x, hidden_state):
+        """GRU-based critic forward pass.
+        
+        Args:
+            x: observation array [batch, obs_dim]
+            hidden_state: GRU hidden state [batch, gru_hidden_size]
+        Returns:
+            value: critic value estimate [batch]
+            new_hidden_state: updated GRU hidden state [batch, gru_hidden_size]
+        """
+        if self.activation == "relu":
+            activation = nn.relu
+        else:
+            activation = nn.tanh
+
+        gru_cell = nn.GRUCell(features=self.gru_hidden_size, name="gru_cell")
+        new_hidden_state, gru_output = gru_cell(hidden_state, x)
+
+        critic = gru_output
+        for idx, layer_dim in enumerate(self.critic_layer_sizes):
+            critic = nn.Dense(
+                layer_dim,
+                kernel_init=orthogonal(jnp.sqrt(2)),
+                bias_init=constant(0.0),
+                name=f"critic_dense{idx + 1}",
+            )(critic)
+            critic = activation(critic)
+        critic = nn.Dense(
+            1,
+            kernel_init=orthogonal(1.0),
+            bias_init=constant(0.0),
+            name="critic_output",
+        )(critic)
+
+        return jnp.squeeze(critic, axis=-1), new_hidden_state
+

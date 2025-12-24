@@ -2,13 +2,22 @@ import argparse
 import os
 import shutil
 import json
-from omegaconf import DictConfig, OmegaConf
-import hydra
+
+import sys
+import os
+
+# 1. Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Get the parent directory
+parent_dir = os.path.dirname(current_dir)
+
+# 3. Add the parent directory to sys.path
+sys.path.append(parent_dir)
 
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
-os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax
 import jax.numpy as jnp
@@ -30,8 +39,6 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
-    SensitivityExtWrapper,
-    MujocoSensitivityExtWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -43,7 +50,6 @@ from utils import (
 from torch.utils.tensorboard import SummaryWriter
 
 from networks import ActorCritic
-from buffers import _calculate_gae, RolloutTransition
 
 
 def parse_args():
@@ -68,6 +74,16 @@ jax.config.update(
 )
 
 
+class Transition(NamedTuple):
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    reward: jnp.ndarray
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    info: jnp.ndarray
+
+
 def make_train(config, writer: SummaryWriter):
     config["NUM_UPDATES"] = (
         config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
@@ -75,26 +91,16 @@ def make_train(config, writer: SummaryWriter):
     config["MINIBATCH_SIZE"] = (
         config["NUM_ENVS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
     )
-    env = ENV_REGISTRY[config["ENV_NAME"]]()
+    env = envs[config["ENV_NAME"]]()
     env_params = env.default_params
     env = GymnaxWrapper(env)
     env = ClipAction(env)
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
-        if env.type == "mujoco":
-            env = MujocoSensitivityeExtWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
-            )
-        else:
-            env = SensitivityExtWrapper(
-                env,
-                regularization_weight=config[
-                    "SENSITIVITY_REGULARIZATION_WEIGHT"
-                ],
-            )
+        env = SensitivityWrapper(
+            env,
+            regularization_weight=config["SENSITIVITY_REGULARIZATION_WEIGHT"],
+        )
     env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
@@ -206,7 +212,7 @@ def make_train(config, writer: SummaryWriter):
                 )
                 obsv = jax.lax.stop_gradient(obsv)
                 env_state = jax.lax.stop_gradient(env_state)
-                transition = RolloutTransition(
+                transition = Transition(
                     done, action, value, reward, log_prob, last_obs, info
                 )
                 runner_state = (train_state, env_state, obsv, rng)
@@ -220,16 +226,61 @@ def make_train(config, writer: SummaryWriter):
             train_state, env_state, last_obs, rng = runner_state
             _, last_val = network.apply(train_state.params, last_obs)
 
-            advantages, targets = _calculate_gae(config, traj_batch, last_val)
+            def _calculate_gae(traj_batch, last_val):
+                def _get_advantages(gae_and_next_value, transition):
+                    gae, next_value = gae_and_next_value
+                    done, value, reward = (
+                        transition.done,
+                        transition.value,
+                        transition.reward,
+                    )
+                    delta = (
+                        reward
+                        + config["GAMMA"] * next_value * (1 - done)
+                        - value
+                    )
+                    gae = (
+                        delta
+                        + config["GAMMA"]
+                        * config["GAE_LAMBDA"]
+                        * (1 - done)
+                        * gae
+                    )
+                    return (gae, value), gae
+
+                _, advantages = jax.lax.scan(
+                    _get_advantages,
+                    (jnp.zeros_like(last_val), last_val),
+                    traj_batch,
+                    reverse=True,
+                    unroll=16,
+                )
+                return advantages, advantages + traj_batch.value
+
+            advantages, targets = _calculate_gae(traj_batch, last_val)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):
-                def _update_minbatch(train_state, batch_info):
+                def _update_minbatch(train_state, batch_info, rng):
                     traj_batch, advantages, targets = batch_info
 
-                    def _loss_fn(params, traj_batch, gae, targets):
+                    def _loss_fn(params, traj_batch, gae, targets, rng):
                         # RERUN NETWORK
                         pi, value = network.apply(params, traj_batch.obs)
+                        action_mean = pi.loc
+                        action_std = pi.scale_diag
+                        # Robust ppo
+                        rng, _rng = jax.random.split(rng)
+                        # Sample uniform z using RNG directly
+                        z_samples = jax.random.uniform(
+                            _rng,
+                            shape=action_mean.shape,
+                            minval=-0.5,
+                            maxval=0.5,
+                        )
+                        pi = distrax.MultivariateNormalDiag(
+                            action_mean + z_samples, action_std
+                        )
                         log_prob = pi.log_prob(traj_batch.action)
 
                         # CALCULATE VALUE LOSS
@@ -258,23 +309,7 @@ def make_train(config, writer: SummaryWriter):
                             jnp.abs(ratio - 1.0) > config["CLIP_EPS"]
                         )
 
-                        # get sensitivity
-                        sensitivity_state = -traj_batch.info[
-                            "sensitivity_state"
-                        ]
-                        ss_normalized = (sensitivity_state) / (
-                            jnp.max(sensitivity_state)
-                            - jnp.min(sensitivity_state)
-                            + 1e-8
-                        )
-                        # ss_normalized = jnp.clip(ss_normalized, -10.0, 10.0)
-
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                        gae = (
-                            gae
-                            + config["SENSITIVITY_REGULARIZATION_WEIGHT"]
-                            * ss_normalized
-                        )
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
                             jnp.clip(
@@ -304,10 +339,10 @@ def make_train(config, writer: SummaryWriter):
 
                     grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                     total_loss, grads = grad_fn(
-                        train_state.params, traj_batch, advantages, targets
+                        train_state.params, traj_batch, advantages, targets, rng
                     )
                     train_state = train_state.apply_gradients(grads=grads)
-                    return train_state, total_loss
+                    return train_state, total_loss, rng
 
                 train_state, traj_batch, advantages, targets, rng = update_state
 
@@ -332,8 +367,16 @@ def make_train(config, writer: SummaryWriter):
                     ),
                     shuffled_batch,
                 )
-                train_state, total_loss = jax.lax.scan(
-                    _update_minbatch, train_state, minibatches
+
+                def scan_minibatch(carry, batch_info):
+                    train_state, rng = carry
+                    train_state, total_loss, rng = _update_minbatch(
+                        train_state, batch_info, rng
+                    )
+                    return (train_state, rng), total_loss
+
+                (train_state, rng), total_loss = jax.lax.scan(
+                    scan_minibatch, (train_state, rng), minibatches
                 )
                 update_state = (
                     train_state,
@@ -509,62 +552,23 @@ def make_train(config, writer: SummaryWriter):
     return train
 
 
-def run_experiment(config: dict, run_dir: Path, rng_key: jax.random.PRNGKey):
-    """Run a single experiment with the given config.
-    
-    Args:
-        config: Configuration dictionary
-        run_dir: Directory to save results
-        rng_key: JAX random key
-    """
-    # tensorboard writer
-    writer = SummaryWriter(f"{run_dir}")
+if __name__ == "__main__":
+    args = parse_args()
 
-    train_jit = jax.jit(make_train(config, writer))
-    out = train_jit(rng_key)
+    config_path = args.config.resolve()
+    if not config_path.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    # Save params
-    train_state, env_state, obsv, _rng = out["runner_state"]
-    params = train_state.params
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+    with config_path.open("r", encoding="utf-8") as f:
+        config = json.load(f)
 
-    # Save config as JSON
-    with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
-    
-    # Prepare metrics for hparams logging
-    hparam_dict = {
-        k: v
-        for k, v in config.items()
-        if isinstance(v, (int, float, bool, str))
-    }
-    metric_dict = {}
-    
-    # Log hyperparameters with final metrics
-    writer.add_hparams(hparam_dict, metric_dict, run_name=".")
-
-    writer.close()
-    
-    return run_dir
-
-
-@hydra.main(version_base=None, config_path="../configs/hydra", config_name="config")
-def main(cfg: DictConfig):
-    """Main function decorated with Hydra.
-    
-    Args:
-        cfg: Hydra configuration object
-    """
-    # Convert OmegaConf to regular dict for compatibility
-    config = OmegaConf.to_container(cfg, resolve=True)
-    
     rng = jax.random.PRNGKey(config.get("SEED", 30))
 
     # Create/rotate run directory
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = runs_root / config["ENV_NAME"] / f"SPPO_{ts}"
+    run_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
 
@@ -582,9 +586,7 @@ def main(cfg: DictConfig):
     params = train_state.params
     (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
 
-    # Save config as JSON
-    with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
+    shutil.copy(config_path, run_dir / "config.json")
 
     # Save raw metrics arrays for post-hoc analysis/plotting
     metrics = out["metrics"]
@@ -653,6 +655,3 @@ def main(cfg: DictConfig):
             ),
         ]
     )
-
-if __name__ == "__main__":
-    main()

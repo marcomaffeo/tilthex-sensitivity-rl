@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 from flax import struct
 
 
@@ -9,6 +10,14 @@ class Sensitivity:
     action: jax.Array
     policy_gains: jax.Array
 
+    def default(env):
+        return Sensitivity(
+            log_norm=jnp.array(jnp.log(1e-6)),
+            state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
+            action=jnp.zeros((env.action_dim, env.param_dim)),  # du/dp
+            policy_gains=jnp.zeros((env.action_dim, env.obs_dim)),  # dmu/dobs
+        )
+
 
 @struct.dataclass
 class SensitivityOff:
@@ -18,3 +27,14 @@ class SensitivityOff:
     F_sens_x: jax.Array
     df_du: jax.Array
     dobs_dx: jax.Array
+    
+    def default(env):
+        return SensitivityOff(
+            log_norm=jnp.array(jnp.log(1e-6)),
+            log_norm_old=jnp.array(jnp.log(1e-6)),
+            state=jnp.zeros((env.state_dim, env.param_dim)),  # ds/dp
+            F_sens_x=jnp.zeros((env.state_dim, env.param_dim)),  # dmu/dobs
+            df_du=jnp.zeros((env.state_dim, env.action_dim)),  # dx/du
+            dobs_dx=jnp.zeros((env.obs_dim, env.param_dim)),  # dobs/dp
+        )
+

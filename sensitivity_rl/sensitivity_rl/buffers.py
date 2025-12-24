@@ -3,69 +3,6 @@ import jax.numpy as jnp
 from typing import NamedTuple
 
 
-def _calculate_gae(config, traj_batch, last_val):
-    def _get_advantages(gae_and_next_value, transition):
-        gae, next_value = gae_and_next_value
-        done, value, reward = (
-            transition.done,
-            transition.value,
-            transition.reward,
-        )
-        delta = reward + config["GAMMA"] * next_value * (1 - done) - value
-        gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
-        return (gae, value), gae
-
-    _, advantages = jax.lax.scan(
-        _get_advantages,
-        (jnp.zeros_like(last_val), last_val),
-        traj_batch,
-        reverse=True,
-        unroll=16,
-    )
-    return advantages, advantages + traj_batch.value
-
-
-def _calculate_gae_s(config, traj_batch, last_val, last_val_s):
-    def _get_advantages(gae_and_next_value, transition):
-        gae, gae_s, next_value, next_value_s = gae_and_next_value
-        done, value, value_s, reward, reward_s = (
-            transition.done,
-            transition.value,
-            transition.value_s,
-            transition.reward,
-            transition.reward_s,
-        )
-        delta = reward + config["GAMMA"] * next_value * (1 - done) - value
-        gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
-        delta_s = (
-            reward_s + config["GAMMA"] * next_value_s * (1 - done) - value_s
-        )
-        gae_s = (
-            delta_s
-            + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae_s
-        )
-        return (gae, gae_s, value, value_s), (gae, gae_s)
-
-    _, (advantages, advantages_s) = jax.lax.scan(
-        _get_advantages,
-        (
-            jnp.zeros_like(last_val),
-            jnp.zeros_like(last_val),
-            last_val,
-            last_val_s,
-        ),
-        traj_batch,
-        reverse=True,
-        unroll=16,
-    )
-    return (
-        advantages,
-        advantages_s,
-        advantages + traj_batch.value,
-        advantages_s + traj_batch.value_s,
-    )
-
-
 class RolloutTransition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -99,6 +36,68 @@ class RolloutSensAugTransition(NamedTuple):
     obs: jnp.ndarray
     gru_hidden: jnp.ndarray  # GRU hidden state instead of sens_state
     info: jnp.ndarray
+
+
+# Runner state NamedTuples for different algorithms
+class RunnerState(NamedTuple):
+    """Runner state for single-network algorithms (e.g., PPO)."""
+    train_state: object  # Flax TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    rng: jnp.ndarray
+
+
+class RunnerStateDual(NamedTuple):
+    """Runner state for dual-network algorithms (e.g., SPPO-aug with GRU)."""
+    train_state: object  # Main network TrainState
+    train_state_vs: object  # Sensitivity value network TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    gru_hidden: jnp.ndarray
+    rng: jnp.ndarray
+
+
+# Update state NamedTuples for different algorithms
+class UpdateState(NamedTuple):
+    """Update state for single-network algorithms (e.g., PPO)."""
+    train_state: object
+    traj_batch: object
+    advantages: jnp.ndarray
+    targets: jnp.ndarray
+    rng: jnp.ndarray
+
+
+class UpdateStateDual(NamedTuple):
+    """Update state for dual-network algorithms (e.g., SPPO-aug)."""
+    train_state: object
+    train_state_vs: object
+    traj_batch: object
+    advantages: jnp.ndarray
+    advantages_s: jnp.ndarray
+    targets: jnp.ndarray
+    targets_s: jnp.ndarray
+    rng: jnp.ndarray
+
+
+class RolloutGRUTransition(NamedTuple):
+    """Transition for SPPO with single GRU-based ActorCritic."""
+    done: jnp.ndarray
+    action: jnp.ndarray
+    value: jnp.ndarray
+    reward: jnp.ndarray  
+    log_prob: jnp.ndarray
+    obs: jnp.ndarray
+    gru_hidden: jnp.ndarray
+    info: jnp.ndarray
+
+
+class RunnerStateGRU(NamedTuple):
+    """Runner state for GRU-based single-network algorithms (e.g., SPPO)."""
+    train_state: object  # Flax TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    gru_hidden: jnp.ndarray
+    rng: jnp.ndarray
 
 
 class ReplayTransition(NamedTuple):

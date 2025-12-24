@@ -5,11 +5,19 @@ import json
 from omegaconf import DictConfig, OmegaConf
 import hydra
 
-# --- IMPORTANT ---
-# Set this *before* importing JAX
-# This tells the script to only see the GPU with ID '0' (the first GPU)
-# os.environ["CUDA_VISIBLE_DEVICES"] = "2"
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+import sys
+import os
+
+# 1. Get the directory of the current script
+current_dir = os.path.dirname(os.path.abspath(__file__))
+
+# 2. Get the parent directory
+parent_dir = os.path.dirname(current_dir)
+
+# 3. Add the parent directory to sys.path
+sys.path.append(parent_dir)
+
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
 os.environ["JAX_PLATFORMS"] = "cuda,cpu"
@@ -34,7 +42,8 @@ from envs.wrappers import (
     NormalizeVecReward,
     ClipAction,
     SensitivityWrapper,
-    MujocoSensitivityWrapper,
+    SensitivityExtWrapper,
+    MujocoSensitivityExtWrapper,
     ResetEnvWrapper,
     MinMaxObservationWrapper,
 )
@@ -44,8 +53,10 @@ from utils import (
     update_latest_symlink,
 )
 from torch.utils.tensorboard import SummaryWriter
-from buffers import _calculate_gae, RolloutTransition
+
 from networks import ActorCritic
+from common import gae_standard
+from buffers import RolloutTransition
 
 
 def parse_args():
@@ -84,14 +95,14 @@ def make_train(config, writer: SummaryWriter):
     # env = MinMaxObservationWrapper(env, env_params)
     if config["SENSITIVITY"]:
         if env.type == "mujoco":
-            env = MujocoSensitivityWrapper(
+            env = MujocoSensitivityeExtWrapper(
                 env,
                 regularization_weight=config[
                     "SENSITIVITY_REGULARIZATION_WEIGHT"
                 ],
             )
         else:
-            env = SensitivityWrapper(
+            env = SensitivityExtWrapper(
                 env,
                 regularization_weight=config[
                     "SENSITIVITY_REGULARIZATION_WEIGHT"
@@ -117,10 +128,10 @@ def make_train(config, writer: SummaryWriter):
             env.action_space(env_params).shape[0],
             activation=config["ACTIVATION"],
             actor_layer_sizes=tuple(
-                config.get("ACTOR_LAYER_SIZES", (256, 256))
+                config.get("ACTOR_LAYER_SIZES", [256, 256])
             ),
             critic_layer_sizes=tuple(
-                config.get("CRITIC_LAYER_SIZES", (256, 256))
+                config.get("CRITIC_LAYER_SIZES", [256, 256])
             ),
         )
         rng, _rng = jax.random.split(rng)
@@ -222,7 +233,7 @@ def make_train(config, writer: SummaryWriter):
             train_state, env_state, last_obs, rng = runner_state
             _, last_val = network.apply(train_state.params, last_obs)
 
-            advantages, targets = _calculate_gae(config, traj_batch, last_val)
+            advantages, targets = gae_standard(config, traj_batch, last_val)
 
             # UPDATE NETWORK
             def _update_epoch(update_state, unused):
@@ -260,7 +271,23 @@ def make_train(config, writer: SummaryWriter):
                             jnp.abs(ratio - 1.0) > config["CLIP_EPS"]
                         )
 
+                        # get sensitivity
+                        sensitivity_state = -traj_batch.info[
+                            "sensitivity_state"
+                        ]
+                        ss_normalized = (sensitivity_state) / (
+                            jnp.max(sensitivity_state)
+                            - jnp.min(sensitivity_state)
+                            + 1e-8
+                        )
+                        # ss_normalized = jnp.clip(ss_normalized, -10.0, 10.0)
+
                         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
+                        gae = (
+                            gae
+                            + config["SENSITIVITY_REGULARIZATION_WEIGHT"]
+                            * ss_normalized
+                        )
                         loss_actor1 = ratio * gae
                         loss_actor2 = (
                             jnp.clip(
@@ -487,10 +514,10 @@ def make_train(config, writer: SummaryWriter):
 
         rng, _rng = jax.random.split(rng)
         runner_state = (train_state, env_state, obsv, _rng)
-        runner_state, _ = jax.lax.scan(
+        runner_state, metric = jax.lax.scan(
             _update_step, runner_state, None, config["NUM_UPDATES"]
         )
-        return {"runner_state": runner_state, "metrics": None}
+        return {"runner_state": runner_state, "metrics": metric}
 
     return train
 
@@ -550,7 +577,7 @@ def main(cfg: DictConfig):
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = runs_root / config["ENV_NAME"] / f"PPO_{ts}"
+    run_dir = runs_root / config["ENV_NAME"] / f"SPPO_{ts}"
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving latest results to: {run_dir}")
 
@@ -572,15 +599,6 @@ def main(cfg: DictConfig):
     with open(run_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 
-    # Prepare metrics for hparams logging
-    hparam_dict = {
-        k: v
-        for k, v in config.items()
-        if isinstance(v, (int, float, bool, str))
-    }
-    metric_dict = {}
-
-    """
     # Save raw metrics arrays for post-hoc analysis/plotting
     metrics = out["metrics"]
 
@@ -589,7 +607,13 @@ def main(cfg: DictConfig):
     done = np.array(metrics["returned_episode"]).reshape(-1).astype(bool)
     ep_returns = ret[done]
 
-    
+    # Prepare metrics for hparams logging
+    hparam_dict = {
+        k: v
+        for k, v in config.items()
+        if isinstance(v, (int, float, bool, str))
+    }
+    metric_dict = {}
     if ep_returns.size > 0:
         metric_dict = {
             "hparam/final_avg_return": float(ep_returns.mean()),
@@ -599,7 +623,7 @@ def main(cfg: DictConfig):
         print(
             f"Training finished. Episodes: {ep_returns.size}, Avg Return: {ep_returns.mean():.2f}"
         )
-    """
+
     # Log hyperparameters with final metrics
     writer.add_hparams(hparam_dict, metric_dict, run_name=".")
 
@@ -612,12 +636,11 @@ def main(cfg: DictConfig):
         "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
-        "PARAM_SAMPLES": 1,
     }
 
     import subprocess
 
-    print("Running evaluation rollouts (nominal)...")
+    # Call with positional and named args
     subprocess.run(
         [
             "python3",
@@ -628,8 +651,6 @@ def main(cfg: DictConfig):
             f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
-            "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
         ]
     )
 
@@ -643,40 +664,6 @@ def main(cfg: DictConfig):
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),
-            "--output",
-            "nominal.png",
-        ]
-    )
-
-    print("Running evaluation rollouts (perturbed)...")
-    eval_config["PARAM_SAMPLES"] = 10
-    subprocess.run(
-        [
-            "python3",
-            os.path.dirname(__file__) + "/rollouts.py",
-            "--run_dirs",
-            f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
-            "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
-        ]
-    )
-
-    subprocess.run(
-        [
-            "python3",
-            (
-                os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
-                if config["ENV_NAME"] == "drone_v0"
-                or config["ENV_NAME"] == "drone_v1"
-                else os.path.dirname(__file__)
-                + "/plots/plot_pendulum_rollouts.py"
-            ),
-            "--output",
-            "perturbed.png",
         ]
     )
 

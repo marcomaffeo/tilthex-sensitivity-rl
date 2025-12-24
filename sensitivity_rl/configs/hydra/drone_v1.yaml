@@ -12,8 +12,9 @@ TOTAL_TIMESTEPS: 2e7
 NUM_MINIBATCHES: 128
 
 # RL Algorithm parameters
-GAMMA: 0.95
+GAMMA: 0.98
 CLIP_EPS: 0.2
+ENT_COEF: 0.001
 
 # Network architecture
 ACTIVATION: tanh

@@ -4,29 +4,45 @@ Tuner script for running multiple experiments with Hydra configuration.
 This script allows you to:
 1. Run multiple experiments with different configurations in parallel
 2. Sweep over hyperparameters defined in SWEEP_PARAMS
-3. Organize results in a single sweep directory
+3. Use method-specific sweeps via METHOD_SPECIFIC_SWEEPS
+4. Organize results in a single sweep directory
 
-Edit SWEEP_PARAMS below to define your parameter sweeps.
+Edit SWEEP_PARAMS or METHOD_SPECIFIC_SWEEPS below to define your parameter sweeps.
 
 USAGE:
     python tuner.py
 
 CONFIGURATION:
     Edit the following variables in this file:
-    - SWEEP_PARAMS: Dictionary of parameters to sweep
-    - BASE_CONFIG: Base configuration file to use
+    - SWEEP_PARAMS: Dictionary of parameters to sweep (shared across all methods)
+    - METHOD_SPECIFIC_SWEEPS: Dictionary of method-specific parameter sweeps
     - NUM_PARALLEL_JOBS: Number of experiments to run in parallel
     - RUN_EVAL_ROLLOUTS: Whether to run evaluation rollouts
     - EVAL_CONFIG: Evaluation settings
 
-EXAMPLE SWEEP_PARAMS:
+EXAMPLE 1 - Shared sweeps (all methods use same parameters):
     SWEEP_PARAMS = {
         "SEED": [30, 40, 50],
         "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.5, 0.9],
         "LR": [0.001, 0.0005],
     }
+    METHOD_SPECIFIC_SWEEPS = {}
     
-This will run 3 × 3 × 2 = 18 experiments.
+This will run 3 × 3 × 2 = 18 experiments per method.
+
+EXAMPLE 2 - Method-specific sweeps (different parameters per method):
+    METHOD_SPECIFIC_SWEEPS = {
+        "sppo_aug": {
+            "SEED": [0, 1, 2],
+            "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.9],
+        },
+        "ppo": {
+            "SEED": [0, 1, 2],
+            "DOMAIN_RANDOMIZATION": [True, False],
+        },
+    }
+    
+This runs 6 experiments for sppo_aug and 6 for ppo, with different parameters.
 """
 
 import os
@@ -57,7 +73,7 @@ from train import make_train, run_evaluation
 
 # Import plotting function
 try:
-    from plot_sweep_results import plot_sweep_results
+    from plots.plot_sweep_results import plot_sweep_results
     PLOTTING_AVAILABLE = True
 except ImportError:
     print("Warning: plot_sweep_results module not found. Plotting will be skipped.")
@@ -70,26 +86,55 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["sppo_aug", "ppo"]
+METHODS = ["ppo","sppo_aug"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["halfcheetah_v5"]
+ENVIRONMENTS = ["drone_v1"]
 
-# Parameter sweeps - these will be applied to all method/environment combinations
+# Parameter sweeps - can be method-specific or shared across all methods
+# Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
+# Option 2: Use METHOD_SPECIFIC_SWEEPS for method-specific parameters
+# If METHOD_SPECIFIC_SWEEPS is defined and not empty, it takes precedence
+
+# Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0, 1],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2],
+    "SEED": [0, 1, 2, 3],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.2],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     #"GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.2],
-    "UPDATE_EPOCHS": [4],
-    "ENT_COEF": [0.001],
-    "TOTAL_TIMESTEPS": [50_000_000],
+    #"CLIP_EPS": [0.2],
+    #"UPDATE_EPOCHS": [4],
+    #"ENT_COEF": [0.001],
+    "DOMAIN_RANDOMIZATION": [True, False],
+    "TOTAL_TIMESTEPS": [10_000_000],
 }
+
+# Method-specific parameter sweeps (optional)
+# If specified, each method uses its own sweep parameters
+# Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
+METHOD_SPECIFIC_SWEEPS = {
+    "sppo_aug": {
+         "SEED": [0, 1, 2],
+         "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.9],
+         "DOMAIN_RANDOMIZATION": [True, False],
+    },
+    "ppo": {
+         "SEED": [0, 1, 2],
+         "DOMAIN_RANDOMIZATION": [True, False],
+    },
+    # "sac": {
+    #     "SEED": [0, 1],
+    #     "LR": [0.001, 0.0005],
+    # },
+}
+
+# If True, methods not in METHOD_SPECIFIC_SWEEPS will use SWEEP_PARAMS as fallback
+# If False, methods not in METHOD_SPECIFIC_SWEEPS will run with no parameter sweep (1 experiment per env)
+USE_SHARED_PARAMS_AS_FALLBACK = False
 
 # Method name mapping for config selection
 # Maps script names to config group names
@@ -304,9 +349,23 @@ def run_sweep_experiments():
     
     This function loads configs and runs experiments in parallel for each
     combination. All experiments are saved in a single sweep directory.
+    Supports method-specific parameter sweeps via METHOD_SPECIFIC_SWEEPS.
     """
-    # Generate all parameter combinations
-    param_combinations = generate_param_combinations(SWEEP_PARAMS)
+    # Determine which sweep configuration to use
+    use_method_specific = bool(METHOD_SPECIFIC_SWEEPS)
+    
+    # Build method-specific parameter combinations
+    method_param_combinations = {}
+    for method in METHODS:
+        if use_method_specific and method in METHOD_SPECIFIC_SWEEPS:
+            # Use method-specific sweep
+            method_param_combinations[method] = generate_param_combinations(METHOD_SPECIFIC_SWEEPS[method])
+        elif USE_SHARED_PARAMS_AS_FALLBACK:
+            # Fallback to shared SWEEP_PARAMS
+            method_param_combinations[method] = generate_param_combinations(SWEEP_PARAMS)
+        else:
+            # No sweep - run single experiment with base config
+            method_param_combinations[method] = [{}]
     
     # Create a single sweep directory with timestamp
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -314,14 +373,20 @@ def run_sweep_experiments():
     sweep_dir.mkdir(parents=True, exist_ok=True)
     
     # Calculate total number of experiments
-    total_experiments = len(METHODS) * len(ENVIRONMENTS) * len(param_combinations)
+    total_experiments = sum(
+        len(ENVIRONMENTS) * len(method_param_combinations[method])
+        for method in METHODS
+    )
     
     # Save sweep configuration
     sweep_config = {
         "methods": METHODS,
         "environments": ENVIRONMENTS,
         "method_config_names": METHOD_CONFIG_NAMES,
-        "sweep_params": SWEEP_PARAMS,
+        "sweep_params": SWEEP_PARAMS if not use_method_specific else None,
+        "method_specific_sweeps": METHOD_SPECIFIC_SWEEPS if use_method_specific else None,
+        "use_method_specific": use_method_specific,
+        "use_shared_params_as_fallback": USE_SHARED_PARAMS_AS_FALLBACK,
         "num_experiments": total_experiments,
         "num_parallel_jobs": NUM_PARALLEL_JOBS,
         "timestamp": ts,
@@ -337,7 +402,13 @@ def run_sweep_experiments():
     print(f"Sweep directory: {sweep_dir}")
     print(f"Total experiments: {total_experiments}")
     print(f"Running sequentially in one process")
-    print(f"Sweep parameters: {list(SWEEP_PARAMS.keys())}")
+    if use_method_specific:
+        print(f"Using method-specific sweeps:")
+        for method in METHODS:
+            params = METHOD_SPECIFIC_SWEEPS.get(method, SWEEP_PARAMS if USE_SHARED_PARAMS_AS_FALLBACK else {})
+            print(f"  {method}: {list(params.keys())}")
+    else:
+        print(f"Sweep parameters (shared): {list(SWEEP_PARAMS.keys())}")
     print(f"{'='*80}\n")
     
     # Update latest symlink to point to this sweep
@@ -392,7 +463,8 @@ def run_sweep_experiments():
             # Ensure ENV_NAME is set correctly
             base_config["ENV_NAME"] = env_name
             
-            # Now iterate over parameter combinations
+            # Now iterate over parameter combinations for this method
+            param_combinations = method_param_combinations[method]
             for param_override in param_combinations:
                 exp_counter += 1
                 

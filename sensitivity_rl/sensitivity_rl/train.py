@@ -21,6 +21,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Environment setup before JAX import
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
 os.environ["JAX_PLATFORMS"] = "cuda,cpu"
@@ -248,8 +249,7 @@ def main(cfg: DictConfig):
     runs_root = Path("runs")
     runs_root.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    algo_name = algorithm.upper()
-    run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
+    run_dir = spec.run_dir(config, runs_root, ts)
     run_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving results to: {run_dir}")
     

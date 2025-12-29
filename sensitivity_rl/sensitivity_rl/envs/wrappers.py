@@ -1,3 +1,4 @@
+import random
 import jax
 import jax.numpy as jnp
 import jax.flatten_util
@@ -432,6 +433,11 @@ class SensitivityWrapper(GymnaxWrapper):
         df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
         dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
 
+        df_dx = jnp.clip(df_dx, -1e3, 1e3)
+        df_du = jnp.clip(df_du, -1e3, 1e3)
+        df_dp = jnp.clip(df_dp, -1e3, 1e3)
+        dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
+
         # Replace NaN with 1e3
         df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
         df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
@@ -442,6 +448,7 @@ class SensitivityWrapper(GymnaxWrapper):
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
         
+        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
         dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
         
         # Update action sensitivity
@@ -652,6 +659,105 @@ class ResetEnvWrapper(GymnaxWrapper):
         obs_st, state_st, reward, done, info = self._env.step(
             key, state, action, params
         )
+        obs_re, state_re = self.reset(key, params)
+
+        # Auto-reset environment based on termination
+        state = jax.tree.map(
+            lambda x, y: jax.lax.select(done, x, y), state_re, state_st
+        )
+        obs = jax.lax.select(done, obs_re, obs_st)
+
+        return obs, state, reward, done, info
+
+
+@dataclass_with_custom_replace
+class DomainRandomizationEnvState:
+    env_state: environment.EnvState
+    params: environment.EnvParams
+
+    # provide proxy access to regular attributes of wrapped object
+    def __getattr__(self, name):
+        return getattr(self.env_state, name)
+
+    def _replace(self, **kwargs):
+        """Return a copy with updated fields (Flax-style replace)."""
+        return struct.replace(self.env_state, **kwargs)
+
+
+class DomainRandomizationWrapper(GymnaxWrapper):
+    """Call reset when done is True."""
+
+    def __init__(self, env, params: Optional[environment.EnvParams] = None):
+        super().__init__(env)
+        
+
+    def reset(
+        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
+    ):
+        min_params = self._env.params_min 
+        max_params = self._env.params_max
+
+        # 2. Inside your loop/function
+        key, sample_key = jax.random.split(key)
+
+        # Generate the randomized parameters
+        randomized_params = self.sample_params(sample_key, params, min_params, max_params)
+
+        obs, env_state = self._env.reset(key, randomized_params)
+        state = DomainRandomizationEnvState(
+            env_state=env_state,
+            params=randomized_params
+        )
+        return obs, state
+
+    def sample_params(self,key, params, low_list, high_list):
+        """
+        Samples new params where each leaf is drawn from U(low[i], high[i]).
+        Assumes low_list and high_list follow the order of jax.tree_util.tree_leaves(params).
+        """
+        # 1. Flatten the existing params to get the structure (treedef) and current shapes
+        leaves, treedef = jax.tree_util.tree_flatten(params)
+        
+        # Safety Check: Ensure lists match the number of learnable parameters
+        assert len(leaves) == len(low_list) == len(high_list), \
+            f"Mismatch: Params has {len(leaves)} nodes, but low/high lists have {len(low_list)}"
+
+        # 2. Split the random key (one sub-key per parameter array)
+        keys = jax.random.split(key, len(leaves))
+
+        # 3. Iterate and Sample
+        # We zip everything together to process them in lock-step
+        new_leaves = []
+        for rng, leaf, l, h in zip(keys, leaves, low_list, high_list):
+            # Sample using the leaf's shape, but the list's min/max
+            if isinstance(leaf,float):
+                sampled_val = random.uniform(l,h)
+            else:
+                sampled_val = jax.random.uniform(rng, shape=leaf.shape, minval=l, maxval=h)
+            new_leaves.append(sampled_val)
+
+        # 4. Reconstruct (Unflatten) the PyTree
+        # This packs the list of new arrays back into your custom dataclass structure
+        new_params = jax.tree_util.tree_unflatten(treedef, new_leaves)
+        
+        return new_params
+
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state: DomainRandomizationEnvState,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,
+    ):
+        obs_st, env_state_st, reward, done, info = self._env.step(
+            key, state.env_state, action, state.params
+        )
+        
+        state_st = DomainRandomizationEnvState(
+            env_state=env_state_st,
+            params=state.params
+        )
+
         obs_re, state_re = self.reset(key, params)
 
         # Auto-reset environment based on termination

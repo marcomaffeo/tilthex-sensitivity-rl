@@ -16,6 +16,7 @@ from envs.wrappers import (
     SensitivityWrapper,
     AddSensitivityToReward,
     ComputeSensitivityReward,
+    DomainRandomizationWrapper,
     MujocoSensitivityWrapper,
     ResetEnvWrapper,
     LogWrapper,
@@ -35,7 +36,10 @@ def wrap_env(env, config):
         env = SensitivityWrapper(env)
     # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
     env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
-    env = ResetEnvWrapper(env)  # Don't remove
+    if config.get("DOMAIN_RANDOMIZATION", False):
+        env = DomainRandomizationWrapper(env, env.default_params)
+    else:
+        env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
@@ -255,6 +259,14 @@ def init_runner_state(config, env, env_params, networks, rng):
         rng=_rng,
     )
 
+def run_dir(config, runs_root, ts):
+    algo_name = "SPPO_AUG"
+    if config.get("DOMAIN_RANDOMIZATION", False):
+        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_DR_{ts}"
+    else:
+        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
+    
+    return run_dir
 
 SPEC = AlgorithmSpec(
     wrap_env=wrap_env,
@@ -267,5 +279,6 @@ SPEC = AlgorithmSpec(
     extract_losses=extract_losses,
     init_networks=init_networks,
     init_runner_state=init_runner_state,
+    run_dir=run_dir,
     uses_sensitivity=True,
 )

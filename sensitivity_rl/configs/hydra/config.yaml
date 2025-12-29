@@ -7,12 +7,12 @@ hydra:
   output_subdir: null  # Disables .hydra folder creation     
   
 defaults:
-  - method: ppo
-  - env: halfcheetah_v5
+  - method: cppo
+  - env: drone_v1
   - override hydra/job_logging: none  # Correct way to disable job logging
   - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_
 
 # Override any method/env settings below if needed
 # Random seed
-SEED: 3
+SEED: 1

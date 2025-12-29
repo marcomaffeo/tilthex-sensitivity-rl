@@ -33,4 +33,5 @@ class AlgorithmSpec:
     extract_losses: Callable
     init_networks: Callable
     init_runner_state: Callable
+    run_dir: Callable
     uses_sensitivity: bool = False

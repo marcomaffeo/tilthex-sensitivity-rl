@@ -87,8 +87,11 @@ def parse_experiment_name(exp_name: str) -> Dict[str, any]:
         
         # Extract parameters that start with known prefixes followed by value
         # Check if current part contains letters followed by digits (e.g., seed0, srw0.5)
+        # or letters followed by boolean strings (e.g., domain_randomizationTrue)
         import re
-        match = re.match(r'^([a-zA-Z]+)([-+]?[0-9]*\.?[0-9]+)$', parts[i])
+        
+        # First try numeric pattern
+        match = re.match(r'^([a-zA-Z_]+)([-+]?[0-9]*\.?[0-9]+)$', parts[i])
         if match:
             param_name = match.group(1)
             param_value_str = match.group(2)
@@ -99,6 +102,15 @@ def parse_experiment_name(exp_name: str) -> Dict[str, any]:
                 continue
             except ValueError:
                 pass
+        
+        # Try boolean pattern
+        bool_match = re.match(r'^([a-zA-Z_]+)(True|False)$', parts[i])
+        if bool_match:
+            param_name = bool_match.group(1)
+            param_value_str = bool_match.group(2)
+            params[param_name] = param_value_str == 'True'
+            i += 1
+            continue
         
         i += 1
     

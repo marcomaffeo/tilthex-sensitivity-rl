@@ -323,10 +323,198 @@ class HalfCheetahV5(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot HalfCheetah rollout trajectories.
+        """Plot HalfCheetah rollout trajectories showing full body motion.
         
         Args:
-            series_list: List of trajectory dictionaries.
+            series_list: List of trajectory dictionaries containing qpos and qvel.
             output: Optional path to save the figure.
         """
-        print("[plot_rollouts] HalfCheetah plotting is not implemented yet.")
+        import matplotlib.pyplot as plt
+        from matplotlib import cm
+        import numpy as np
+        from mpl_toolkits.mplot3d import Axes3D
+        
+        # Load MuJoCo model to compute forward kinematics
+        model_path = Path(__file__).parent / "assets" / "half_cheetah.xml"
+        mj_model = mujoco.MjModel.from_xml_path(str(model_path))
+        mj_data = mujoco.MjData(mj_model)
+        
+        fig = plt.figure(figsize=(18, 10))
+        
+        # Create 3D subplot for full body trajectory
+        ax_3d = fig.add_subplot(2, 2, 1, projection='3d')
+        
+        # Create 2D subplots for velocities
+        ax_vel_pos = fig.add_subplot(2, 2, 2)
+        ax_vel_ang = fig.add_subplot(2, 2, 3)
+        ax_combined = fig.add_subplot(2, 2, 4)
+        
+        colors = cm.viridis(np.linspace(0, 1, len(series_list)))
+        
+        for idx, series in enumerate(series_list):
+            # Extract state from series - it's stored as a flattened array
+            # The state field contains concatenated qpos and qvel
+            state_flat = series['state']  # Shape: (timesteps, state_dim)
+                        
+            # For HalfCheetah: state = [qpos (9), qvel (9)] = 18 total
+            # Split into qpos and qvel
+            qpos = state_flat[:, :9]
+            qvel = state_flat[:, 9:18]
+            
+            timesteps = qpos.shape[0]
+            steps = np.arange(timesteps)
+            
+            # Compute body positions for all timesteps using forward kinematics
+            body_positions = []  # Will store (timesteps, n_bodies, 3)
+            
+            for t in range(timesteps):
+                mj_data.qpos[:] = qpos[t]
+                mj_data.qvel[:] = qvel[t]
+                mujoco.mj_forward(mj_model, mj_data)
+                # xpos contains 3D positions of all bodies (n_bodies, 3)
+                # Skip body 0 (world/floor) and only get actual robot bodies
+                body_positions.append(mj_data.xpos[1:].copy())  # Skip world body
+            
+            body_positions = np.array(body_positions)  # (timesteps, n_bodies-1, 3)
+            n_bodies = body_positions.shape[1]
+            
+            # Plot body parts as individual points with fading along trajectory
+            # Show all bodies but with varying transparency
+            for body_idx in range(n_bodies):
+                x = body_positions[:, body_idx, 0]
+                y = body_positions[:, body_idx, 1]
+                z = body_positions[:, body_idx, 2]
+                
+                # Plot points with varying alpha - fade from transparent to opaque
+                ax_3d.plot(x, y, z, color=colors[idx], alpha=0.2, linestyle='--',
+                           label=f'Rollout {idx+1}' if (body_idx == 0) else '')
+            
+            
+            # Compute joint positions at final timestep
+            final_time = timesteps - 1
+            mj_data.qpos[:] = qpos[final_time]
+            mj_data.qvel[:] = qvel[final_time]
+            mujoco.mj_forward(mj_model, mj_data)
+            
+            # Get joint anchor positions (xipos contains joint positions in world frame)
+            # Each joint connects a parent body to a child body
+            joint_positions = []
+            for jnt_idx in range(mj_model.njnt):
+                # Get the joint position in world coordinates
+                joint_pos = mj_data.xanchor[jnt_idx].copy()
+                joint_positions.append(joint_pos)
+            joint_positions = np.array(joint_positions)  # (n_joints, 3)
+            
+            # Draw full skeleton at final position
+            for body_idx in range(n_bodies):
+                ax_3d.scatter([body_positions[final_time, body_idx, 0]], 
+                             [body_positions[final_time, body_idx, 1]], 
+                             [body_positions[final_time, body_idx, 2]], 
+                             color=colors[idx], marker='o', s=100, alpha=0.2, 
+                             edgecolors='black', linewidths=2,
+                             label=f'Rollout {idx+1}' if body_idx == 0 else '')
+            
+            # For each body, draw line to parent joint (if exists)
+            for body_idx in range(1, mj_model.nbody):  # Skip world body
+                parent_id = mj_model.body_parentid[body_idx]
+                if parent_id > 0:  # If parent is not world
+                    # Find joint connecting this body to its parent
+                    # body_jntadr gives the starting joint index for each body
+                    # body_jntnum gives the number of joints for each body
+                    if mj_model.body_jntnum[body_idx] > 0:
+                        jnt_idx = mj_model.body_jntadr[body_idx]
+                        
+                        # Adjust body indices (skip world body)
+                        child_body_idx = body_idx - 1
+                        parent_body_idx = parent_id - 1
+                        
+                        # Draw from parent body to joint
+                        ax_3d.plot(
+                            [body_positions[final_time, parent_body_idx, 0], 
+                             joint_positions[jnt_idx, 0]],
+                            [body_positions[final_time, parent_body_idx, 1], 
+                             joint_positions[jnt_idx, 1]],
+                            [body_positions[final_time, parent_body_idx, 2], 
+                             joint_positions[jnt_idx, 2]],
+                            color=colors[idx], linewidth=3, alpha=0.2, linestyle='-'
+                        )
+                        
+                        # Draw from joint to child body
+                        ax_3d.plot(
+                            [joint_positions[jnt_idx, 0],
+                             body_positions[final_time, child_body_idx, 0]],
+                            [joint_positions[jnt_idx, 1],
+                             body_positions[final_time, child_body_idx, 1]],
+                            [joint_positions[jnt_idx, 2],
+                             body_positions[final_time, child_body_idx, 2]],
+                            color=colors[idx], linewidth=3, alpha=0.2, linestyle='-'
+                        )
+            
+            # Extract velocities
+            vel_x = qvel[:, 0]  # Forward velocity
+            vel_z = qvel[:, 1]  # Vertical velocity
+            vel_rot = qvel[:, 2]  # Rotational velocity
+            
+            # Joint angular velocities (6 joints)
+            joint_vels = qvel[:, 3:9]
+            
+            # Plot positional velocities (linear)
+            ax_vel_pos.plot(steps, vel_x, color=colors[idx], 
+                           linestyle='-', linewidth=2, alpha=0.1,
+                           label=f'Rollout {idx+1} - X vel')
+            ax_vel_pos.plot(steps, vel_z, color=colors[idx], 
+                           linestyle='--', linewidth=2, alpha=0.1)
+            
+            # Plot angular velocities (body + joints)
+            ax_vel_ang.plot(steps, vel_rot, color=colors[idx], 
+                           linewidth=2.5, alpha=0.1,
+                           label=f'Rollout {idx+1} - Body rot')
+            
+            # Combined velocity magnitude
+            vel_magnitude = np.sqrt(vel_x**2 + vel_z**2 + vel_rot**2)
+            ax_combined.plot(steps, vel_magnitude, color=colors[idx], 
+                            linewidth=2, alpha=0.1,
+                            label=f'Rollout {idx+1}')
+        
+        # Configure 3D plot
+        ax_3d.set_xlabel('X Position (Forward)', fontsize=11, fontweight='bold')
+        ax_3d.set_ylabel('Y Position (Lateral)', fontsize=11, fontweight='bold')
+        ax_3d.set_zlabel('Z Position (Height)', fontsize=11, fontweight='bold')
+        ax_3d.set_title('HalfCheetah Full Body 3D Motion\n(circles: start, squares: end)', 
+                       fontsize=13, fontweight='bold')
+        #ax_3d.legend(fontsize=9, loc='upper left')
+        ax_3d.grid(True, alpha=0.3)
+        ax_3d.view_init(elev=15, azim=45)
+        
+        # Configure positional velocity plot
+        ax_vel_pos.set_xlabel('Step', fontsize=11, fontweight='bold')
+        ax_vel_pos.set_ylabel('Linear Velocity', fontsize=11, fontweight='bold')
+        ax_vel_pos.set_title('Linear Velocities\n(solid: X forward, dashed: Z vertical)', 
+                            fontsize=12, fontweight='bold')
+        #ax_vel_pos.legend(fontsize=9)
+        ax_vel_pos.grid(True, alpha=0.3)
+        
+        # Configure angular velocity plot
+        ax_vel_ang.set_xlabel('Step', fontsize=11, fontweight='bold')
+        ax_vel_ang.set_ylabel('Angular Velocity', fontsize=11, fontweight='bold')
+        ax_vel_ang.set_title('Angular Velocities\n(solid: body rotation, dotted: avg joints)', 
+                            fontsize=12, fontweight='bold')
+        #ax_vel_ang.legend(fontsize=9)
+        ax_vel_ang.grid(True, alpha=0.3)
+        
+        # Configure combined plot
+        ax_combined.set_xlabel('Step', fontsize=11, fontweight='bold')
+        ax_combined.set_ylabel('Velocity Magnitude', fontsize=11, fontweight='bold')
+        ax_combined.set_title('Overall Velocity Magnitude', fontsize=12, fontweight='bold')
+        #ax_combined.legend(fontsize=9)
+        ax_combined.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if output is not None:
+            plt.savefig(output, dpi=150, bbox_inches='tight')
+            print(f"[plot_rollouts] Figure saved to {output}")
+        else:
+            plt.show()
+        
+        plt.close()

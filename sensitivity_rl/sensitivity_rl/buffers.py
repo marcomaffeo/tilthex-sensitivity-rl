@@ -78,6 +78,15 @@ class UpdateStateDual(NamedTuple):
     targets_s: jnp.ndarray
     rng: jnp.ndarray
 
+class UpdateStateCVaR(NamedTuple):
+    """Update state for CVaR-based algorithms (e.g., CPPO)."""
+    train_state: object
+    traj_batch: object
+    advantages: jnp.ndarray
+    targets: jnp.ndarray
+    nu : jnp.ndarray
+    cvarlam : jnp.ndarray
+    rng: jnp.ndarray
 
 class RolloutGRUTransition(NamedTuple):
     """Transition for SPPO with single GRU-based ActorCritic."""
@@ -99,6 +108,14 @@ class RunnerStateGRU(NamedTuple):
     gru_hidden: jnp.ndarray
     rng: jnp.ndarray
 
+class RunnerStateCVaR(NamedTuple):
+    """Runner state for GRU-based single-network algorithms (e.g., SPPO)."""
+    train_state: object  # Flax TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    nu: jnp.ndarray
+    cvarlam: jnp.ndarray
+    rng: jnp.ndarray
 
 class ReplayTransition(NamedTuple):
     done: jnp.ndarray

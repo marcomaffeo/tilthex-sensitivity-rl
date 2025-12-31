@@ -153,7 +153,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
             )
 
             # CALCULATE GAE
-            gae_results = spec.calculate_gae(
+            gae_results, collect_state = spec.calculate_gae(
                 config, traj_batch, networks, collect_state,
             )
 

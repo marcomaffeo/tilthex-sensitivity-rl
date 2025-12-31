@@ -182,7 +182,7 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     return {
         "advantages": advantages,
         "targets": targets,
-    }
+    }, collect_state
 
 def rebuild_runner_state(update_state: UpdateState, collect_state: RunnerStateGRU):
     """Rebuild runner state after update epochs."""

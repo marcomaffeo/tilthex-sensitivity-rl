@@ -246,7 +246,7 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     return {
         "advantages": cppo_advantages,
         "targets": targets,
-    }
+    }, collect_state
 
 
 def pack_update_state(collect_state, traj_batch, gae_results):

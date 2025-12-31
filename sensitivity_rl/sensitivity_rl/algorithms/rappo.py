@@ -1,0 +1,374 @@
+"""PPO algorithm specification."""
+
+import jax
+import jax.numpy as jnp
+from flax.training.train_state import TrainState
+
+from .base import AlgorithmSpec
+from algorithms.common import gae_standard
+from net_utils import create_optimizer, make_linear_schedule
+from buffers import RolloutTransition, RunnerState, UpdateState
+from networks import ActorDCritic
+from envs.wrappers import (
+    GymnaxWrapper,
+    LogWrapper,
+    VecEnv,
+    NormalizeVecReward,
+    DomainRandomizationWrapper,
+    ClipAction,
+    ResetEnvWrapper,
+    SensitivityWrapper,
+    MujocoSensitivityWrapper,
+)
+
+
+def wrap_env(env, config):
+    """Apply PPO-specific environment wrappers."""
+    env = GymnaxWrapper(env)
+    env = ClipAction(env)
+
+    # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
+    if config.get("SENSITIVITY", False):
+        if getattr(env, "type", "") == "mujoco":
+            env = MujocoSensitivityWrapper(env)
+        else:
+            env = SensitivityWrapper(env)
+    # if config.get("DOMAIN_RANDOMIZATION", False):
+    env = DomainRandomizationWrapper(env, env.default_params)
+    # else:
+    #    env = ResetEnvWrapper(env)  # Don't remove
+    env = LogWrapper(env)
+    env = VecEnv(env)
+    if config["NORMALIZE_ENV"]:
+        env = NormalizeVecReward(env, config["GAMMA"])
+    return env
+
+
+def calculate_huber_loss(predictions, targets, delta=1.0):
+    error = predictions - targets
+    abs_error = jnp.abs(error)
+    quadratic = jnp.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    huber_loss = 0.5 * quadratic**2 + delta * linear
+    return huber_loss
+
+
+def calculate_quantile_huber_loss(huber_loss, predictions, targets, taus):
+    return (
+        jnp.abs(
+            taus.reshape(-1, predictions.shape[1], 1)
+            - (targets - predictions < 0).astype(jnp.float32)
+        )
+        * huber_loss
+    )
+
+
+def make_loss_fn(config, network):
+    """Create PPO loss function.
+
+    Returns a function with signature:
+        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+    """
+
+    def _loss_fn(params, traj_batch, advantages, targets, rng):
+        # RERUN NETWORK
+        pi, (quantile_values, taus) = network.apply(params, traj_batch.obs, rng)
+        log_prob = pi.log_prob(traj_batch.action)
+
+        # CALCULATE VALUE LOSS
+        # Huber loss
+        element_wise_huber_loss = calculate_huber_loss(
+            quantile_values.reshape(-1, config.get("N_TAUS", 64), 1),
+            targets.reshape(-1, config.get("N_TAUS", 64), 1).transpose(0, 2, 1),
+        )
+        quantile_huber_loss = calculate_quantile_huber_loss(
+            element_wise_huber_loss,
+            quantile_values.reshape(-1, config.get("N_TAUS", 64), 1),
+            targets.reshape(-1, config.get("N_TAUS", 64), 1).transpose(0, 2, 1),
+            taus,
+        )  # Shape: (B, T, N_TAUS, 1)
+        value_loss = quantile_huber_loss.mean()
+
+        # CALCULATE ACTOR LOSS
+        log_ratio = log_prob - traj_batch.log_prob
+        ratio = jnp.exp(log_ratio)
+
+        # calculate approx_kl http://joschu.net/blog/kl-approx.html
+        old_approx_kl = (-log_ratio).mean()
+        approx_kl = ((ratio - 1) - log_ratio).mean()
+        clipfracs = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
+
+        advantages = advantages.reshape(-1)
+        gae = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        loss_actor1 = ratio * gae
+        loss_actor2 = (
+            jnp.clip(
+                ratio,
+                1.0 - config["CLIP_EPS"],
+                1.0 + config["CLIP_EPS"],
+            )
+            * gae
+        )
+        loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
+        loss_actor = loss_actor.mean()
+        entropy = pi.entropy().mean()
+
+        total_loss = (
+            loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
+        )
+        return total_loss, (
+            value_loss,
+            loss_actor,
+            entropy,
+            old_approx_kl,
+            approx_kl,
+            clipfracs,
+        )
+
+    return _loss_fn
+
+
+def make_collect_fn(config, env, env_params, networks):
+    """Create trajectory collection function for PPO.
+
+    Args:
+        config: Training configuration
+        env: Wrapped environment
+        env_params: Environment parameters
+        networks: Dict returned by init_networks containing 'network', 'train_state', etc.
+
+    Returns a function for use with jax.lax.scan that collects transitions.
+    """
+    network = networks["network"]
+
+    def _env_step(runner_state: RunnerState, unused):
+        rng, _rng = jax.random.split(runner_state.rng)
+        pi, (quantile_values, _) = network.apply(
+            runner_state.train_state.params, runner_state.last_obs, rng
+        )
+        action = pi.sample(seed=_rng)
+        log_prob = pi.log_prob(action)
+
+        rng, _rng = jax.random.split(rng)
+        rng_step = jax.random.split(_rng, config["NUM_ENVS"])
+        obsv, env_state, reward, done, info = env.step(
+            rng_step, runner_state.env_state, action, env_params
+        )
+        obsv = jax.lax.stop_gradient(obsv)
+        env_state = jax.lax.stop_gradient(env_state)
+        transition = RolloutTransition(
+            done.reshape(-1, 1, 1).repeat(config.get("N_TAUS", 64), 1),
+            action,
+            quantile_values,
+            reward.reshape(-1, 1, 1).repeat(config.get("N_TAUS", 64), 1),
+            log_prob,
+            runner_state.last_obs,
+            info,
+        )
+        new_runner_state = RunnerState(
+            train_state=runner_state.train_state,
+            env_state=env_state,
+            last_obs=obsv,
+            rng=rng,
+        )
+        return new_runner_state, transition
+
+    return _env_step
+
+
+def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
+    """Create update epoch function for PPO.
+
+    Args:
+        config: Training configuration
+        loss_fn: Loss function created by make_loss_fn
+        shuffle_batch_fn: Function to shuffle and batch trajectories
+        networks: Dict returned by init_networks (unused in PPO but needed for interface)
+
+    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    """
+
+    def _update_epoch(update_state: UpdateState, unused):
+        def _update_minbatch(curry, batch_info):
+            train_state, rng = curry
+            rng, _rng = jax.random.split(rng)
+
+            traj_batch, advantages, targets = batch_info
+            grad_fn = jax.value_and_grad(loss_fn, has_aux=True)
+            total_loss, grads = grad_fn(
+                train_state.params, traj_batch, advantages, targets, _rng
+            )
+            train_state = train_state.apply_gradients(grads=grads)
+            return (train_state, rng), total_loss
+
+        rng, _rng = jax.random.split(update_state.rng)
+        minibatches = shuffle_batch_fn(
+            _rng,
+            (update_state.traj_batch, update_state.advantages, update_state.targets),
+            config,
+        )
+        (train_state, rng), total_loss = jax.lax.scan(
+            _update_minbatch, (update_state.train_state, rng), minibatches
+        )
+        new_update_state = UpdateState(
+            train_state=train_state,
+            traj_batch=update_state.traj_batch,
+            advantages=update_state.advantages,
+            targets=update_state.targets,
+            rng=rng,
+        )
+        return new_update_state, total_loss
+
+    return _update_epoch
+
+
+def calculate_gae(config, traj_batch, networks, collect_state):
+    """Calculate GAE for PPO."""
+    rng, _rng = jax.random.split(collect_state.rng)
+    _, (last_val, _) = networks["network"].apply(
+        collect_state.train_state.params, collect_state.last_obs, _rng
+    )
+    # Standard GAE but giving B x T
+    advantages, targets = gae_standard(config, traj_batch, last_val)
+    advantages = jnp.mean(advantages, axis=-2)
+    return {
+        "advantages": advantages,
+        "targets": targets,
+    }, RunnerState(
+        train_state=collect_state.train_state,
+        env_state=collect_state.env_state,
+        last_obs=collect_state.last_obs,
+        rng=rng,
+    )
+
+
+def pack_update_state(collect_state, traj_batch, gae_results):
+    """Pack state for update epochs."""
+    return UpdateState(
+        train_state=collect_state.train_state,
+        traj_batch=traj_batch,
+        advantages=gae_results["advantages"],
+        targets=gae_results["targets"],
+        rng=collect_state.rng,
+    )
+
+
+def rebuild_runner_state(update_state: UpdateState, collect_state: RunnerState):
+    """Rebuild runner state after update epochs."""
+    return RunnerState(
+        train_state=update_state.train_state,
+        env_state=collect_state.env_state,
+        last_obs=collect_state.last_obs,
+        rng=update_state.rng,
+    )
+
+
+def extract_losses(loss_info):
+    """Extract loss metrics from loss_info."""
+    total_losses, (
+        value_losses,
+        actor_losses,
+        entropies,
+        old_approx_kl,
+        approx_kl,
+        clipfracs,
+    ) = loss_info
+    losses = {
+        "total": total_losses.mean(),
+        "value": value_losses.mean(),
+        "actor": actor_losses.mean(),
+        "entropy": entropies.mean(),
+        "old_approx_kl": old_approx_kl.mean(),
+        "approx_kl": approx_kl.mean(),
+        "clipfrac": jnp.concatenate(clipfracs).mean(),
+    }
+    return losses, None  # losses, extra_losses
+
+
+def init_networks(config, env, env_params, rng, load_params_fn=None):
+    """Initialize network and train state for PPO.
+
+    Returns:
+        dict with keys: network, train_state, and any secondary networks/states
+    """
+    network = ActorDCritic(
+        env.action_space(env_params).shape[0],
+        activation=config["ACTIVATION"],
+        actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
+        hidden_size=config.get("CRITIC_HIDDEN_SIZE", 256),
+        n_cosines=config.get("N_COSINES", 64),
+        n_taus=config.get("N_TAUS", 64),
+        lb=config.get("SAMPLE_LB", 0.0),
+        ub=config.get("ALPHA", 1.0),
+    )
+
+    init_x = jnp.zeros(env.observation_space(env_params).shape)
+
+    if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
+        network_params = load_params_fn(rng, network, init_x, config)
+    else:
+        network_params = network.init(rng, init_x, rng)
+
+    linear_schedule = make_linear_schedule(config)
+    tx = create_optimizer(config, linear_schedule)
+    train_state = TrainState.create(
+        apply_fn=network.apply,
+        params=network_params,
+        tx=tx,
+    )
+
+    return {
+        "network": network,
+        "train_state": train_state,
+    }
+
+
+def init_runner_state(config, env, env_params, networks, rng):
+    """Create initial runner state for PPO.
+
+    Args:
+        config: Training configuration
+        env: Wrapped environment
+        env_params: Environment parameters
+        networks: Dict returned by init_networks
+        rng: PRNG key (will be split for env reset)
+
+    Returns:
+        RunnerState NamedTuple
+    """
+    rng, _rng = jax.random.split(rng)
+    reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
+    obsv, env_state = env.reset(reset_rng, env_params)
+
+    # Extra split before scan (matching original ppo.py line 494-495)
+    rng, _rng = jax.random.split(rng)
+
+    return RunnerState(
+        train_state=networks["train_state"],
+        env_state=env_state,
+        last_obs=obsv,
+        rng=_rng,  # Use _rng, not rng, to match original
+    )
+
+
+def run_dir(config, runs_root, ts):
+    algo_name = "RAPPO"
+    run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
+
+    return run_dir
+
+
+SPEC = AlgorithmSpec(
+    wrap_env=wrap_env,
+    make_loss_fn=make_loss_fn,
+    make_collect_fn=make_collect_fn,
+    make_update_fn=make_update_fn,
+    calculate_gae=calculate_gae,
+    pack_update_state=pack_update_state,
+    rebuild_runner_state=rebuild_runner_state,
+    extract_losses=extract_losses,
+    init_networks=init_networks,
+    init_runner_state=init_runner_state,
+    run_dir=run_dir,
+    uses_sensitivity=False,
+)

@@ -267,7 +267,7 @@ def calculate_gae(config, traj_batch, networks, collect_state):
         "advantages_s": advantages_s,
         "targets": targets,
         "targets_s": targets_s,
-    }
+    }, collect_state
 
 
 def pack_update_state(collect_state, traj_batch, gae_results):

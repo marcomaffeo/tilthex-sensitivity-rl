@@ -339,17 +339,21 @@ class HalfCheetahV5(environment.Environment):
         mj_model = mujoco.MjModel.from_xml_path(str(model_path))
         mj_data = mujoco.MjData(mj_model)
         
-        fig = plt.figure(figsize=(18, 10))
+        fig = plt.figure(figsize=(18, 12))
         
         # Create 3D subplot for full body trajectory
-        ax_3d = fig.add_subplot(2, 2, 1, projection='3d')
+        ax_3d = fig.add_subplot(2, 4, (1,4), projection='3d')
         
-        # Create 2D subplots for velocities
-        ax_vel_pos = fig.add_subplot(2, 2, 2)
-        ax_vel_ang = fig.add_subplot(2, 2, 3)
-        ax_combined = fig.add_subplot(2, 2, 4)
+        # Create 2D subplots for mean velocities and states
+        ax_vel_mean = fig.add_subplot(2, 4, (5,6))
+        ax_states_mean = fig.add_subplot(2, 4, (7,8))
         
         colors = cm.viridis(np.linspace(0, 1, len(series_list)))
+        
+        # Collect all trajectory data for computing means and stds
+        all_qpos = []  # List of (timesteps, 9) arrays
+        all_qvel = []  # List of (timesteps, 9) arrays
+        all_vel_x = []  # List of (timesteps,) arrays - forward velocity
         
         for idx, series in enumerate(series_list):
             # Extract state from series - it's stored as a flattened array
@@ -363,6 +367,11 @@ class HalfCheetahV5(environment.Environment):
             
             timesteps = qpos.shape[0]
             steps = np.arange(timesteps)
+            
+            # Store data for mean/std computation
+            all_qpos.append(qpos)
+            all_qvel.append(qvel)
+            all_vel_x.append(qvel[:, 0])
             
             # Compute body positions for all timesteps using forward kinematics
             body_positions = []  # Will store (timesteps, n_bodies, 3)
@@ -449,65 +458,84 @@ class HalfCheetahV5(environment.Environment):
                              body_positions[final_time, child_body_idx, 2]],
                             color=colors[idx], linewidth=3, alpha=0.2, linestyle='-'
                         )
-            
-            # Extract velocities
-            vel_x = qvel[:, 0]  # Forward velocity
-            vel_z = qvel[:, 1]  # Vertical velocity
-            vel_rot = qvel[:, 2]  # Rotational velocity
-            
-            # Joint angular velocities (6 joints)
-            joint_vels = qvel[:, 3:9]
-            
-            # Plot positional velocities (linear)
-            ax_vel_pos.plot(steps, vel_x, color=colors[idx], 
-                           linestyle='-', linewidth=2, alpha=0.1,
-                           label=f'Rollout {idx+1} - X vel')
-            ax_vel_pos.plot(steps, vel_z, color=colors[idx], 
-                           linestyle='--', linewidth=2, alpha=0.1)
-            
-            # Plot angular velocities (body + joints)
-            ax_vel_ang.plot(steps, vel_rot, color=colors[idx], 
-                           linewidth=2.5, alpha=0.1,
-                           label=f'Rollout {idx+1} - Body rot')
-            
-            # Combined velocity magnitude
-            vel_magnitude = np.sqrt(vel_x**2 + vel_z**2 + vel_rot**2)
-            ax_combined.plot(steps, vel_magnitude, color=colors[idx], 
-                            linewidth=2, alpha=0.1,
-                            label=f'Rollout {idx+1}')
+        
+        # Compute mean and std across all series
+        # Ensure all trajectories have the same length (pad or truncate if needed)
+        min_length = min(len(traj) for traj in all_vel_x)
+        
+        # Truncate all trajectories to minimum length
+        vel_x_array = np.array([traj[:min_length] for traj in all_vel_x])  # (n_series, timesteps)
+        qpos_array = np.array([qpos[:min_length] for qpos in all_qpos])  # (n_series, timesteps, 9)
+        qvel_array = np.array([qvel[:min_length] for qvel in all_qvel])  # (n_series, timesteps, 9)
+        
+        steps = np.arange(min_length)
+        
+        # Compute mean and std for forward velocity (qvel[:, 0])
+        vel_x_mean = np.mean(vel_x_array, axis=0)
+        vel_x_std = np.std(vel_x_array, axis=0)
+        
+        # Plot mean forward velocity with std bands
+        ax_vel_mean.plot(steps, vel_x_mean, color='blue', linewidth=2.5, 
+                        label='Mean Forward Velocity', alpha=0.8)
+        ax_vel_mean.fill_between(steps, vel_x_mean - vel_x_std, vel_x_mean + vel_x_std,
+                                 color='blue', alpha=0.3, label='± 1 std')
+        
+        # Compute mean and std for all other states
+        # qpos has 9 dimensions, qvel has 9 dimensions (but we skip qvel[:, 0])
+        # So we'll plot: qpos (9) + qvel[:, 1:9] (8) = 17 total curves
+        
+        state_labels_qpos = ['qpos_x', 'qpos_z', 'qpos_rot', 'qpos_j1', 'qpos_j2', 
+                            'qpos_j3', 'qpos_j4', 'qpos_j5', 'qpos_j6']
+        state_labels_qvel = ['qvel_z', 'qvel_rot', 'qvel_j1', 'qvel_j2', 
+                            'qvel_j3', 'qvel_j4', 'qvel_j5', 'qvel_j6']
+        
+        state_colors = cm.tab20(np.linspace(0, 1, 17))
+        
+        # Plot qpos dimensions
+        for dim in range(9):
+            state_mean = np.mean(qpos_array[:, :, dim], axis=0)
+            state_std = np.std(qpos_array[:, :, dim], axis=0)
+            ax_states_mean.plot(steps, state_mean, color=state_colors[dim], 
+                              linewidth=1.5, label=state_labels_qpos[dim], alpha=0.7)
+            ax_states_mean.fill_between(steps, state_mean - state_std, state_mean + state_std,
+                                       color=state_colors[dim], alpha=0.2)
+        
+        # Plot qvel dimensions (skip first one - forward velocity)
+        for dim in range(1, 9):
+            state_mean = np.mean(qvel_array[:, :, dim], axis=0)
+            state_std = np.std(qvel_array[:, :, dim], axis=0)
+            ax_states_mean.plot(steps, state_mean, color=state_colors[8 + dim], 
+                              linewidth=1.5, label=state_labels_qvel[dim-1], alpha=0.7)
+            ax_states_mean.fill_between(steps, state_mean - state_std, state_mean + state_std,
+                                       color=state_colors[8 + dim], alpha=0.2)
+        
+        # Remove old individual velocity plotting code
+        # (The code below this point for vel_x, vel_z, vel_rot, etc. is no longer needed)
         
         # Configure 3D plot
         ax_3d.set_xlabel('X Position (Forward)', fontsize=11, fontweight='bold')
         ax_3d.set_ylabel('Y Position (Lateral)', fontsize=11, fontweight='bold')
         ax_3d.set_zlabel('Z Position (Height)', fontsize=11, fontweight='bold')
-        ax_3d.set_title('HalfCheetah Full Body 3D Motion\n(circles: start, squares: end)', 
+        ax_3d.set_title('HalfCheetah Full Body 3D Motion\n(trajectories: faded paths, final pose: solid)', 
                        fontsize=13, fontweight='bold')
-        #ax_3d.legend(fontsize=9, loc='upper left')
         ax_3d.grid(True, alpha=0.3)
         ax_3d.view_init(elev=15, azim=45)
         
-        # Configure positional velocity plot
-        ax_vel_pos.set_xlabel('Step', fontsize=11, fontweight='bold')
-        ax_vel_pos.set_ylabel('Linear Velocity', fontsize=11, fontweight='bold')
-        ax_vel_pos.set_title('Linear Velocities\n(solid: X forward, dashed: Z vertical)', 
+        # Configure forward velocity mean plot
+        ax_vel_mean.set_xlabel('Step', fontsize=11, fontweight='bold')
+        ax_vel_mean.set_ylabel('Forward Velocity', fontsize=11, fontweight='bold')
+        ax_vel_mean.set_title('Mean Forward Velocity Across All Rollouts', 
                             fontsize=12, fontweight='bold')
-        #ax_vel_pos.legend(fontsize=9)
-        ax_vel_pos.grid(True, alpha=0.3)
+        ax_vel_mean.legend(fontsize=9)
+        ax_vel_mean.grid(True, alpha=0.3)
         
-        # Configure angular velocity plot
-        ax_vel_ang.set_xlabel('Step', fontsize=11, fontweight='bold')
-        ax_vel_ang.set_ylabel('Angular Velocity', fontsize=11, fontweight='bold')
-        ax_vel_ang.set_title('Angular Velocities\n(solid: body rotation, dotted: avg joints)', 
+        # Configure other states mean plot
+        ax_states_mean.set_xlabel('Step', fontsize=11, fontweight='bold')
+        ax_states_mean.set_ylabel('State Value', fontsize=11, fontweight='bold')
+        ax_states_mean.set_title('Mean of All Other States (Position & Velocity Components)', 
                             fontsize=12, fontweight='bold')
-        #ax_vel_ang.legend(fontsize=9)
-        ax_vel_ang.grid(True, alpha=0.3)
-        
-        # Configure combined plot
-        ax_combined.set_xlabel('Step', fontsize=11, fontweight='bold')
-        ax_combined.set_ylabel('Velocity Magnitude', fontsize=11, fontweight='bold')
-        ax_combined.set_title('Overall Velocity Magnitude', fontsize=12, fontweight='bold')
-        #ax_combined.legend(fontsize=9)
-        ax_combined.grid(True, alpha=0.3)
+        ax_states_mean.legend(fontsize=7, ncol=3, loc='best')
+        ax_states_mean.grid(True, alpha=0.3)
         
         plt.tight_layout()
         

@@ -8,10 +8,7 @@ from flax import struct
 from typing import Optional, Tuple, Union
 from gymnax.environments import environment, spaces
 from envs.base import Sensitivity, SensitivityOff
-from utils import (
-    angle_normalize,
-    normalize
-)
+from utils import angle_normalize, normalize
 
 
 def dataclass_with_custom_replace(cls):
@@ -64,9 +61,7 @@ class FlattenObservationWrapper(GymnaxWrapper):
         action: Union[int, float],
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
-        obs, state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
         obs = jnp.reshape(obs, (-1,))
         return obs, state, reward, done, info
 
@@ -123,9 +118,7 @@ class LogWrapper(GymnaxWrapper):
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
-        new_episode_return_true = state.episode_returns_true + info.get(
-            "trw", reward
-        )
+        new_episode_return_true = state.episode_returns_true + info.get("trw", reward)
         new_episode_return = state.episode_returns + reward
         new_episode_length = state.episode_lengths + 1
         state = LogEnvState(
@@ -142,9 +135,7 @@ class LogWrapper(GymnaxWrapper):
             + new_episode_length * done,
             timestep=state.timestep + 1,
         )
-        info["returned_episode_returns_true"] = (
-            state.returned_episode_returns_true
-        )
+        info["returned_episode_returns_true"] = state.returned_episode_returns_true
         info["returned_episode_returns"] = state.returned_episode_returns
         info["returned_episode_lengths"] = state.returned_episode_lengths
         info["timestep"] = state.timestep
@@ -177,9 +168,7 @@ class TransformObservation(GymnaxWrapper):
         return self.transform_obs(obs), state
 
     def step(self, key, state, action, params=None):
-        obs, state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
         return self.transform_obs(obs), state, reward, done, info
 
 
@@ -189,9 +178,7 @@ class TransformReward(GymnaxWrapper):
         self.transform_reward = transform_reward
 
     def step(self, key, state, action, params=None):
-        obs, state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        obs, state, reward, done, info = self._env.step(key, state, action, params)
         return obs, state, self.transform_reward(reward), done, info
 
 
@@ -247,9 +234,9 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
             key, state.env_state, action, params
         )
         return_val = state.return_val * self.gamma * (1 - done) + reward
-        return_val_sens = state.return_val_sens * self.gamma * (
-            1 - done
-        ) + info.get("sensitivity_state_rw", 0.0)
+        return_val_sens = state.return_val_sens * self.gamma * (1 - done) + info.get(
+            "sensitivity_state_rw", 0.0
+        )
 
         batch_mean = jnp.mean(return_val, axis=0)
         batch_var = jnp.var(return_val, axis=0)
@@ -263,11 +250,7 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
         new_mean = state.mean + delta * batch_count / tot_count
         m_a = state.var * state.count
         m_b = batch_var * batch_count
-        M2 = (
-            m_a
-            + m_b
-            + jnp.square(delta) * state.count * batch_count / tot_count
-        )
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
         new_var = M2 / tot_count
         new_count = tot_count
 
@@ -292,9 +275,9 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
             env_state=env_state,
         )
 
-        info["sensitivity_state_rw"] = info.get(
-            "sensitivity_state_rw", 0.0
-        ) / jnp.sqrt(state.var_sens + 1e-8)
+        info["sensitivity_state_rw"] = info.get("sensitivity_state_rw", 0.0) / jnp.sqrt(
+            state.var_sens + 1e-8
+        )
 
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
 
@@ -349,11 +332,7 @@ class NormalizeVecReward(GymnaxWrapper):
         new_mean = state.mean + delta * batch_count / tot_count
         m_a = state.var * state.count
         m_b = batch_var * batch_count
-        M2 = (
-            m_a
-            + m_b
-            + jnp.square(delta) * state.count * batch_count / tot_count
-        )
+        M2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / tot_count
         new_var = M2 / tot_count
         new_count = tot_count
 
@@ -381,20 +360,15 @@ class SensitivityEnvState:
         return struct.replace(self.env_state, **kwargs)
 
 
-
 class SensitivityWrapper(GymnaxWrapper):
-    def __init__(
-        self, env
-    ):
+    def __init__(self, env):
         super().__init__(env)
 
         self.state_unravel = jax.flatten_util.ravel_pytree(
             self._env.reset(jax.random.PRNGKey(0))[1].state
         )[1]
 
-        self.param_unravel = jax.flatten_util.ravel_pytree(
-            self._env.default_params
-        )[1]
+        self.param_unravel = jax.flatten_util.ravel_pytree(self._env.default_params)[1]
 
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
         self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
@@ -447,41 +421,40 @@ class SensitivityWrapper(GymnaxWrapper):
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
-        
+
         dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
         dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
-        
+
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
         sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
-        
+
         # Update sensitivities using chain rule
-        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp/(jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10) +1e-4))
+        sens_s_next = (
+            df_dx @ sens_s
+            + df_du @ sens_a
+            + df_dp
+            / (jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10) + 1e-4))
+        )
         sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
-        
+
         # not normalized
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
-        
+
         # normalize
         sens_s_next = sens_s_next / (norm_next + 1e-6)
         # Pack updated sensitivitie
         return Sensitivity(
-            log_norm=sens_state.sensitivity.log_norm
-            + jnp.log(norm_next + 1e-6),
+            log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             state=sens_s_next,
             action=sens_a,
             policy_gains=dmu_dobs,
         )
 
-
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ):
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
         sensitivity = Sensitivity.default(self._env)
-        state = SensitivityEnvState(
-            env_state=env_state, sensitivity=sensitivity
-        )
+        state = SensitivityEnvState(env_state=env_state, sensitivity=sensitivity)
         return obs, state
 
     def step(
@@ -510,9 +483,7 @@ class SensitivityWrapper(GymnaxWrapper):
         return obs, sens_state, reward, done, info
 
     # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
-    def _step_to_state_wrapped(
-        self, key, env_state, state_flat, action, params_flat
-    ):
+    def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         env_state = env_state.replace(state=state)
@@ -521,9 +492,7 @@ class SensitivityWrapper(GymnaxWrapper):
         )
         return jax.flatten_util.ravel_pytree(env_state.state)[0]
 
-    def _step_to_obs_wrapped(
-        self, key, env_state, state_flat, action, params_flat
-    ):
+    def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         env_state = env_state.replace(state=state)
@@ -534,23 +503,17 @@ class SensitivityWrapper(GymnaxWrapper):
 
 
 class MujocoSensitivityWrapper(SensitivityWrapper):
-    def __init__(
-        self, env
-    ):
+    def __init__(self, env):
         super().__init__(env)
 
     # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
-    def _step_to_state_wrapped(
-        self, key, env_state, state_flat, action, params_flat
-    ):
+    def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         next_state = self._env.step_dynamics(key, state, action, params)
         return jax.flatten_util.ravel_pytree(next_state)[0]
 
-    def _step_to_obs_wrapped(
-        self, key, env_state, state_flat, action, params_flat
-    ):
+    def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         next_state = self._env.step_dynamics(key, state, action, params)
@@ -558,7 +521,6 @@ class MujocoSensitivityWrapper(SensitivityWrapper):
         dummy_env_state = env_state.replace(state=next_state)
         obs = self._env.get_obs(dummy_env_state)
         return jax.flatten_util.ravel_pytree(obs)[0]
-
 
 
 class ComputeSensitivityReward(GymnaxWrapper):
@@ -577,11 +539,12 @@ class ComputeSensitivityReward(GymnaxWrapper):
             key, current_state, action, params
         )
 
-        info["sensitivity_state_rw"] = - (
+        info["sensitivity_state_rw"] = -(
             next_state.sensitivity.log_norm - current_state.sensitivity.log_norm
         )
 
         return obs, next_state, reward, done, info
+
 
 class AddSensitivityToReward(GymnaxWrapper):
     def __init__(self, env, regularization_weight=0.0):
@@ -600,7 +563,9 @@ class AddSensitivityToReward(GymnaxWrapper):
             key, current_state, action, params
         )
 
-        reward += - self.regularization_weight * (next_state.sensitivity.log_norm - current_state.sensitivity.log_norm)
+        reward += -self.regularization_weight * (
+            next_state.sensitivity.log_norm - current_state.sensitivity.log_norm
+        )
 
         return obs, next_state, reward, done, info
 
@@ -616,9 +581,7 @@ class MinMaxObservationWrapper(GymnaxWrapper):
         assert jnp.isinf(self._obs_max).sum() == 0, "Obs space has infinities"
         assert jnp.isinf(self._obs_min).sum() == 0, "Obs space has infinities"
 
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ):
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
         obs = normalize(obs, self._obs_min, self._obs_max)
         return obs, env_state
@@ -630,9 +593,7 @@ class MinMaxObservationWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
-        obs, env_state, reward, done, info = self._env.step(
-            key, state, action, params
-        )
+        obs, env_state, reward, done, info = self._env.step(key, state, action, params)
         obs = normalize(obs, self._obs_min, self._obs_max)
         return obs, env_state, reward, done, info
 
@@ -643,9 +604,7 @@ class ResetEnvWrapper(GymnaxWrapper):
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
         super().__init__(env)
 
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ):
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
         return obs, env_state
 
@@ -689,38 +648,37 @@ class DomainRandomizationWrapper(GymnaxWrapper):
 
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
         super().__init__(env)
-        
 
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ):
-        min_params = self._env.params_min 
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        min_params = self._env.params_min
         max_params = self._env.params_max
 
         # 2. Inside your loop/function
         key, sample_key = jax.random.split(key)
 
         # Generate the randomized parameters
-        randomized_params = self.sample_params(sample_key, params, min_params, max_params)
+        randomized_params = self.sample_params(
+            sample_key, params, min_params, max_params
+        )
 
         obs, env_state = self._env.reset(key, randomized_params)
         state = DomainRandomizationEnvState(
-            env_state=env_state,
-            params=randomized_params
+            env_state=env_state, params=randomized_params
         )
         return obs, state
 
-    def sample_params(self,key, params, low_list, high_list):
+    def sample_params(self, key, params, low_list, high_list):
         """
         Samples new params where each leaf is drawn from U(low[i], high[i]).
         Assumes low_list and high_list follow the order of jax.tree_util.tree_leaves(params).
         """
         # 1. Flatten the existing params to get the structure (treedef) and current shapes
         leaves, treedef = jax.tree_util.tree_flatten(params)
-        
+
         # Safety Check: Ensure lists match the number of learnable parameters
-        assert len(leaves) == len(low_list) == len(high_list), \
-            f"Mismatch: Params has {len(leaves)} nodes, but low/high lists have {len(low_list)}"
+        assert (
+            len(leaves) == len(low_list) == len(high_list)
+        ), f"Mismatch: Params has {len(leaves)} nodes, but low/high lists have {len(low_list)}"
 
         # 2. Split the random key (one sub-key per parameter array)
         keys = jax.random.split(key, len(leaves))
@@ -730,16 +688,18 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         new_leaves = []
         for rng, leaf, l, h in zip(keys, leaves, low_list, high_list):
             # Sample using the leaf's shape, but the list's min/max
-            if isinstance(leaf,float):
-                sampled_val = random.uniform(l,h)
+            if isinstance(leaf, float):
+                sampled_val = random.uniform(l, h)
             else:
-                sampled_val = jax.random.uniform(rng, shape=leaf.shape, minval=l, maxval=h)
+                sampled_val = jax.random.uniform(
+                    rng, shape=leaf.shape, minval=l, maxval=h
+                )
             new_leaves.append(sampled_val)
 
         # 4. Reconstruct (Unflatten) the PyTree
         # This packs the list of new arrays back into your custom dataclass structure
         new_params = jax.tree_util.tree_unflatten(treedef, new_leaves)
-        
+
         return new_params
 
     def step(
@@ -752,10 +712,9 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         obs_st, env_state_st, reward, done, info = self._env.step(
             key, state.env_state, action, state.params
         )
-        
+
         state_st = DomainRandomizationEnvState(
-            env_state=env_state_st,
-            params=state.params
+            env_state=env_state_st, params=state.params
         )
 
         obs_re, state_re = self.reset(key, params)
@@ -769,10 +728,10 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
-
 """
 Off-policy sensitivity wrappers
 """
+
 
 @dataclass_with_custom_replace
 class SensitivityOffEnvState:
@@ -789,18 +748,14 @@ class SensitivityOffEnvState:
 
 
 class SensitivityOffWrapper(GymnaxWrapper):
-    def __init__(
-        self, env, regularization_weight=0.0, add_sensitivity_to_info=False
-    ):
+    def __init__(self, env, regularization_weight=0.0, add_sensitivity_to_info=False):
         super().__init__(env)
 
         self.state_unravel = jax.flatten_util.ravel_pytree(
             self._env.reset(jax.random.PRNGKey(0))[1].state
         )[1]
 
-        self.param_unravel = jax.flatten_util.ravel_pytree(
-            self._env.default_params
-        )[1]
+        self.param_unravel = jax.flatten_util.ravel_pytree(self._env.default_params)[1]
 
         self.regularization_weight = regularization_weight
         self.add_sensitivity_to_info = add_sensitivity_to_info
@@ -811,9 +766,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
             self._step_to_state_and_obs_wrapped, argnums=(2, 3, 4)
         )
 
-    def set_actor(
-        self, actor, network_params, get_action, action_scale, action_bias
-    ):
+    def set_actor(self, actor, network_params, get_action, action_scale, action_bias):
         # Should add a check for dimension compatibility
         self._actor = actor
         self.network_params = network_params
@@ -827,14 +780,24 @@ class SensitivityOffWrapper(GymnaxWrapper):
     def compute_action(self, rng, obs, network_params):
         pi = self._actor.apply(network_params, obs)
         action, _, _, _ = self.get_action(
-            pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
+            pi,
+            self.action_scale,
+            self.action_bias,
+            rng,
+            jnp.zeros(self._env.action_space(self._env.default_params).shape),
+            False,
         )
         return action
-    
+
     def compute_action_mean(self, rng, obs, network_params):
         pi = self._actor.apply(network_params, obs)
-        _, _,mean, _ = self.get_action(
-            pi, self.action_scale, self.action_bias, rng, jnp.zeros(self._env.action_space(self._env.default_params).shape), False
+        _, _, mean, _ = self.get_action(
+            pi,
+            self.action_scale,
+            self.action_bias,
+            rng,
+            jnp.zeros(self._env.action_space(self._env.default_params).shape),
+            False,
         )
         return mean
 
@@ -870,7 +833,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         df_du = jnp.clip(df_du, -1e3, 1e3)
         df_dp = jnp.clip(df_dp, -1e3, 1e3)
         dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
-        
+
         # Replace NaN with 1e3
         df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
         df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
@@ -880,28 +843,29 @@ class SensitivityOffWrapper(GymnaxWrapper):
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
-        
+
         dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
         dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
-        
+
         # Update action sensitivity
         F_sens_u = df_du @ dmu_dobs @ dobs_dx @ sens_s
         F_sens_u = jnp.where(jnp.isnan(F_sens_u), 1e3, F_sens_u)
-        
-        F_sens_x = df_dx @ sens_s + df_dp/(jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10)+1e-4))
+
+        F_sens_x = df_dx @ sens_s + df_dp / (
+            jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10) + 1e-4)
+        )
         F_sens_x = jnp.where(jnp.isnan(F_sens_x), 1e3, F_sens_x)
-        
+
         # Update sensitivities using chain rule
         sens_s_next = F_sens_x + F_sens_u
         sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
-        
+
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
-        
+
         sens_s_next = sens_s_next / (norm_next + 1e-6)
         # Pack updated sensitivitie
         return SensitivityOff(
-            log_norm=sens_state.sensitivity.log_norm
-            + jnp.log(norm_next + 1e-6),
+            log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             log_norm_old=sens_state.sensitivity.log_norm,
             state=sens_s_next,
             F_sens_x=F_sens_x,
@@ -929,20 +893,16 @@ class SensitivityOffWrapper(GymnaxWrapper):
         sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
 
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
-        
+
         sens_s_next = sens_s_next / (norm_next + 1e-6)
-        
+
         # Return the incremental log norm change
         return sens_s_next, sens_log_norm + jnp.log(norm_next + 1e-6)
 
-    def reset(
-        self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
-    ):
+    def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
         sensitivity = SensitivityOff.default(self._env)
-        state = SensitivityOffEnvState(
-            env_state=env_state, sensitivity=sensitivity
-        )
+        state = SensitivityOffEnvState(env_state=env_state, sensitivity=sensitivity)
         return obs, state
 
     def step(
@@ -963,9 +923,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
 
         info["trw"] = reward
         info["sensitivity_state"] = next_sensitivity.log_norm
-        info["sensitivity_state_rw"] = -(
-            next_sensitivity.log_norm 
-        )
+        info["sensitivity_state_rw"] = -(next_sensitivity.log_norm)
 
         sens_state = SensitivityOffEnvState(
             env_state=env_state, sensitivity=next_sensitivity
@@ -991,9 +949,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
 
 
 class MujocoSensitivityOffWrapper(SensitivityOffWrapper):
-    def __init__(
-        self, env, regularization_weight=0.0, add_sensitivity_to_info=False
-    ):
+    def __init__(self, env, regularization_weight=0.0, add_sensitivity_to_info=False):
         super().__init__(env, regularization_weight, add_sensitivity_to_info)
 
     # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
@@ -1012,5 +968,3 @@ class MujocoSensitivityOffWrapper(SensitivityOffWrapper):
         next_state_flat = jax.flatten_util.ravel_pytree(next_state)[0]
         obs_flat = jax.flatten_util.ravel_pytree(obs)[0]
         return next_state_flat, obs_flat
-
-

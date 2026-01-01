@@ -7,8 +7,8 @@ hydra:
   output_subdir: null  # Disables .hydra folder creation     
   
 defaults:
-  - method: rappo
-  - env: drone_v1
+  - method: ppo
+  - env: reacher_v5
   - override hydra/job_logging: none  # Correct way to disable job logging
   - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_

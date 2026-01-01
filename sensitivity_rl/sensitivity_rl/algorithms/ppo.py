@@ -26,7 +26,7 @@ def wrap_env(env, config):
     """Apply PPO-specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
-    
+
     # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
     if config.get("SENSITIVITY", False):
         if getattr(env, "type", "") == "mujoco":
@@ -34,7 +34,7 @@ def wrap_env(env, config):
         else:
             env = SensitivityWrapper(env)
     if config.get("DOMAIN_RANDOMIZATION", False):
-       env = DomainRandomizationWrapper(env, env.default_params)
+        env = DomainRandomizationWrapper(env, env.default_params)
     else:
         env = ResetEnvWrapper(env)  # Don't remove
     env = LogWrapper(env)
@@ -46,24 +46,23 @@ def wrap_env(env, config):
 
 def make_loss_fn(config, network):
     """Create PPO loss function.
-    
+
     Returns a function with signature:
         loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
     """
+
     def _loss_fn(params, traj_batch, advantages, targets):
         # RERUN NETWORK
         pi, value = network.apply(params, traj_batch.obs)
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
-        value_pred_clipped = traj_batch.value + (
-            value - traj_batch.value
-        ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
+        value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(
+            -config["CLIP_EPS"], config["CLIP_EPS"]
+        )
         value_losses = jnp.square(value - targets)
         value_losses_clipped = jnp.square(value_pred_clipped - targets)
-        value_loss = (
-            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
-        )
+        value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
 
         # CALCULATE ACTOR LOSS
         log_ratio = log_prob - traj_batch.log_prob
@@ -89,9 +88,7 @@ def make_loss_fn(config, network):
         entropy = pi.entropy().mean()
 
         total_loss = (
-            loss_actor
-            + config["VF_COEF"] * value_loss
-            - config["ENT_COEF"] * entropy
+            loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
         )
         return total_loss, (
             value_loss,
@@ -101,26 +98,28 @@ def make_loss_fn(config, network):
             approx_kl,
             clipfracs,
         )
-    
+
     return _loss_fn
 
 
 def make_collect_fn(config, env, env_params, networks):
     """Create trajectory collection function for PPO.
-    
+
     Args:
         config: Training configuration
         env: Wrapped environment
         env_params: Environment parameters
         networks: Dict returned by init_networks containing 'network', 'train_state', etc.
-    
+
     Returns a function for use with jax.lax.scan that collects transitions.
     """
     network = networks["network"]
-    
+
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        pi, value = network.apply(runner_state.train_state.params, runner_state.last_obs)
+        pi, value = network.apply(
+            runner_state.train_state.params, runner_state.last_obs
+        )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
 
@@ -141,21 +140,22 @@ def make_collect_fn(config, env, env_params, networks):
             rng=rng,
         )
         return new_runner_state, transition
-    
+
     return _env_step
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
     """Create update epoch function for PPO.
-    
+
     Args:
         config: Training configuration
         loss_fn: Loss function created by make_loss_fn
         shuffle_batch_fn: Function to shuffle and batch trajectories
         networks: Dict returned by init_networks (unused in PPO but needed for interface)
-    
+
     Returns a function for use with jax.lax.scan that performs one epoch of updates.
     """
+
     def _update_epoch(update_state: UpdateState, unused):
         def _update_minbatch(train_state, batch_info):
             traj_batch, advantages, targets = batch_info
@@ -167,7 +167,11 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             return train_state, total_loss
 
         rng, _rng = jax.random.split(update_state.rng)
-        minibatches = shuffle_batch_fn(_rng, (update_state.traj_batch, update_state.advantages, update_state.targets), config)
+        minibatches = shuffle_batch_fn(
+            _rng,
+            (update_state.traj_batch, update_state.advantages, update_state.targets),
+            config,
+        )
         train_state, total_loss = jax.lax.scan(
             _update_minbatch, update_state.train_state, minibatches
         )
@@ -179,13 +183,15 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             rng=rng,
         )
         return new_update_state, total_loss
-    
+
     return _update_epoch
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for PPO."""
-    _, last_val = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs)
+    _, last_val = networks["network"].apply(
+        collect_state.train_state.params, collect_state.last_obs
+    )
     advantages, targets = gae_standard(config, traj_batch, last_val)
     return {
         "advantages": advantages,
@@ -217,8 +223,12 @@ def rebuild_runner_state(update_state: UpdateState, collect_state: RunnerState):
 def extract_losses(loss_info):
     """Extract loss metrics from loss_info."""
     total_losses, (
-        value_losses, actor_losses, entropies,
-        old_approx_kl, approx_kl, clipfracs,
+        value_losses,
+        actor_losses,
+        entropies,
+        old_approx_kl,
+        approx_kl,
+        clipfracs,
     ) = loss_info
     losses = {
         "total": total_losses.mean(),
@@ -234,7 +244,7 @@ def extract_losses(loss_info):
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize network and train state for PPO.
-    
+
     Returns:
         dict with keys: network, train_state, and any secondary networks/states
     """
@@ -244,14 +254,14 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
     )
-    
+
     init_x = jnp.zeros(env.observation_space(env_params).shape)
-    
+
     if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
         network_params = load_params_fn(rng, network, init_x, config)
     else:
         network_params = network.init(rng, init_x)
-    
+
     linear_schedule = make_linear_schedule(config)
     tx = create_optimizer(config, linear_schedule)
     train_state = TrainState.create(
@@ -259,7 +269,7 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         params=network_params,
         tx=tx,
     )
-    
+
     return {
         "network": network,
         "train_state": train_state,
@@ -268,24 +278,24 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 def init_runner_state(config, env, env_params, networks, rng):
     """Create initial runner state for PPO.
-    
+
     Args:
         config: Training configuration
         env: Wrapped environment
         env_params: Environment parameters
         networks: Dict returned by init_networks
         rng: PRNG key (will be split for env reset)
-        
+
     Returns:
         RunnerState NamedTuple
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
     obsv, env_state = env.reset(reset_rng, env_params)
-    
+
     # Extra split before scan (matching original ppo.py line 494-495)
     rng, _rng = jax.random.split(rng)
-    
+
     return RunnerState(
         train_state=networks["train_state"],
         env_state=env_state,
@@ -293,14 +303,16 @@ def init_runner_state(config, env, env_params, networks, rng):
         rng=_rng,  # Use _rng, not rng, to match original
     )
 
+
 def run_dir(config, runs_root, ts):
     algo_name = "PPO"
     if config.get("DOMAIN_RANDOMIZATION", False):
         run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_DR_{ts}"
     else:
         run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
-    
+
     return run_dir
+
 
 SPEC = AlgorithmSpec(
     wrap_env=wrap_env,

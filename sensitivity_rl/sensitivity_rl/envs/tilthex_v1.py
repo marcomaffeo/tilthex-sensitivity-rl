@@ -109,7 +109,7 @@ class EnvParams(environment.EnvParams):
     )
 
     min_input: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([0.31, 0.31, 0.31, 0.31, 0.31, 0.31]),
+        pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]),
     )
     max_input: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),
@@ -121,7 +121,7 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
-    m: float = 3.1
+    m: float = 3.072
     
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -216,8 +216,12 @@ class TilthexV0(environment.Environment):
 
         pos_diff = state_next.pos - env_state.target_pos
 
+        R = quat2rotm(state_next.attitude)
+        z_projection = R[2, 2]
+        reward_upright = -0.2 * (1.0 - z_projection)
+
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.2,
+            jnp.linalg.norm(pos_diff) < 0.02,
             10.0,  # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
@@ -226,11 +230,16 @@ class TilthexV0(environment.Environment):
         thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
-            -0.01 * jnp.linalg.norm(state_next.omega)
+            -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
+            + reward_upright
             - 0.001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
+
+        # lower entropy version
+        # -0.001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
+        # -0.01 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
 
         reward = reward.squeeze()
     

@@ -109,24 +109,24 @@ class EnvParams(environment.EnvParams):
     )
 
     min_input: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]),
+        pytree_node=False, default_factory=lambda: jnp.array([0.31, 0.31, 0.31, 0.31, 0.31, 0.31]),
     )
     max_input: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0])
+        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 1.0])
     )
     env_min_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, 0.0])
+        pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
-    m: float = 3.072
+    m: float = 3.1
     
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
     n: float = struct.field(pytree_node=False, default=6)  # number of rotors
-    arm_length : float = struct.field(pytree_node=False, default=0.39)
+    arm_length : float = struct.field(pytree_node=False, default=0.39) # length of single arm
     c_f: float = struct.field(pytree_node=False, default=12.0e-4) # squared propeller speed to thrust force coefficient [N/hz^2]
     c_tau: float = struct.field(pytree_node=False, default=2.4e-5) # squared propeller speed to drag torque coefficient [Nm/Hz^2]
     alpha: float = struct.field(pytree_node=False, default=-20.0) # tilt_angle [deg] radial inclination angle of rotors
@@ -172,16 +172,10 @@ class TilthexV0(environment.Environment):
         return EnvParams()
 
     def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
-        """
-        Rescale action: map 0.0 to hovering thrust to fix initialization bias.
-        """
-        efficiency = jnp.cos(jnp.deg2rad(params.alpha))
-        hover_force_single = (params.m * params.g) / (params.n * efficiency)
-
-        action_scale = 3.5  
-        
-        u_unclipped = hover_force_single + (action * action_scale)
-        return jnp.clip(u_unclipped, params.min_input, params.max_input)
+        action_span = params.max_action - params.min_action
+        input_span = params.max_input - params.min_input
+        normalized = (action - params.min_action) / action_span
+        return params.min_input + normalized * input_span
 
     @partial(jax.jit, static_argnames=("self",))
     def step(
@@ -212,14 +206,8 @@ class TilthexV0(environment.Environment):
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
         """Integrate pendulum ODE and return transition."""
-        # ... inizio funzione ...
-
-        # DEBUG: Stampiamo l'azione GREZZA che esce dalla rete
-        # Se vedi numeri > 1.0 o < -1.0, abbiamo trovato il colpevole.
-        jax.debug.print("RAW Action corretta 3.5 : {x}", x=action)
 
         clipped_action = jnp.clip(action, params.min_action, params.max_action)
-        # ... resto del codice ...
         input = self.rescale_action(clipped_action, params)
 
         state = env_state.state
@@ -230,7 +218,8 @@ class TilthexV0(environment.Environment):
 
         R = quat2rotm(state_next.attitude)
         z_proj = R[2, 2] # 1.0 = Dritto, -1.0 = Capovolto
-        reward_upright = -1.0* (1.0 - z_proj)
+        reward_upright = -0.2* (1.0 - z_proj)
+
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.2,
@@ -238,8 +227,8 @@ class TilthexV0(environment.Environment):
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
-        thrust_normalized_input = input / params.max_input
-        thrust_normalized_input_last = env_state.last_u / params.max_input
+        thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
+        thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
             -0.01 * jnp.linalg.norm(state_next.omega)
@@ -250,7 +239,7 @@ class TilthexV0(environment.Environment):
         )
 
         reward = reward.squeeze()
-
+    
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
@@ -410,8 +399,8 @@ class TilthexV0(environment.Environment):
         if params is None:
             params = self.default_params
         return spaces.Box(
-            low=params.min_input,
-            high=params.max_input,
+            low=params.min_action,
+            high=params.max_action,
             shape=(6,),
             dtype=jnp.float32,
         )

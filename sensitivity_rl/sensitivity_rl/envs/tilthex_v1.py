@@ -2,6 +2,8 @@
 JAX implementation of Tilthex OpenAI gym environment with added
 parametric sensitivity metric optimization."""
 
+# LR, CLIP_EPS
+
 from typing import Any
 from functools import partial
 
@@ -105,8 +107,9 @@ class EnvParams(environment.EnvParams):
     max_action: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     )
+
     min_input: jax.Array = struct.field(
-       pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]),
+        pytree_node=False, default_factory=lambda: jnp.array([0.31, 0.31, 0.31, 0.31, 0.31, 0.31]),
     )
     max_input: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),
@@ -117,11 +120,13 @@ class EnvParams(environment.EnvParams):
     env_min_limits: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
-    m: float = 3.072
+
+    m: float = 3.1
+    
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    n: float = struct.field(pytree_node=False, default=6)  
-    arm_length : float = struct.field(pytree_node=False, default=0.39)
+    n: float = struct.field(pytree_node=False, default=6)  # number of rotors
+    arm_length : float = struct.field(pytree_node=False, default=0.39) # length of single arm
     c_f: float = struct.field(pytree_node=False, default=12.0e-4) # squared propeller speed to thrust force coefficient [N/hz^2]
     c_tau: float = struct.field(pytree_node=False, default=2.4e-5) # squared propeller speed to drag torque coefficient [Nm/Hz^2]
     alpha: float = struct.field(pytree_node=False, default=-20.0) # tilt_angle [deg] radial inclination angle of rotors
@@ -152,12 +157,12 @@ class TilthexV0(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.2,  # mass
-            jnp.array([0.05, 0.05, 0.10]),  # inertia
+            2.4,  # mass
+            jnp.array([0.059, 0.061, 0.115]),  # inertia
         ]
         self.params_max = [
-            3.8,  # mass
-            jnp.array([0.099, 0.099, 0.18]),  # inertia
+            3.6,  # mass
+            jnp.array([0.089, 0.091, 0.173]),  # inertia
         ]
         super().__init__()
 
@@ -212,23 +217,23 @@ class TilthexV0(environment.Environment):
         pos_diff = state_next.pos - env_state.target_pos
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.02,
+            jnp.linalg.norm(pos_diff) < 0.2,
             10.0,  # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
-        thrust_normalized_input = input / params.max_input
-        thrust_normalized_input_last = env_state.last_u / params.max_input
+        thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
+        thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
-            -0.001 * jnp.linalg.norm(state_next.omega)
+            -0.01 * jnp.linalg.norm(state_next.omega)
             + reward_app
-            - 0.0001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
-            - 0.0005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
+            - 0.001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
+            - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
         reward = reward.squeeze()
-
+    
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
@@ -272,46 +277,41 @@ class TilthexV0(environment.Environment):
 
         u = jnp.clip(action, params.min_input, params.max_input)
    
-        e3 = jnp.array([0.0, 0.0, 1.0]) 
-        JJ = jnp.diag(params.I)
-        JJ_inv = jnp.diag(1.0 / params.I)
-
+        quat = state.attitude
+        ang_vel = state.omega
+        
+        orientation_mat = quat2rotm(quat)
+        
         GF, GT = compute_allocation(6, params.arm_length, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
-        GF = GF.astype(jnp.float32)
-        GT = GT.astype(jnp.float32)
-
-        # Wrench (Body Frame)
-        F_body = GF @ u
-        Tau_body = GT @ u
-
-        # Linear dynamic (World Frame)
-        gravity_vec = jnp.array([0.0, 0.0, params.g])
-        F_world = rotate_vec3(F_body, state.attitude)
         
-        acc = (1.0 / params.m) * F_world - gravity_vec
+        # Wrench nel Body Frame
+        F_body = GF @ u       # [Fx, Fy, Fz] 
+        tau_body = GT @ u     # [Tx, Ty, Tz] 
 
-        # Angular dynamic (Body Frame)
+        # Acceleration (IN BODY FRAME)
+        lin_acc_body = F_body / params.m
         J_vec = params.I
-        omega = state.omega
-        
-        gyro_term = jnp.cross(omega, J_vec * omega)
-        
-        omega_dot = (1.0 / J_vec) * (Tau_body - gyro_term)
+        gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
+        ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
+        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
 
-        q_dot = quat_derivative(state.attitude, omega)
 
-        # Integration (Explicit Euler)
+        gravity_vec = jnp.array([0.0, 0.0, params.g]) # O params.g * e3
+        ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
+
         pos = state.pos + params.dt * state.vel
-        vel = state.vel + params.dt * acc
-        
-        att_next = state.attitude + params.dt * q_dot
-        att_next = att_next / jnp.linalg.norm(att_next)
-        
-        omega = state.omega + params.dt * omega_dot
+        vel = state.vel + params.dt * (orientation_mat @ acc[:3] - gravity_vec)
+        q = state.attitude + params.dt * 0.5 * quat_product(quat, ang_vel_quat)
+        omega = state.omega + params.dt * acc[3:6]
+
+        q = q / jnp.linalg.norm(q) 
+    
+        # clip position
+        # pos = jnp.clip(pos, params.env_min_limits, params.env_max_limits)
 
         state_new = ModelState(
             pos=pos.squeeze(),
-            attitude=att_next.squeeze(),
+            attitude=q.squeeze(),
             vel=vel.squeeze(),
             omega=omega.squeeze(),
         )
@@ -393,8 +393,8 @@ class TilthexV0(environment.Environment):
         if params is None:
             params = self.default_params
         return spaces.Box(
-            low=params.min_input,
-            high=params.max_input,
+            low=params.min_action,
+            high=params.max_action,
             shape=(6,),
             dtype=jnp.float32,
         )

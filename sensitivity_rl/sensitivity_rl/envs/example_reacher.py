@@ -8,6 +8,71 @@ import numpy as np
 from flax import struct
 import imageio
 
+
+# Model based reacher dynamics
+def dyanmics_reacher(qpos, qvel, action, params):
+
+    # Jacobian
+    L1 = 0.1  # Length of Link 1 (Shoulder to Elbow)
+    lc1 = 0.05  # Distance to CoM of Link 1
+
+    # --- 2. CALCULATE COMBINED CoM for LINK 2 ---
+    m2_link = params.mass_slice[1]  # Mass of the capsule
+    m2_tip = params.mass_slice[2]  # Mass of the fingertip sphere
+
+    # CoM positions relative to the elbow (Joint 2)
+    pos_link2 = 0.05
+    pos_tip = 0.11
+
+    # Weighted average to find the NEW Center of Mass for Link 2
+    lc2 = (m2_link * pos_link2 + m2_tip * pos_tip) / (m2_link + m2_tip)
+
+    # Total Mass of Link 2
+    m2_total = m2_link + m2_tip
+
+    cq1 = jnp.cos(qpos[0])
+    sq1 = jnp.sin(qpos[0])
+    cq2 = jnp.cos(qpos[1])
+    sq2 = jnp.sin(qpos[1])
+    cq12 = jnp.cos(qpos[0] + qpos[1])
+    sq12 = jnp.sin(qpos[0] + qpos[1])
+    J_1v = jnp.array([[-lc1 * sq1, 0.0], [lc1 * cq1, 0.0], [0.0, 0.0]])
+    J_1w = jnp.array([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0]])
+    J_2v = jnp.array(
+        [
+            [L1 * sq1 - lc2 * sq12, -lc2 * sq12],
+            [L1 * cq1 + lc2 * cq12, lc2 * cq12],
+            [0.0, 0.0],
+        ]
+    )
+    J_2w = jnp.array([[0.0, 0.0], [0.0, 0.0], [1.0, 1.0]])
+    # M(q)
+    R = jnp.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+    I_1 = R @ jnp.diag(params.inertia_slice[0, :]) @ R.T
+    I_2 = R @ jnp.diag(params.inertia_slice[1, :]) @ R.T + jnp.diag(
+        params.inertia_slice[2, :]
+    )
+    M_q = (
+        params.mass_slice[0] * (J_1v.T @ J_1v)
+        + (J_1w.T @ I_1 @ J_1w)
+        + (m2_total) * (J_2v.T @ J_2v)
+        + (J_2w.T @ I_2 @ J_2w)
+        + jnp.eye(2)  # motor gear
+    )
+    # C(q,qdot)
+    h = -m2_total * L1 * lc2 * sq2
+    C_q_qdot = jnp.array([[h * qvel[1], h * (qvel[0] + qvel[1])], [-h * qvel[0], 0.0]])
+
+    ddq = jnp.linalg.solve(M_q, 200 * jnp.eye(2) @ action - C_q_qdot @ qvel[:2])
+
+    qvel_new = qvel[:2] + ddq * 0.01
+    qpos_new = qpos[:2] + qvel_new * 0.01
+    qpos_new = jnp.concatenate([qpos_new, qpos[2:]])
+    qvel_new = jnp.concatenate([qvel_new, qvel[2:]])
+
+    return qpos_new, qvel_new
+
+
 # JAX configuration
 jax.config.update("jax_enable_x64", True)
 
@@ -170,7 +235,7 @@ vmap_reset = jax.jit(
 )
 
 
-# Jacobian Logic
+# Jacobian Logic for MuJoCo dynamics
 def dynamics_fn(flat_params, base_model, data, action):
     params = unravel_fn(flat_params)
     _, _, obs, _, _ = step_env(base_model, data, action, params)
@@ -178,6 +243,18 @@ def dynamics_fn(flat_params, base_model, data, action):
 
 
 jac_fn = jax.jit(jax.vmap(jax.jacfwd(dynamics_fn, argnums=0), in_axes=(0, None, 0, 0)))
+
+
+# Jacobian Logic for manual dynamics
+def manual_dynamics_fn(flat_params, qpos, qvel, action):
+    params = unravel_fn(flat_params)
+    qpos_new, qvel_new = dyanmics_reacher(qpos, qvel, action, params)
+    return jnp.concatenate([qpos_new, qvel_new])
+
+
+manual_jac_fn = jax.jit(
+    jax.vmap(jax.jacfwd(manual_dynamics_fn, argnums=0), in_axes=(0, 0, 0, 0))
+)
 
 # Execution
 print("Running simulation...")
@@ -204,11 +281,35 @@ for i in range(NUM_STEPS):
     rng, key = jax.random.split(rng)
     actions = jax.random.uniform(key, (BATCH_SIZE, 2), minval=-1.0, maxval=1.0)
 
-    grads = jac_fn(flat_params, base_model, data, actions)
+    # Compute MuJoCo jacobian
+    grads_mujoco = jac_fn(flat_params, base_model, data, actions)
+
+    # Compute manual jacobian
+    qpos = data.qpos
+    qvel = data.qvel
+    grads_manual = manual_jac_fn(flat_params, qpos, qvel, actions)
+
+    # Compare jacobians
+    jac_diff = jnp.abs(grads_mujoco - grads_manual)
+    max_diff = jnp.max(jac_diff)
+    mean_diff = jnp.mean(jac_diff)
+
     _, data, _, _, _ = vmap_step(base_model, data, actions, flat_params)
 
     if i % 1 == 0:
-        print(f"Step {i}: Mean Sensitivity: {jnp.mean(jnp.abs(grads[0])):.6f}")
+        print(f"\n{'='*80}")
+        print(f"Step {i}:")
+        print(f"\nMuJoCo Jacobian (batch 0):")
+        print(grads_mujoco[0])
+        print(f"\nManual Jacobian (batch 0):")
+        print(grads_manual[0])
+        print(f"\nJacobian Difference:")
+        print(jac_diff[0])
+        print(f"\n  MuJoCo Mean Sensitivity: {jnp.mean(jnp.abs(grads_mujoco[0])):.6f}")
+        print(f"  Manual Mean Sensitivity: {jnp.mean(jnp.abs(grads_manual[0])):.6f}")
+        print(f"  Max Jacobian Difference: {max_diff:.6f}")
+        print(f"  Mean Jacobian Difference: {mean_diff:.6f}")
+        print(f"{'='*80}")
 
     if renderer and i % 2 == 0:
         data_cpu = mjx.get_data(mj_model, jax.tree_util.tree_map(lambda x: x[0], data))

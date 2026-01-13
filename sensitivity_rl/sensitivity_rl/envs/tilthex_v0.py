@@ -4,18 +4,17 @@ parametric sensitivity metric optimization."""
 
 # LR, CLIP_EPS
 
-from typing import Any
 from functools import partial
+from typing import Any, List
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-from flax import struct
-
-from gymnax.environments import environment, spaces
-from gymnax.environments.environment import TEnvState, TEnvParams
-
+import numpy as np
 from envs.base import Sensitivity
-
+from flax import struct
+from gymnax.environments import environment, spaces
+from gymnax.environments.environment import TEnvParams, TEnvState
 from utils import angle_normalize
 
 from math import pi
@@ -432,3 +431,78 @@ class TilthexV0(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
+
+    @staticmethod
+    def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
+        """Plot tilthex rollout trajectories.
+        
+        Args:
+            series_list: List of trajectory dictionaries with keys:
+                - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
+                - 'actions': array of shape (T, 6)
+                - 'target_pos': optional target position array
+            output: Optional path to save the figure. If None, displays interactively.
+        """
+        import matplotlib.pyplot as plt
+        
+        plt.style.use("seaborn-v0_8")
+        fig = plt.figure(figsize=(14, 8))
+        gs = fig.add_gridspec(3, 3, height_ratios=[2, 1, 1])
+
+        ax_path = fig.add_subplot(gs[0, :], projection="3d")
+
+        ax_m1 = fig.add_subplot(gs[1, 0])
+        ax_m2 = fig.add_subplot(gs[1, 1])
+        ax_m3 = fig.add_subplot(gs[1, 2])
+        ax_m4 = fig.add_subplot(gs[2, 0])
+        ax_m5 = fig.add_subplot(gs[2, 1]) 
+        ax_m6 = fig.add_subplot(gs[2, 2])
+
+        axes_act = [ax_m1, ax_m2, ax_m3, ax_m4, ax_m5, ax_m6]
+
+        labels = ["Force p1", "Force p2", "Force p3", "Force p4", "Force p5", "Force p6"]
+
+        for series in series_list:
+            state = series.get("state", None)
+            if state is None:
+                continue
+            state = np.asarray(state)
+            # state format: [pos(3), attitude(4), vel(3), omega(3)]
+            pos = state[:, :3]
+            
+            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+
+            if "target_pos" in series:
+                target = np.asarray(series["target_pos"])
+                if target.ndim >= 2:
+                    target = target[0]
+                ax_path.scatter(
+                    target[0], target[1], target[2], marker="x", color="red", s=30
+                )
+
+            ax_path.scatter(
+                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
+            )
+
+            actions = np.asarray(series.get("actions", []))
+            if actions.size > 0:
+                for idx, ax in enumerate(axes_act):
+                    if idx < actions.shape[1]:
+                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], alpha=0.6)
+                    ax.set_xlabel("t")
+                    ax.set_ylabel(labels[idx])
+                    ax.grid(True, alpha=0.3)
+
+        ax_path.set_title("Tilthex position trajectories")
+        ax_path.set_xlabel("x [m]")
+        ax_path.set_ylabel("y [m]")
+        ax_path.set_zlabel("z [m]")
+        ax_path.grid(True, alpha=0.3)
+
+        if output is None:
+            plt.show()
+        else:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            fig.savefig(output, dpi=150)
+            plt.close(fig)
+

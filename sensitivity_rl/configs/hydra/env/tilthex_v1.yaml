@@ -1,0 +1,57 @@
+# Tilthex V1 environment configuration
+# @package _global_
+
+ENV_NAME: tilthex_v1
+
+# #ppo
+# # Environment-specific parameters
+# NUM_ENVS: 1000
+# NUM_STEPS: 200
+# TOTAL_TIMESTEPS: 5e7
+# NUM_MINIBATCHES: 32
+
+# # Override network architecture for drone
+# ACTIVATION: tanh
+# ANNEAL_LR: true
+# GRU_HIDDEN_SIZE: 64
+
+# # Override some RL parameters for drone
+# GAMMA: 0.98
+# CLIP_EPS: 0.1
+# ENT_COEF: 0.001
+
+# ACTOR_LAYER_SIZES: [128, 128]
+# CRITIC_LAYER_SIZES: [128, 128]
+
+# SENSITIVITY_REGULARIZATION_WEIGHT: 0.0
+
+# # SAC-specific overrides for tilthex_v1
+# BUFFER_SIZE: 4e5
+
+
+
+#sppo
+# Environment-specific parameters
+NUM_ENVS: 2048
+NUM_STEPS: 200
+TOTAL_TIMESTEPS: 5e7
+NUM_MINIBATCHES: 128
+
+# Override network architecture for drone
+ACTIVATION: tanh
+ANNEAL_LR: true
+GRU_HIDDEN_SIZE: 64
+
+# Override some RL parameters for drone
+GAMMA: 0.98
+CLIP_EPS: 0.2
+ENT_COEF: 0.001
+
+ACTOR_LAYER_SIZES: [256, 256]
+CRITIC_LAYER_SIZES: [256, 256]
+
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.2
+
+# SAC-specific overrides for tilthex_v1
+BUFFER_SIZE: 4e5
+

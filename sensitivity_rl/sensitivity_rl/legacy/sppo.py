@@ -33,7 +33,7 @@ from pathlib import Path
 from datetime import datetime
 from flax import serialization
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1, TilthexV0
+from envs import Pendulum, DroneV0, DroneV1, TilthexV0, TilthexV1
 from gymnax.environments import environment
 from envs.wrappers import (
     GymnaxWrapper,
@@ -661,6 +661,19 @@ def main(cfg: DictConfig):
                 os.path.dirname(__file__) + "/plots/plot_drone_rollouts.py"
                 if config["ENV_NAME"] == "drone_v0"
                 or config["ENV_NAME"] == "drone_v1"
+                else os.path.dirname(__file__)
+                + "/plots/plot_pendulum_rollouts.py"
+            ),
+        ]
+    )
+
+        subprocess.run(
+        [
+            "python3",
+            (
+                os.path.dirname(__file__) + "/plots/plot_tilthex_rollouts.py"
+                if config["ENV_NAME"] == "tilthex_v0"
+                or config["ENV_NAME"] == "tilthex_v1"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),

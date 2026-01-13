@@ -152,10 +152,8 @@ def parse_experiment_name(exp_name: str) -> Dict[str, any]:
             continue
 
         # Extract environment (look for common env names)
-        if parts[i] in ["halfcheetah", "drone", "pendulum", "reacher"] and i + 1 < len(
-            parts
-        ):
-            params["env"] = f"{parts[i]}_{parts[i+1]}"
+        if parts[i] in ['halfcheetah', 'drone', 'pendulum', 'hopper', 'walker', 'tilthex'] and i + 1 < len(parts):
+            params['env'] = f"{parts[i]}_{parts[i+1]}"
             i += 2
             continue
 

@@ -273,6 +273,33 @@ class HalfCheetahV5(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
+    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
+        """Compute evaluation metrics for the current state.
+        
+        Args:
+            env_state: Current environment state
+            params: Environment parameters
+            
+        Returns:
+            Dictionary of metric names to scalar values
+        """
+        state = env_state.state
+        
+        # Forward velocity (x-velocity)
+        forward_velocity = state.qvel.flatten()[0]
+        
+        # Height (z position of torso)
+        height = state.qpos.flatten()[1]
+        
+        # Total velocity magnitude
+        velocity_magnitude = jnp.linalg.norm(state.qvel)
+        
+        return {
+            "forward_velocity": forward_velocity,
+            "height": height,
+            "velocity_magnitude": velocity_magnitude,
+        }
+
     @property
     def name(self) -> str:
         """Environment name."""

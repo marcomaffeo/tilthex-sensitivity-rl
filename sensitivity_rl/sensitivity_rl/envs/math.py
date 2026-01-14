@@ -7,6 +7,16 @@ def skew(vec):
 
 
 @jax.jit
+def quat_vector(quat):
+    """Extract vector part of quaternion"""
+    return quat[1:4]
+
+@jax.jit
+def vector_quat(vec):
+    """Create a pure quaternion from a vector"""
+    return jnp.concatenate([jnp.array([0.0]), vec])
+
+@jax.jit
 def quat2rotm(quat):
     eta = quat[0]
     vec = quat[1:4]

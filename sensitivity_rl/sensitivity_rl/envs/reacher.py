@@ -377,6 +377,31 @@ class ReacherV5(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
+    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
+        """Compute evaluation metrics for the current state.
+        
+        Args:
+            env_state: Current environment state
+            params: Environment parameters
+            
+        Returns:
+            Dictionary of metric names to scalar values
+        """
+        state = env_state.state
+        
+        # Distance from fingertip to target
+        distance_to_target = jnp.linalg.norm(
+            state.fingertip.reshape(-1)[:2] - env_state.target.reshape(-1)[:2]
+        )
+        
+        # Joint velocities magnitude
+        joint_velocity = jnp.linalg.norm(state.qvel.flatten()[:2])
+        
+        return {
+            "distance_to_target": distance_to_target,
+            "joint_velocity": joint_velocity,
+        }
+
     @property
     def name(self) -> str:
         """Environment name."""

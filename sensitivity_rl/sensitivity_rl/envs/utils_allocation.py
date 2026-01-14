@@ -84,7 +84,7 @@ def GTMRP_props(n, l, alpha, beta, com):
         R_all       list of n rotation matrices (in body frame)
     """
     indices = jnp.arange(n)
-    p_all, R_all = jax.vmap(single_prop_geometry, in_axes=(0, None, None, None, None, None))(
+    p_all, R_all = jax.vmap(single_prop_geometry, in_axes=(0, None, None, 0, None, None))(
         indices, n, l, alpha, beta, com
     )
     return p_all, R_all

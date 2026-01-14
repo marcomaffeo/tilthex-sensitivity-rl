@@ -25,7 +25,6 @@ import distrax
 from flax import serialization
 from flax.linen.initializers import constant, orthogonal
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 

@@ -89,6 +89,7 @@ class ModelState:
 class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
+    target_attitude: jax.Array
     last_u: jax.Array  # Only needed for rendering
     time: int
 
@@ -145,10 +146,16 @@ class TilthexV0(environment.Environment):
     def __init__(self):
         self.type = ""
         self.state_dim = 13
-        self.obs_dim = 13
+        self.obs_dim = 17 # 13 + 4 (quaternion to target)
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 14  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
+
+        target_roll_deg = 0.0   
+        target_pitch_deg = 0.0
+        target_yaw_deg = 0.0
+        target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
+        self.target_attitude = euler_to_quat(target_rpy)
 
         # hovering action
         efficiency = jnp.cos(jnp.deg2rad(self.default_params.alpha))
@@ -165,7 +172,7 @@ class TilthexV0(environment.Environment):
         self.params_max = [
             3.2,                                            # mass
             jnp.array([0.079, 0.081, 0.156]),               # inertia
-            jnp.array([-0.02, -0.02, -0.02]),               # com offset
+            jnp.array([0.02, 0.02, 0.02]),               # com offset
             jnp.full((6,), -15.0),                          # alpha tilt angles
             jnp.array(12.5e-4),                             # c_f
         ]
@@ -246,6 +253,7 @@ class TilthexV0(environment.Environment):
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
+            target_attitude=env_state.target_attitude,
             last_u=input.reshape(-1),
             time=env_state.time + 1,
         )
@@ -357,6 +365,7 @@ class TilthexV0(environment.Environment):
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
+            target_attitude=self.target_attitude,
             last_u=self.hovering_action,
             time=0,
         )
@@ -372,12 +381,17 @@ class TilthexV0(environment.Environment):
         q = state.attitude
         ang_vel = state.omega
 
+        #target attitude error
+        q_target_inv = quat_inverse(env_state.target_attitude)
+        q_error = quat_product(q_target_inv, q)
+
         return jnp.concatenate(
             [
                 to_target.reshape(-1),
                 vel.reshape(-1),
                 q.reshape(-1),
                 ang_vel.reshape(-1),
+                q_error.reshape(-1),
             ]
         ).squeeze()
 
@@ -428,6 +442,10 @@ class TilthexV0(environment.Environment):
                     (3,),
                     jnp.float32,
                 ),
+                "target_attitude": spaces.Box(
+                    -1.0, 1.0, (4,), 
+                    jnp.float32
+                ),
                 "last_u": spaces.Box(
                     -jnp.finfo(jnp.float32).max,
                     jnp.finfo(jnp.float32).max,
@@ -450,10 +468,31 @@ class TilthexV0(environment.Environment):
             output: Optional path to save the figure. If None, displays interactively.
         """
         import matplotlib.pyplot as plt
+        import numpy as np
+
+        def quat_to_euler_deg(q_array):
+            w, x, y, z = q_array[:, 0], q_array[:, 1], q_array[:, 2], q_array[:, 3]
+            
+            # Roll (x-axis rotation)
+            sinr_cosp = 2 * (w * x + y * z)
+            cosr_cosp = 1 - 2 * (x * x + y * y)
+            roll = np.arctan2(sinr_cosp, cosr_cosp)
+
+            # Pitch (y-axis rotation)
+            sinp = 2 * (w * y - z * x)
+            # Clip per evitare errori numerici fuori da [-1, 1]
+            sinp = np.clip(sinp, -1.0, 1.0)
+            pitch = np.arcsin(sinp)
+            # Yaw (z-axis rotation)
+            siny_cosp = 2 * (w * z + x * y)
+            cosy_cosp = 1 - 2 * (y * y + z * z)
+            yaw = np.arctan2(siny_cosp, cosy_cosp)
+
+            return np.degrees(np.stack([roll, pitch, yaw], axis=1))
         
         plt.style.use("seaborn-v0_8")
-        fig = plt.figure(figsize=(14, 8))
-        gs = fig.add_gridspec(3, 3, height_ratios=[2, 1, 1])
+        fig = plt.figure(figsize=(14, 12))
+        gs = fig.add_gridspec(4, 3, height_ratios=[2, 1, 1, 1])
 
         ax_path = fig.add_subplot(gs[0, :], projection="3d")
 
@@ -467,6 +506,12 @@ class TilthexV0(environment.Environment):
         axes_act = [ax_m1, ax_m2, ax_m3, ax_m4, ax_m5, ax_m6]
 
         labels = ["Force p1", "Force p2", "Force p3", "Force p4", "Force p5", "Force p6"]
+
+        ax_roll = fig.add_subplot(gs[3, 0])
+        ax_pitch = fig.add_subplot(gs[3, 1])
+        ax_yaw = fig.add_subplot(gs[3, 2])
+        axes_att = [ax_roll, ax_pitch, ax_yaw]
+        att_labels = ["Roll (x) [deg]", "Pitch (y) [deg]", "Yaw (z) [deg]"]
 
         for series in series_list:
             state = series.get("state", None)
@@ -490,6 +535,15 @@ class TilthexV0(environment.Environment):
                 pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
             )
 
+            quats = state[:, 3:7] 
+            rpy_deg = quat_to_euler_deg(quats)
+
+            for i, ax in enumerate(axes_att):
+                ax.plot(np.arange(rpy_deg.shape[0]), rpy_deg[:, i], alpha=0.8)
+                ax.set_xlabel("t")
+                ax.set_ylabel(att_labels[i])
+                ax.grid(True, alpha=0.3)
+
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
                 for idx, ax in enumerate(axes_act):
@@ -511,4 +565,78 @@ class TilthexV0(environment.Environment):
             output.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(output, dpi=150)
             plt.close(fig)
+
+    #         @staticmethod
+    # def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
+    #     """Plot tilthex rollout trajectories.
+        
+    #     Args:
+    #         series_list: List of trajectory dictionaries with keys:
+    #             - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
+    #             - 'actions': array of shape (T, 6)
+    #             - 'target_pos': optional target position array
+    #         output: Optional path to save the figure. If None, displays interactively.
+    #     """
+    #     import matplotlib.pyplot as plt
+        
+    #     plt.style.use("seaborn-v0_8")
+    #     fig = plt.figure(figsize=(14, 8))
+    #     gs = fig.add_gridspec(3, 3, height_ratios=[2, 1, 1])
+
+    #     ax_path = fig.add_subplot(gs[0, :], projection="3d")
+
+    #     ax_m1 = fig.add_subplot(gs[1, 0])
+    #     ax_m2 = fig.add_subplot(gs[1, 1])
+    #     ax_m3 = fig.add_subplot(gs[1, 2])
+    #     ax_m4 = fig.add_subplot(gs[2, 0])
+    #     ax_m5 = fig.add_subplot(gs[2, 1]) 
+    #     ax_m6 = fig.add_subplot(gs[2, 2])
+
+    #     axes_act = [ax_m1, ax_m2, ax_m3, ax_m4, ax_m5, ax_m6]
+
+    #     labels = ["Force p1", "Force p2", "Force p3", "Force p4", "Force p5", "Force p6"]
+
+    #     for series in series_list:
+    #         state = series.get("state", None)
+    #         if state is None:
+    #             continue
+    #         state = np.asarray(state)
+    #         # state format: [pos(3), attitude(4), vel(3), omega(3)]
+    #         pos = state[:, :3]
+            
+    #         ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+
+    #         if "target_pos" in series:
+    #             target = np.asarray(series["target_pos"])
+    #             if target.ndim >= 2:
+    #                 target = target[0]
+    #             ax_path.scatter(
+    #                 target[0], target[1], target[2], marker="x", color="red", s=30
+    #             )
+
+    #         ax_path.scatter(
+    #             pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
+    #         )
+
+    #         actions = np.asarray(series.get("actions", []))
+    #         if actions.size > 0:
+    #             for idx, ax in enumerate(axes_act):
+    #                 if idx < actions.shape[1]:
+    #                     ax.plot(np.arange(actions.shape[0]), actions[:, idx], alpha=0.6)
+    #                 ax.set_xlabel("t")
+    #                 ax.set_ylabel(labels[idx])
+    #                 ax.grid(True, alpha=0.3)
+
+    #     ax_path.set_title("Tilthex position trajectories")
+    #     ax_path.set_xlabel("x [m]")
+    #     ax_path.set_ylabel("y [m]")
+    #     ax_path.set_zlabel("z [m]")
+    #     ax_path.grid(True, alpha=0.3)
+
+    #     if output is None:
+    #         plt.show()
+    #     else:
+    #         output.parent.mkdir(parents=True, exist_ok=True)
+    #         fig.savefig(output, dpi=150)
+    #         plt.close(fig)
 

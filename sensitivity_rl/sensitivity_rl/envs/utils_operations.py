@@ -31,3 +31,24 @@ def rotate_vec3(v, q):
     q_inv = quat_inverse(q)
     p_rotated = quat_multiply(quat_multiply(q, p), q_inv)
     return p_rotated[1:4]
+
+@jax.jit
+def euler_to_quat(rpy):
+    """
+    Converts Euler angles (roll, pitch, yaw) to a unit quaternion [w, x, y, z].
+    Input: rpy jax.Array shape (3,)
+    """
+    roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
+    cr = jnp.cos(roll * 0.5)
+    sr = jnp.sin(roll * 0.5)
+    cp = jnp.cos(pitch * 0.5)
+    sp = jnp.sin(pitch * 0.5)
+    cy = jnp.cos(yaw * 0.5)
+    sy = jnp.sin(yaw * 0.5)
+
+    w = cr * cp * cy + sr * sp * sy
+    x = sr * cp * cy - cr * sp * sy
+    y = cr * sp * cy + sr * cp * sy
+    z = cr * cp * sy - sr * sp * cy
+
+    return jnp.array([w, x, y, z])

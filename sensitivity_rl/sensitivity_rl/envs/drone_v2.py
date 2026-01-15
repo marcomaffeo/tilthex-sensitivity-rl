@@ -157,7 +157,7 @@ class DroneV2(environment.Environment):
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
             10.0,  # reward when close to target
-            1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
+            - 1.0 * jnp.linalg.norm(pos_diff),  # distance improvement reward
         )
 
         # Compute yaw error from quaternion
@@ -168,12 +168,10 @@ class DroneV2(environment.Environment):
                                          jnp.cos(current_yaw - env_state.target_yaw)))
 
         reward_yaw = jax.lax.select(
-            jnp.logical_or(jnp.linalg.norm(pos_diff) < 0.25, yaw_error < 0.1),
-            -5.0 * yaw_error,  # reward when close to target
-            -0.5 * yaw_error,
+            yaw_error < 0.05,
+            1.0,  # reward when close to target
+            - 1.0 * yaw_error,
         )
-
-        # reward_yaw = -1.0 * yaw_error
 
         thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
         thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))

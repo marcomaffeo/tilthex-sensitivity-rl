@@ -28,6 +28,7 @@ class ModelState:
 class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
+    target_yaw: jax.Array  # Desired yaw angle (rotation around z-axis)
     last_u: jax.Array  # Only needed for rendering
     time: int
 
@@ -81,7 +82,7 @@ class DroneV2(environment.Environment):
     def __init__(self):
         self.type = ""
         self.state_dim = 13
-        self.obs_dim = 13
+        self.obs_dim = 14  # Added yaw_error to observations
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
@@ -159,12 +160,28 @@ class DroneV2(environment.Environment):
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
+        # Compute yaw error from quaternion
+        # Yaw can be extracted from quaternion as: yaw = atan2(2*(q0*q3 + q1*q2), 1 - 2*(q2^2 + q3^2))
+        q = state_next.attitude
+        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
+        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
+                                         jnp.cos(current_yaw - env_state.target_yaw)))
+
+        reward_yaw = jax.lax.select(
+            jnp.logical_or(jnp.linalg.norm(pos_diff) < 0.25, yaw_error < 0.1),
+            -5.0 * yaw_error,  # reward when close to target
+            -0.5 * yaw_error,
+        )
+
+        # reward_yaw = -1.0 * yaw_error
+
         thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
         thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
+            + reward_yaw
             - 0.01 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
             - 0.05 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
@@ -174,6 +191,7 @@ class DroneV2(environment.Environment):
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
+            target_yaw=env_state.target_yaw,
             last_u=input.reshape(-1),
             time=env_state.time + 1,
         )
@@ -194,23 +212,6 @@ class DroneV2(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """
-        Simple quadrotor dynamics model with CoM placed at the geometric center
-
-        Parameters
-        ----------
-        state : jnp.array
-            state vector [pos (world frame),
-                        attitude (unit quaternion [w, x, y, z]),
-                        vel (world frame),
-                        angular_velocity (body frame)]
-        inputs : jnp.array):
-            input vector [thrust (along the body-frame z axis), torque (body frame)]
-        Returns
-        -------
-        state_next : ModelState
-            next state after time dt
-        """
 
         u = jnp.clip(action, params.min_input, params.max_input)
 
@@ -278,21 +279,29 @@ class DroneV2(environment.Environment):
         omega = jnp.array([0.0, 0.0, 0.0])
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
-        key, _ = jax.random.split(key)
+        key, key_target, key_yaw = jax.random.split(key, 3)
         target_pos = jax.lax.select(
             params.is_testing,
             self.target_pos,
             jax.random.uniform(
-                key,
+                key_target,
                 shape=(3,),
                 minval=params.env_min_limits,
                 maxval=params.env_max_limits,
             ),
         )
+        
+        # Sample target yaw uniformly between -pi and pi
+        target_yaw = jax.lax.select(
+            params.is_testing,
+            jnp.array(0.0),  # Point forward when testing
+            jax.random.uniform(key_yaw, minval=-jnp.pi, maxval=jnp.pi),
+        )
 
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
+            target_yaw=target_yaw,
             last_u=self.hovering_action,
             time=0,
         )
@@ -307,6 +316,11 @@ class DroneV2(environment.Environment):
         to_target = env_state.target_pos - pos
         q = state.attitude
         ang_vel = state.omega
+        
+        # Compute current yaw and yaw error
+        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
+        yaw_error = jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
+                                jnp.cos(current_yaw - env_state.target_yaw))
 
         return jnp.concatenate(
             [
@@ -314,6 +328,7 @@ class DroneV2(environment.Environment):
                 vel.reshape(-1),
                 q.reshape(-1),
                 ang_vel.reshape(-1),
+                jnp.array([yaw_error]),
             ]
         ).squeeze()
 
@@ -349,11 +364,20 @@ class DroneV2(environment.Environment):
         quat_error = quat_product(quat_inverse(state.attitude), upright_quat)
         attitude_error = 2.0 * jnp.arccos(jnp.clip(jnp.abs(quat_error[0]), 0.0, 1.0))
         
+        # Yaw error
+        q = state.attitude
+        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
+        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
+                                         jnp.cos(current_yaw - env_state.target_yaw)))
+        
         return {
             "distance_to_target": distance_to_target,
             "velocity_magnitude": velocity_magnitude,
             "angular_velocity_magnitude": angular_velocity_magnitude,
             "attitude_error": attitude_error,
+            "yaw_error": yaw_error,
+            "current_yaw": current_yaw,
+            "target_yaw": env_state.target_yaw,
         }
 
     @property
@@ -431,8 +455,9 @@ class DroneV2(environment.Environment):
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
 
-        # Collect distance_to_target from all rollouts
+        # Collect distance_to_target and yaw_error from all rollouts
         all_distances = []
+        all_yaw_errors = []
 
         for series in series_list:
             state = series.get("state", None)
@@ -465,11 +490,14 @@ class DroneV2(environment.Environment):
                     ax.set_ylabel(labels[idx])
                     ax.grid(True, alpha=0.3)
 
-            # Collect distance_to_target if available
+            # Collect distance_to_target and yaw_error if available
             eval_metrics = series.get("eval_metrics", {})
             if "distance_to_target" in eval_metrics:
                 dist = np.asarray(eval_metrics["distance_to_target"]).flatten()
                 all_distances.append(dist)
+            if "yaw_error" in eval_metrics:
+                yaw = np.asarray(eval_metrics["yaw_error"]).flatten()
+                all_yaw_errors.append(yaw)
 
         ax_path.set_title("Quadrotor position trajectories")
         ax_path.set_xlabel("x [m]")
@@ -477,36 +505,89 @@ class DroneV2(environment.Environment):
         ax_path.set_zlabel("z [m]")
         ax_path.grid(True, alpha=0.3)
 
-        # Plot mean distance to target with std shading
-        if all_distances:
-            # Pad to same length if needed
-            max_len = max(d.shape[0] for d in all_distances)
-            padded = np.array([
-                np.pad(d, (0, max_len - d.shape[0]), mode='edge') 
-                for d in all_distances
-            ])
-            mean_dist = np.mean(padded, axis=0)
-            std_dist = np.std(padded, axis=0)
-            timesteps = np.arange(max_len)
+        # Plot mean distance to target and yaw error with std shading
+        if all_distances or all_yaw_errors:
+            # Create twin axis for yaw error
+            ax_yaw = ax_dist.twinx()
+            
+            # Plot distance to target
+            if all_distances:
+                max_len = max(d.shape[0] for d in all_distances)
+                padded = np.array([
+                    np.pad(d, (0, max_len - d.shape[0]), mode='edge') 
+                    for d in all_distances
+                ])
+                mean_dist = np.mean(padded, axis=0)
+                std_dist = np.std(padded, axis=0)
+                timesteps = np.arange(max_len)
 
-            ax_dist.plot(timesteps, mean_dist, color="blue", label="Mean distance")
-            ax_dist.fill_between(
-                timesteps,
-                mean_dist - std_dist,
-                mean_dist + std_dist,
-                alpha=0.3,
-                color="blue",
-                label="± 1 std"
-            )
-            ax_dist.set_xlabel("Timestep")
-            ax_dist.set_ylabel("Distance to target [m]")
-            ax_dist.set_title("Distance to target over time")
-            ax_dist.legend(loc="upper right")
+                ax_dist.plot(timesteps, mean_dist, color="blue", label="Distance", linewidth=2)
+                ax_dist.fill_between(
+                    timesteps,
+                    mean_dist - std_dist,
+                    mean_dist + std_dist,
+                    alpha=0.3,
+                    color="blue"
+                )
+                ax_dist.set_xlabel("Timestep")
+                ax_dist.set_ylabel("Distance to target [m]", color="blue")
+                ax_dist.tick_params(axis='y', labelcolor='blue')
+                
+                # Display final mean and std
+                final_mean = mean_dist[-1]
+                final_std = std_dist[-1]
+                ax_dist.text(
+                    0.02, 0.98, 
+                    f"Distance: {final_mean:.3f} ± {final_std:.3f} m",
+                    transform=ax_dist.transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
+                )
+            
+            # Plot yaw error
+            if all_yaw_errors:
+                max_len_yaw = max(y.shape[0] for y in all_yaw_errors)
+                padded_yaw = np.array([
+                    np.pad(y, (0, max_len_yaw - y.shape[0]), mode='edge') 
+                    for y in all_yaw_errors
+                ])
+                mean_yaw = np.mean(padded_yaw, axis=0)
+                std_yaw = np.std(padded_yaw, axis=0)
+                timesteps_yaw = np.arange(max_len_yaw)
+
+                ax_yaw.plot(timesteps_yaw, mean_yaw, color="red", label="Yaw error", linewidth=2)
+                ax_yaw.fill_between(
+                    timesteps_yaw,
+                    mean_yaw - std_yaw,
+                    mean_yaw + std_yaw,
+                    alpha=0.3,
+                    color="red"
+                )
+                ax_yaw.set_ylabel("Yaw error [rad]", color="red")
+                ax_yaw.tick_params(axis='y', labelcolor='red')
+                
+                # Display final yaw mean and std
+                final_yaw_mean = mean_yaw[-1]
+                final_yaw_std = std_yaw[-1]
+                ax_dist.text(
+                    0.02, 0.88, 
+                    f"Yaw error: {final_yaw_mean:.3f} ± {final_yaw_std:.3f} rad",
+                    transform=ax_dist.transAxes,
+                    verticalalignment='top',
+                    bbox=dict(boxstyle='round', facecolor='lightsalmon', alpha=0.5)
+                )
+            
+            ax_dist.set_title("Distance and Yaw Error over time")
             ax_dist.grid(True, alpha=0.3)
+            
+            # Add legend
+            lines1, labels1 = ax_dist.get_legend_handles_labels()
+            lines2, labels2 = ax_yaw.get_legend_handles_labels()
+            ax_dist.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
         else:
             ax_dist.text(0.5, 0.5, "No eval_metrics available", 
                         ha='center', va='center', transform=ax_dist.transAxes)
-            ax_dist.set_title("Distance to target over time")
+            ax_dist.set_title("Distance and Yaw Error over time")
 
         plt.tight_layout()
 

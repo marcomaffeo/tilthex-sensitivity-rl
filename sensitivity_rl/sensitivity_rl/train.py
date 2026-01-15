@@ -234,13 +234,6 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
 
 def run_evaluation(config, run_dir):
     """Run evaluation rollouts and plotting."""
-    eval_config = {
-        "NUM_ROLLOUTS": 10,
-        "MAX_STEPS": 200,
-        "DETERMINISTIC": True,
-        "SEED": 42,
-        "PARAM_SAMPLES": 1,
-    }
 
     script_dir = os.path.dirname(__file__)
 
@@ -251,30 +244,19 @@ def run_evaluation(config, run_dir):
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
-            "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
             "--plot",
         ]
     )
 
     print("Running evaluation rollouts (perturbed)...")
-    eval_config["PARAM_SAMPLES"] = 10
     subprocess.run(
         [
             "python3",
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
             "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
+            "10",
             "--plot",
         ]
     )

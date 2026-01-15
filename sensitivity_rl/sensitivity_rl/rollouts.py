@@ -379,7 +379,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=0,
+        default=42,
         help="Base PRNG seed for rollouts.",
     )
     parser.add_argument(

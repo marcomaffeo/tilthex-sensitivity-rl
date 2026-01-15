@@ -524,6 +524,17 @@ class DroneV0(environment.Environment):
             ax_dist.set_title("Distance to target over time")
             ax_dist.legend(loc="upper right")
             ax_dist.grid(True, alpha=0.3)
+            
+            # Display final mean and std
+            final_mean = mean_dist[-1]
+            final_std = std_dist[-1]
+            ax_dist.text(
+                0.02, 0.98, 
+                f"Final: {final_mean:.3f} ± {final_std:.3f} m",
+                transform=ax_dist.transAxes,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            )
         else:
             ax_dist.text(0.5, 0.5, "No eval_metrics available", 
                         ha='center', va='center', transform=ax_dist.transAxes)

@@ -70,7 +70,7 @@ class EnvParams(environment.EnvParams):
     com_pos: jax.Array = struct.field(
         pytree_node=True, default_factory=lambda: jnp.array([0.0, 0.0, 0.0])
     )
-    delay: float = struct.field(pytree_node=True, default=0.0)
+    delay: float = struct.field(pytree_node=True, default=0.002)
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
@@ -94,13 +94,13 @@ class DroneV2(environment.Environment):
             1.0,  # mass
             jnp.array([0.01, 0.01, 0.01]),  # inertia
             jnp.array([-0.02, -0.02, -0.02]),  # com_pos
-            0.0,  # delay
+            0.002,  # delay
         ]
         self.params_max = [
-            1.8,  # mass
+            1.8,  # mas
             jnp.array([0.05, 0.05, 0.05]),  # inertia
             jnp.array([0.02, 0.02, 0.02]),  # com_pos
-            0.02,  # delay
+            0.015,  # delay
         ]
         super().__init__()
 
@@ -145,19 +145,19 @@ class DroneV2(environment.Environment):
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
         """Integrate pendulum ODE and return transition."""
 
-        clipped_action = jnp.clip(action, params.min_action, params.max_action)
-        input = self.rescale_action(clipped_action, params)
+        action_clipped = jnp.clip(action, params.min_action, params.max_action)
+        action_rescaled = self.rescale_action(action_clipped, params)
 
         state = env_state.state
 
-        state_next = self.step_dynamics(key, state, input, params)
+        state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
 
         pos_diff = state_next.pos - env_state.target_pos
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
             10.0,  # reward when close to target
-            - 1.0 * jnp.linalg.norm(pos_diff),  # distance improvement reward
+            - 2.0 * jnp.linalg.norm(pos_diff),  # distance improvement reward
         )
 
         # Compute yaw error from quaternion
@@ -173,7 +173,7 @@ class DroneV2(environment.Environment):
             - 1.0 * yaw_error,
         )
 
-        thrust_normalized_input = input.at[0].set(input[0] / (params.max_input[0]))
+        thrust_normalized_input = action_rescaled.at[0].set(action_rescaled[0] / (params.max_input[0]))
         thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
@@ -190,7 +190,7 @@ class DroneV2(environment.Environment):
             state=state_next,
             target_pos=env_state.target_pos,
             target_yaw=env_state.target_yaw,
-            last_u=input.reshape(-1),
+            last_u=action_rescaled.reshape(-1),
             time=env_state.time + 1,
         )
 
@@ -202,6 +202,26 @@ class DroneV2(environment.Environment):
             done,
             {"discount": self.discount(env_state, params)},
         )
+
+    def step_dynamics_delay(
+        self,
+        key: jax.Array,
+        state: ModelState,
+        action: int | float | jax.Array,
+        last_action: int | float | jax.Array,
+        params: EnvParams,
+    ) -> ModelState:
+        """Step dynamics with input delay."""
+        
+        dt1 = jnp.clip(params.delay, 0.0, params.dt)
+        dt2 = params.dt - dt1
+
+        params = params.replace(dt=dt1)
+        state_intermediate = self.step_dynamics(key, state, last_action, params)
+        params = params.replace(dt=dt2)
+        state_final = self.step_dynamics(key, state_intermediate, action, params)
+
+        return state_final
 
     def step_dynamics(
         self,

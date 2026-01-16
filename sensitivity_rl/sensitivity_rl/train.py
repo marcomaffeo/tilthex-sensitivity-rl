@@ -17,6 +17,7 @@ import os
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -304,9 +305,25 @@ def main(cfg: DictConfig):
     # Create unified training function
     train_fn = make_train(config, spec, writer)
 
-    # Train
+    # Train (warmup run to trigger JIT compilation)
     train_jit = jax.jit(train_fn)
+    print("Compiling...")
+    _ = train_jit(rng)
+    
+    # Actual timed training run
+    rng = jax.random.PRNGKey(config.get("SEED", 30))  # Reset RNG for reproducibility
+    start_time = time.time()
     final_state = train_jit(rng)
+    jax.block_until_ready(final_state)
+    end_time = time.time()
+
+    # Log training speed
+    total_time = end_time - start_time
+    total_steps = config["TOTAL_TIMESTEPS"]
+    steps_per_second = total_steps / total_time
+    print(f"Training completed in {total_time:.2f}s ({steps_per_second:.2f} steps/second)")
+    writer.add_scalar("perf/steps_per_second", steps_per_second, total_steps)
+    writer.add_scalar("perf/total_time_seconds", total_time, total_steps)
 
     # Save params
     params = final_state.train_state.params

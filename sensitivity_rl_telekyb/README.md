@@ -27,6 +27,9 @@ You will need at least three separate shells to run the simulation:
     
         wss://<REMOTE_IP>:9002
 
+    > [!TIP]
+    > You might need to open the URL https://<REMOTE_IP>:9002 in a separate tab first to have the browser accept the SSL certificate
+
 2. Launch the gazebo simulation (add -s for remote development)
     
         gz sim -v 4 -r worlds/example.world

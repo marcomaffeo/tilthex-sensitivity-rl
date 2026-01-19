@@ -1,0 +1,10 @@
+# Ignore all Python cache files
+*.pyc
+# Ignore file used to test parts of code
+prova.py
+*.txt
+logs/*.log
+logs/*.txt
+gitlab_upload.sh# pixi environments
+.pixi/*
+!.pixi/config.toml

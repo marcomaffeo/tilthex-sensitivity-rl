@@ -1,0 +1,52 @@
+# Setup a full environment with pixi:
+# 1 - Checkout telekyb3 / openrobots source and its dependencies :
+# pixi run checkout
+# 2 - Build telekyb3 / openrobots source and its dependencies :
+# pixi run build
+# 3 - Activate the pixi virtual environment within your shell, with everything installed:
+# pixi shell
+
+[workspace]
+authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
+channels = ["conda-forge"]
+name = "telekyb_sim"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[activation]
+scripts = ["development/scripts/pixi/activation.sh"]
+
+[tasks]
+checkout = { cmd = "sh ./development/scripts/pixi/checkout_telekyb3.sh" }
+build = { cmd = "sh ./development/scripts/pixi/build_telekyb3.sh" }
+
+[dependencies]
+c-compiler = "*"
+cxx-compiler = "*"
+autoconf = "*"
+automake = "*"
+libtool = "*"
+make = "*"
+pkg-config = "*"
+git = ">=2.47.0"
+flex = "*"
+bison = "*"
+tcllib = "*" # genom3
+libtirpc = "*" # pocolibs
+eigen = "*" # rotorcraft
+libudev = "*"
+asciidoctor = "*"
+proxsuite = "*"
+# dependencies for python use only
+loop-rate-limiters = "*"
+gz-sim = "<10"
+pyyaml = ">=6.0.2"
+matplotlib = ">=3.10.5"
+bokeh = "*"
+libgz-launch = ">=7.1.1,<8"
+gz-plugin = ">=4.0.0,<5"
+
+# for now we let free the python version
+# we could fix it using features & environments like this:
+# [feature.python310.dependencies]
+# python = "~=3.10.0"

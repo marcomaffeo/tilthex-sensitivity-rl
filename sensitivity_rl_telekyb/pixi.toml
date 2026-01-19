@@ -43,7 +43,7 @@ gz-sim = "<10"
 pyyaml = ">=6.0.2"
 matplotlib = ">=3.10.5"
 bokeh = "*"
-libgz-launch = ">=7.1.1,<8"
+libgz-launch = ">=8,<9"
 gz-plugin = ">=4.0.0,<5"
 
 # for now we let free the python version

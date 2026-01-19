@@ -38,11 +38,8 @@ You will need at least three separate shells to run the simulation:
         python3 -i tk3-quadrotor-control.py
     
 
-    
-
 
 ## Notes
-- Tested on ubuntu 24.04
 - The latest compatible gazebo version is 9.4.0. This is reflected in the way the websocket server is launched through gz-launch, and will require to be updated for `gz-sim>=10`
     
     

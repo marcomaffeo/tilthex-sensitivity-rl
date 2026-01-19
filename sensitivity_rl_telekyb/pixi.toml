@@ -37,14 +37,14 @@ eigen = "*" # rotorcraft
 libudev = "*"
 asciidoctor = "*"
 proxsuite = "*"
+gz-sim = "<10"
+libgz-launch = ">=8,<9"
+gz-plugin = ">=4.0.0,<5"
 # dependencies for python use only
 loop-rate-limiters = "*"
-gz-sim = "<10"
 pyyaml = ">=6.0.2"
 matplotlib = ">=3.10.5"
 bokeh = "*"
-libgz-launch = ">=8,<9"
-gz-plugin = ">=4.0.0,<5"
 
 # for now we let free the python version
 # we could fix it using features & environments like this:

@@ -17,25 +17,25 @@ You will need at least three separate shells to run the simulation:
 
 1. Run the genom components
     
-        sh scripts/components.sh
+       sh scripts/components.sh
 
 3. (Optional) For remote development, you can launch the websocket server
     
-        sh scripts/websocket.sh
+       sh scripts/websocket.sh
     
     Then open the browser on your local machine at [https://app.gazebosim.org/visualization](https://app.gazebosim.org/visualization) and connect to the simulation with URL
     
-        wss://<REMOTE_IP>:9002
+       wss://<REMOTE_IP>:9002
 
    Note: You might need to open the URL https://<REMOTE_IP>:9002 in a separate tab first to have the browser accept the SSL certificate
 
 2. Launch the gazebo simulation (add -s for remote development)
     
-        gz sim -v 4 -r worlds/example.world
+       gz sim -v 4 -r worlds/example.world
     
 4. Launch the control script, e.g.
     
-        python3 -i tk3-quadrotor-control.py
+       python -i tk3-quadrotor-control.py
     
 
 

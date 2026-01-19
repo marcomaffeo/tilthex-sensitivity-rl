@@ -1,4 +1,5 @@
 <?xml version='1.0'?>
+<!-- Documentation at https://gazebosim.org/docs/ionic/web_visualization/ -->
 <gz version='1.0'>
   <plugin name='gz::launch::WebsocketServer'
           filename='gz-launch-websocket-server'>

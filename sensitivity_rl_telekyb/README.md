@@ -59,9 +59,11 @@ Here is a list of all the pixi commands which can be used to run and manage the 
 
 ### Simulation
 
-- **components**: Launch the genom components
+- **components**: Manage the genom components
   ```
-  pixi run components
+  pixi run components              # Launch all the components
+  pixi run components --kill       # Stop all components
+  pixi run components --reset      # Stop and re-launch
   ```
 
 - **web-gui**: Launch the websocket server for remote visualization
@@ -72,25 +74,25 @@ Here is a list of all the pixi commands which can be used to run and manage the 
 - **sim**: Launch the gazebo simulation with a specified world file (default: `worlds/example.world`)
   ```
   pixi run sim
-  pixi run sim world_file=worlds/example_camera.world
+  pixi run sim worlds/example_camera.world
   ```
 
 - **sim-server**: Launch the gazebo simulation in server mode (headless)
   ```
   pixi run sim-server
-  pixi run sim-server world_file=worlds/example_camera.world
+  pixi run sim-server worlds/example_camera.world
   ```
 
 - **sim-remote**: Launch both the websocket server and gazebo simulation in server mode for remote development
   ```
   pixi run sim-remote
-  pixi run sim-remote world_file=worlds/example_camera.world
+  pixi run sim-remote worlds/example_camera.world
   ```
 
-- **sim-reset**: Reset the gazebo simulation world
+- **sim-reset**: Reset the gazebo simulation world (indicate the world name)
   ```
   pixi run sim-reset
-  pixi run sim-reset world_name=mrsim
+  pixi run sim-reset mrsim
   ```
 
 ### Control

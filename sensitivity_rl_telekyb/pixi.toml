@@ -13,7 +13,7 @@ checkout = { cmd = "sh ./development/scripts/pixi/checkout_telekyb3.sh" }
 build = { cmd = "sh ./development/scripts/pixi/build_telekyb3.sh" }
 components = { cmd = "sh ./scripts/components.sh" }
 web-gui = { cmd = "sh ./scripts/websocket.sh" }
-sim-reset = {cmd = "gz service -s /world/mrsim/control --reqtype gz.msgs.WorldControl --reptype gz.msgs.Boolean --timeout 3000 --req 'reset: {all: true}'"}
+quadrotor-control = {cmd = "python -i src/tk3-quadrotor-control.py"}
 
 [tasks.sim]
 args = [
@@ -32,6 +32,12 @@ args = [
   { "arg" = "world_file", "default" = "worlds/example.world" },
 ]
 cmd = "sh ./scripts/websocket.sh & gz sim -v 4 -r -s {{ world_file }}"
+
+[tasks.sim-reset]
+args = [
+  { "arg" = "world_name", "default" = "mrsim" },
+]
+cmd = "gz service -s /world/{{ world_name }}/control --reqtype gz.msgs.WorldControl --reptype gz.msgs.Boolean --timeout 3000 --req 'reset: {all: true}'"
 
 [dependencies]
 c-compiler = "*"

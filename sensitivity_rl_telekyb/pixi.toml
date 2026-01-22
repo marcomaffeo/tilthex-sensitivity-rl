@@ -1,11 +1,3 @@
-# Setup a full environment with pixi:
-# 1 - Checkout telekyb3 / openrobots source and its dependencies :
-# pixi run checkout
-# 2 - Build telekyb3 / openrobots source and its dependencies :
-# pixi run build
-# 3 - Activate the pixi virtual environment within your shell, with everything installed:
-# pixi shell
-
 [workspace]
 authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
 channels = ["conda-forge"]
@@ -19,6 +11,27 @@ scripts = ["development/scripts/pixi/activation.sh"]
 [tasks]
 checkout = { cmd = "sh ./development/scripts/pixi/checkout_telekyb3.sh" }
 build = { cmd = "sh ./development/scripts/pixi/build_telekyb3.sh" }
+components = { cmd = "sh ./scripts/components.sh" }
+web-gui = { cmd = "sh ./scripts/websocket.sh" }
+sim-reset = {cmd = "gz service -s /world/mrsim/control --reqtype gz.msgs.WorldControl --reptype gz.msgs.Boolean --timeout 3000 --req 'reset: {all: true}'"}
+
+[tasks.sim]
+args = [
+  { "arg" = "world_file", "default" = "worlds/example.world" },
+]
+cmd = "gz sim -v 4 -r {{ world_file }}"
+
+[tasks.sim-server]
+args = [
+  { "arg" = "world_file", "default" = "worlds/example.world" },
+]
+cmd = "gz sim -v 4 -r -s {{ world_file }}"
+
+[tasks.sim-remote]
+args = [
+  { "arg" = "world_file", "default" = "worlds/example.world" },
+]
+cmd = "sh ./scripts/websocket.sh & gz sim -v 4 -r -s {{ world_file }}"
 
 [dependencies]
 c-compiler = "*"
@@ -45,8 +58,6 @@ loop-rate-limiters = "*"
 pyyaml = ">=6.0.2"
 matplotlib = ">=3.10.5"
 bokeh = "*"
-
-# for now we let free the python version
-# we could fix it using features & environments like this:
-# [feature.python310.dependencies]
-# python = "~=3.10.0"
+jax = ">=0.7.2,<0.8"
+flax = ">=0.10.4,<0.11"
+distrax = ">=0.1.7,<0.2"

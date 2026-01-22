@@ -35,7 +35,7 @@ You will need at least three separate shells to run the simulation:
     
 4. Launch the control script, e.g.
     
-       python -i tk3-quadrotor-control.py
+       python -i src/tk3-quadrotor-control.py
     
 
 

@@ -56,17 +56,17 @@ class Actor(nn.Module):
 
 class Policy:
     def __init__(self, path: Path):
-        
-        # For now these values are hardcoded, but they could be made configurable later
-        self.ACTION_DIM = 4
-
-        self.MIN_INPUT = jnp.array([4.0, -3.0, -3.0, -1.0])
-        self.MAX_INPUT = jnp.array([25.0, 3.0, 3.0, 1.0])
-        self.MIN_ACTION = jnp.array([-1.0, -1.0, -1.0, -1.0])
-        self.MAX_ACTION = jnp.array([1.0, 1.0, 1.0, 1.0])
-
 
         config, params = self.load(path)
+        
+        # For now these values are hardcoded, but they could be made configurable later
+        self.ACTION_DIM = config["env"]["action_dim"]
+
+        self.MIN_INPUT = jnp.array(config["env"].get("MIN_INPUT"))
+        self.MAX_INPUT = jnp.array(config["env"].get("MAX_INPUT"))
+        self.MIN_ACTION = jnp.array(config["env"].get("MIN_ACTION"))
+        self.MAX_ACTION = jnp.array(config["env"].get("MAX_ACTION"))
+
         self.model, self.policy_params = self.init_model_and_params(config, params)
 
 
@@ -85,11 +85,11 @@ class Policy:
 
     def load(self, run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
         cfg_path = run_dir / "config.json"
-        params_path = run_dir / "params.msgpack"
+        params_path = run_dir / "policy_params.msgpack"
         if not cfg_path.exists():
             raise FileNotFoundError(f"Missing config.json in {run_dir}")
         if not params_path.exists():
-            raise FileNotFoundError(f"Missing params.msgpack in {run_dir}")
+            raise FileNotFoundError(f"Missing policy_params.msgpack in {run_dir}")
         with cfg_path.open("r", encoding="utf-8") as f:
             config = json.load(f)
         params_bytes = params_path.read_bytes()

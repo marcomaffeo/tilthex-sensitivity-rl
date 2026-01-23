@@ -305,19 +305,15 @@ def main(cfg: DictConfig):
     # Create unified training function
     train_fn = make_train(config, spec, writer)
 
-    # Train (warmup run to trigger JIT compilation)
+    # JIT compile and train
     train_jit = jax.jit(train_fn)
-    print("Compiling...")
-    _ = train_jit(rng)
-    
-    # Actual timed training run
-    rng = jax.random.PRNGKey(config.get("SEED", 30))  # Reset RNG for reproducibility
+    print("Compiling and training...")
     start_time = time.time()
     final_state = train_jit(rng)
     jax.block_until_ready(final_state)
     end_time = time.time()
 
-    # Log training speed
+    # Log training speed (total time includes compilation)
     total_time = end_time - start_time
     total_steps = config["TOTAL_TIMESTEPS"]
     steps_per_second = total_steps / total_time
@@ -327,7 +323,35 @@ def main(cfg: DictConfig):
 
     # Save params
     params = final_state.train_state.params
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+    (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(params))
+
+    # Add environment-specific attributes to config
+    env = ENV_REGISTRY[config["ENV_NAME"]]()
+    env_params = env.default_params
+    config["env"] = {}
+    
+    # List of attributes to extract from env and env_params
+    env_attrs = [
+        ("action_dim", "env", "action_dim"),
+        ("obs_dim", "env", "obs_dim"),
+        ("param_dim", "env", "param_dim"),
+        ("MIN_ACTION", "env_params", "min_action"),
+        ("MAX_ACTION", "env_params", "max_action"),
+        ("MIN_INPUT", "env_params", "min_input"),
+        ("MAX_INPUT", "env_params", "max_input"),
+    ]
+    
+    for config_key, source, attr_name in env_attrs:
+        try:
+            source_obj = env if source == "env" else env_params
+            attr_value = getattr(source_obj, attr_name)
+            # Convert to int if it's a scalar, to list if it's an array
+            if isinstance(attr_value, (int, float, bool)):
+                config["env"][config_key] = int(attr_value) if isinstance(attr_value, (int, bool)) else attr_value
+            else:
+                config["env"][config_key] = attr_value.tolist()
+        except AttributeError:
+            print(f"Warning: Environment attribute '{attr_name}' not found in {source}. Skipping.")
 
     # Save config
     with open(run_dir / "config.json", "w") as f:

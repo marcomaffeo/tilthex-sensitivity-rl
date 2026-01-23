@@ -45,11 +45,11 @@ class RolloutConfig:
 
 def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
-    params_path = run_dir / "params.msgpack"
+    params_path = run_dir / "policy_params.msgpack"
     if not cfg_path.exists():
         raise FileNotFoundError(f"Missing config.json in {run_dir}")
     if not params_path.exists():
-        raise FileNotFoundError(f"Missing params.msgpack in {run_dir}")
+        raise FileNotFoundError(f"Missing policy_params.msgpack in {run_dir}")
     with cfg_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
     params_bytes = params_path.read_bytes()
@@ -356,7 +356,7 @@ def parse_args() -> argparse.Namespace:
         "--run_dirs",
         nargs="+",
         default=["runs/latest"],
-        help="One or more run directories containing params.msgpack and config.json.",
+        help="One or more run directories containing policy_params.msgpack and config.json.",
     )
     parser.add_argument(
         "--num_rollouts",

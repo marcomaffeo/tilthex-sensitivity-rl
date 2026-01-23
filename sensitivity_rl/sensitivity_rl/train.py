@@ -17,6 +17,7 @@ import os
 import json
 import subprocess
 import sys
+import time
 from pathlib import Path
 from datetime import datetime
 
@@ -234,13 +235,6 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
 
 def run_evaluation(config, run_dir):
     """Run evaluation rollouts and plotting."""
-    eval_config = {
-        "NUM_ROLLOUTS": 10,
-        "MAX_STEPS": 200,
-        "DETERMINISTIC": True,
-        "SEED": 42,
-        "PARAM_SAMPLES": 1,
-    }
 
     script_dir = os.path.dirname(__file__)
 
@@ -251,30 +245,19 @@ def run_evaluation(config, run_dir):
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
-            "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
             "--plot",
         ]
     )
 
     print("Running evaluation rollouts (perturbed)...")
-    eval_config["PARAM_SAMPLES"] = 10
     subprocess.run(
         [
             "python3",
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
-            "--num_rollouts",
-            f"{eval_config['NUM_ROLLOUTS']}",
             "--param_samples",
-            f"{eval_config['PARAM_SAMPLES']}",
+            "10",
             "--plot",
         ]
     )
@@ -322,13 +305,53 @@ def main(cfg: DictConfig):
     # Create unified training function
     train_fn = make_train(config, spec, writer)
 
-    # Train
+    # JIT compile and train
     train_jit = jax.jit(train_fn)
+    print("Compiling and training...")
+    start_time = time.time()
     final_state = train_jit(rng)
+    jax.block_until_ready(final_state)
+    end_time = time.time()
+
+    # Log training speed (total time includes compilation)
+    total_time = end_time - start_time
+    total_steps = config["TOTAL_TIMESTEPS"]
+    steps_per_second = total_steps / total_time
+    print(f"Training completed in {total_time:.2f}s ({steps_per_second:.2f} steps/second)")
+    writer.add_scalar("perf/steps_per_second", steps_per_second, total_steps)
+    writer.add_scalar("perf/total_time_seconds", total_time, total_steps)
 
     # Save params
     params = final_state.train_state.params
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+    (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(params))
+
+    # Add environment-specific attributes to config
+    env = ENV_REGISTRY[config["ENV_NAME"]]()
+    env_params = env.default_params
+    config["env"] = {}
+    
+    # List of attributes to extract from env and env_params
+    env_attrs = [
+        ("action_dim", "env", "action_dim"),
+        ("obs_dim", "env", "obs_dim"),
+        ("param_dim", "env", "param_dim"),
+        ("MIN_ACTION", "env_params", "min_action"),
+        ("MAX_ACTION", "env_params", "max_action"),
+        ("MIN_INPUT", "env_params", "min_input"),
+        ("MAX_INPUT", "env_params", "max_input"),
+    ]
+    
+    for config_key, source, attr_name in env_attrs:
+        try:
+            source_obj = env if source == "env" else env_params
+            attr_value = getattr(source_obj, attr_name)
+            # Convert to int if it's a scalar, to list if it's an array
+            if isinstance(attr_value, (int, float, bool)):
+                config["env"][config_key] = int(attr_value) if isinstance(attr_value, (int, bool)) else attr_value
+            else:
+                config["env"][config_key] = attr_value.tolist()
+        except AttributeError:
+            print(f"Warning: Environment attribute '{attr_name}' not found in {source}. Skipping.")
 
     # Save config
     with open(run_dir / "config.json", "w") as f:

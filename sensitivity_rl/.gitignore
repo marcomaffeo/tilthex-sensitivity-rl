@@ -6,6 +6,9 @@ outputs/
 
 .DS_Store
 
+*.out
+*.gif
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

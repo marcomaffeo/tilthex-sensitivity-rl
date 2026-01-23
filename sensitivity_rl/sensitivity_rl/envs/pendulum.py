@@ -164,6 +164,29 @@ class Pendulum(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
+    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
+        """Compute evaluation metrics for the current state.
+        
+        Args:
+            env_state: Current environment state
+            params: Environment parameters
+            
+        Returns:
+            Dictionary of metric names to scalar values
+        """
+        state = env_state.state
+        
+        # Angle error from upright position (target is theta=0)
+        angle_error = jnp.abs(state.theta)
+        
+        # Angular velocity magnitude
+        angular_velocity = jnp.abs(state.theta_dot)
+        
+        return {
+            "angle_error": angle_error,
+            "angular_velocity": angular_velocity,
+        }
+
     @property
     def name(self) -> str:
         """Environment name."""

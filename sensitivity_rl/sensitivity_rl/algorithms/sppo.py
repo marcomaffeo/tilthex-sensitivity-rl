@@ -260,7 +260,7 @@ def init_runner_state(config, env, env_params, networks, rng):
     )
 
 def run_dir(config, runs_root, ts):
-    algo_name = "SPPO_AUG"
+    algo_name = "SPPO"
     if config.get("DOMAIN_RANDOMIZATION", False):
         run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_DR_{ts}"
     else:

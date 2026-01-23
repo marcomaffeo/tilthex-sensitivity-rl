@@ -25,7 +25,6 @@ import distrax
 from flax import serialization
 from flax.linen.initializers import constant, orthogonal
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
@@ -46,11 +45,11 @@ class RolloutConfig:
 
 def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
-    params_path = run_dir / "params.msgpack"
+    params_path = run_dir / "policy_params.msgpack"
     if not cfg_path.exists():
         raise FileNotFoundError(f"Missing config.json in {run_dir}")
     if not params_path.exists():
-        raise FileNotFoundError(f"Missing params.msgpack in {run_dir}")
+        raise FileNotFoundError(f"Missing policy_params.msgpack in {run_dir}")
     with cfg_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
     params_bytes = params_path.read_bytes()
@@ -124,8 +123,17 @@ def rollout_episode(
         logs_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
         logs_buf[key] = logs_buf[key].at[0].set(flat0)
 
+    # Preallocate eval_metrics buffers if the environment supports it
+    eval_metrics_buf: Dict[str, jnp.ndarray] = {}
+    if hasattr(env, "eval_metrics"):
+        initial_metrics = env.eval_metrics(env_state, env_params)
+        for key, val0 in initial_metrics.items():
+            flat0 = _flatten_value(val0)
+            eval_metrics_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
+            eval_metrics_buf[key] = eval_metrics_buf[key].at[0].set(flat0)
+
     def body_fun(i, carry):
-        rng, obs, env_state, actions_buf, logs_buf = carry
+        rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = carry
 
         pi = actor.apply(params, obs)
         if deterministic:
@@ -146,23 +154,33 @@ def rollout_episode(
             flat = _flatten_value(val)
             logs_buf[key] = logs_buf[key].at[i + 1].set(flat)
 
-        return (rng, obs, env_state, actions_buf, logs_buf)
+        # Record eval_metrics at index i+1
+        if hasattr(env, "eval_metrics"):
+            metrics = env.eval_metrics(env_state, env_params)
+            for key, val in metrics.items():
+                flat = _flatten_value(val)
+                eval_metrics_buf[key] = eval_metrics_buf[key].at[i + 1].set(flat)
 
-    rng, obs, env_state, actions_buf, logs_buf = jax.lax.fori_loop(
-        0, horizon, body_fun, (rng, obs, env_state, actions_buf, logs_buf)
+        return (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf)
+
+    rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = jax.lax.fori_loop(
+        0, horizon, body_fun, (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf)
     )
 
-    return actions_buf, logs_buf
+    return actions_buf, logs_buf, eval_metrics_buf
 
 
 def save_trajectory(
     path: Path,
     actions: np.ndarray,
     state_filtered: Dict[str, np.ndarray],
+    eval_metrics: Dict[str, np.ndarray] = None,
     env_params=None,
 ) -> None:
     to_save = {"actions": actions}
     to_save.update(state_filtered)
+    if eval_metrics:
+        to_save["eval_metrics"] = eval_metrics
 
     path.write_bytes(serialization.msgpack_serialize(to_save))
 
@@ -235,7 +253,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     batched_rollout = jax.vmap(
         rollout_episode,
         in_axes=(None, 0, None, None, 0, None, None),
-        out_axes=(0, 0),
+        out_axes=(0, 0, 0),
     )
 
     print(
@@ -248,7 +266,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
         episode_keys = jax.random.split(episode_key, param_sample_count)
-        actions_batch, state_batch = batched_rollout(
+        actions_batch, state_batch, eval_metrics_batch = batched_rollout(
             env,
             env_params_batched,
             actor,
@@ -261,6 +279,9 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         actions_batch = np.asarray(actions_batch)
         state_batch_np = {
             key: np.asarray(val) for key, val in state_batch.items()
+        }
+        eval_metrics_batch_np = {
+            key: np.asarray(val) for key, val in eval_metrics_batch.items()
         }
 
         env_params_samples = [
@@ -283,16 +304,21 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             state_flat = {
                 key: value[sample_idx] for key, value in state_batch_np.items()
             }
+            eval_metrics_flat = {
+                key: value[sample_idx] for key, value in eval_metrics_batch_np.items()
+            }
             save_trajectory(
                 traj_file,
                 actions,
                 state_flat,
+                eval_metrics_flat,
                 env_params_samples[sample_idx],
             )
 
             # Collect series for plotting
             series_entry = {"actions": actions}
             series_entry.update(state_flat)
+            series_entry["eval_metrics"] = eval_metrics_flat
             all_series.append(series_entry)
 
             suffix = (
@@ -330,7 +356,7 @@ def parse_args() -> argparse.Namespace:
         "--run_dirs",
         nargs="+",
         default=["runs/latest"],
-        help="One or more run directories containing params.msgpack and config.json.",
+        help="One or more run directories containing policy_params.msgpack and config.json.",
     )
     parser.add_argument(
         "--num_rollouts",
@@ -353,7 +379,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--seed",
         type=int,
-        default=0,
+        default=42,
         help="Base PRNG seed for rollouts.",
     )
     parser.add_argument(

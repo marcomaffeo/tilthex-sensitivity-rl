@@ -71,6 +71,9 @@ class EnvParams(environment.EnvParams):
     max_target_roll: float = struct.field(pytree_node=False, default=10.0)
     max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
     max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
+    min_target_roll: float = struct.field(pytree_node=False, default=-10.0)
+    min_target_pitch: float = struct.field(pytree_node=False, default=-10.0)
+    min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
     
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -102,9 +105,9 @@ class TilthexV0(environment.Environment):
         self.param_dim = 14  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
 
-        target_roll_deg = 10.0       # between -10 and 10 degrees
-        target_pitch_deg = 5.0      # between -10 and 10 degrees
-        target_yaw_deg = 90.0        # between -180 and 180 degrees
+        target_roll_deg = -5.0       # between -10 and 10 degrees
+        target_pitch_deg = -5.0      # between -10 and 10 degrees
+        target_yaw_deg = -90.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
         self.target_attitude = euler_to_quat(target_rpy)
@@ -328,9 +331,9 @@ class TilthexV0(environment.Environment):
             ),
         )
 
-        roll_target = jax.random.uniform(key_att, minval=-params.max_target_roll, maxval=params.max_target_roll)
-        pitch_target = jax.random.uniform(key_att, minval=-params.max_target_pitch, maxval=params.max_target_pitch)
-        yaw_target = jax.random.uniform(key_att, minval=-params.max_target_yaw, maxval=params.max_target_yaw)
+        roll_target = jax.random.uniform(key_att, minval=-params.min_target_roll, maxval=params.max_target_roll)
+        pitch_target = jax.random.uniform(key_att, minval=-params.min_target_pitch, maxval=params.max_target_pitch)
+        yaw_target = jax.random.uniform(key_att, minval=-params.min_target_yaw, maxval=params.max_target_yaw)
         
         target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
         target_attitude = euler_to_quat(target_rpy_rad)
@@ -459,34 +462,34 @@ class TilthexV0(environment.Environment):
         import numpy as np
 
         plt.style.use("seaborn-v0_8")
-        fig = plt.figure(figsize=(14, 20))
-        gs = fig.add_gridspec(6, 3, height_ratios=[2, 1, 1, 1, 1, 1])
+        fig = plt.figure(figsize=(18, 20))
+        gs = fig.add_gridspec(5, 3, height_ratios=[1.5, 1.5, 1, 1, 1])
 
         # 3D trajectory plot
-        ax_path = fig.add_subplot(gs[0, :], projection="3d")
+        ax_path = fig.add_subplot(gs[0:2, 0:2], projection="3d")
+
+        # Error plots
+        ax_dist_err = fig.add_subplot(gs[0,2])  
+        ax_att_err = fig.add_subplot(gs[1,2])    
 
         # Propeller forces plots
-        ax_m1 = fig.add_subplot(gs[1, 0])
-        ax_m2 = fig.add_subplot(gs[1, 1])
-        ax_m3 = fig.add_subplot(gs[1, 2])
-        ax_m4 = fig.add_subplot(gs[2, 0])
-        ax_m5 = fig.add_subplot(gs[2, 1]) 
-        ax_m6 = fig.add_subplot(gs[2, 2])
+        ax_m1 = fig.add_subplot(gs[2, 0])
+        ax_m2 = fig.add_subplot(gs[2, 1])
+        ax_m3 = fig.add_subplot(gs[2, 2])
+        ax_m4 = fig.add_subplot(gs[3, 0])
+        ax_m5 = fig.add_subplot(gs[3, 1]) 
+        ax_m6 = fig.add_subplot(gs[3, 2])
         axes_act = [ax_m1, ax_m2, ax_m3, ax_m4, ax_m5, ax_m6]
-        labels = ["Force p1", "Force p2", "Force p3", "Force p4", "Force p5", "Force p6"]
+        labels = ["Force p1 [N]", "Force p2 [N]", "Force p3 [N]", "Force p4 [N]", "Force p5 [N]", "Force p6 [N]"]
 
         # Attitude plots
-        ax_roll = fig.add_subplot(gs[3, 0])
-        ax_pitch = fig.add_subplot(gs[3, 1])
-        ax_yaw = fig.add_subplot(gs[3, 2])
+        ax_roll = fig.add_subplot(gs[4, 0])
+        ax_pitch = fig.add_subplot(gs[4, 1])
+        ax_yaw = fig.add_subplot(gs[4, 2])
         axes_att = [ax_roll, ax_pitch, ax_yaw]
         att_labels = ["Roll (x) [deg]", "Pitch (y) [deg]", "Yaw (z) [deg]"]
 
-        # Error plots
-        ax_dist_err = fig.add_subplot(gs[4, :])  
-        ax_att_err = fig.add_subplot(gs[5, :])    
-
-        # Collect data from all rollouts
+        # Collect data from all rollout
         all_dist_errors = []
         all_att_errors = []
 
@@ -565,10 +568,8 @@ class TilthexV0(environment.Environment):
         # 1. Error: Distance to Target
         if all_dist_errors:
             max_len = max(len(d) for d in all_dist_errors)
-            # CORRETTO QUI: Definisco padded_dist
             padded_dist = np.array([np.pad(d, (0, max_len - len(d)), mode='edge') for d in all_dist_errors])
             
-            # CORRETTO QUI: Uso padded_dist (prima c'era scritto "padded" e basta)
             mean_dist = np.mean(padded_dist, axis=0)
             std_dist = np.std(padded_dist, axis=0)
             t = np.arange(max_len)

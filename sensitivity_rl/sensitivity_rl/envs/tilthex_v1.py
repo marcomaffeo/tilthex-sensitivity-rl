@@ -2,8 +2,6 @@
 JAX implementation of Tilthex OpenAI gym environment with added
 parametric sensitivity metric optimization."""
 
-# LR, CLIP_EPS
-
 from functools import partial
 from typing import Any, List
 from pathlib import Path
@@ -106,9 +104,9 @@ class TilthexV1(environment.Environment):
         self.param_dim = 14  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
 
-        target_roll_deg = 5.0       # between -10 and 10 degrees
-        target_pitch_deg = 5.0      # between -10 and 10 degrees
-        target_yaw_deg = 90.0        # between -180 and 180 degrees
+        target_roll_deg = 0.0       # between -10 and 10 degrees
+        target_pitch_deg = 0.0      # between -10 and 10 degrees
+        target_yaw_deg = 30.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
         self.target_attitude = euler_to_quat(target_rpy)
@@ -194,7 +192,7 @@ class TilthexV1(environment.Environment):
 
 
         reward_orientation = jax.lax.select(
-            attitude_error_rad < 0.05,
+            attitude_error_rad < 0.1,
             1.0,
             -1.0 * attitude_error_rad
         )
@@ -444,8 +442,8 @@ class TilthexV1(environment.Environment):
         import numpy as np
 
         plt.style.use("seaborn-v0_8")
-        fig = plt.figure(figsize=(18, 20))
-        gs = fig.add_gridspec(5, 3, height_ratios=[1.5, 1.5, 1, 1, 1])
+        fig = plt.figure(figsize=(24, 20))
+        gs = fig.add_gridspec(5, 3, height_ratios=[1, 1, 1, 1, 1])
 
         # 3D trajectory plot
         ax_path = fig.add_subplot(gs[0:2, 0:2], projection="3d")

@@ -121,7 +121,7 @@ class TilthexV0(environment.Environment):
             jnp.array([0.02, 0.02, 0.02]),                  # com offset
             jnp.full((6,), -15.0),                          # alpha tilt angles
             jnp.array(12.5e-4),                             # c_f
-            0.004,                                          # delay
+            0.008,                                          # delay
         ]
         super().__init__()
 
@@ -366,48 +366,6 @@ class TilthexV0(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
-    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
-        """Compute evaluation metrics for the current state.
-        
-        Args:
-            env_state: Current environment state
-            params: Environment parameters
-            
-        Returns:
-            Dictionary of metric names to scalar values
-        """
-        state = env_state.state
-        
-        # Distance to target
-        distance_to_target = jnp.linalg.norm(state.pos - env_state.target_pos)
-        
-        # Velocity magnitude
-        velocity_magnitude = jnp.linalg.norm(state.vel)
-        
-        # Angular velocity magnitude
-        angular_velocity_magnitude = jnp.linalg.norm(state.omega)
-        
-        # Attitude error (deviation from upright quaternion [1, 0, 0, 0])
-        upright_quat = jnp.array([1.0, 0.0, 0.0, 0.0])
-        quat_error = quat_product(quat_inverse(state.attitude), upright_quat)
-        attitude_error = 2.0 * jnp.arccos(jnp.clip(jnp.abs(quat_error[0]), 0.0, 1.0))
-        
-        # Yaw error
-        q = state.attitude
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                         jnp.cos(current_yaw - env_state.target_yaw)))
-        
-        return {
-            "distance_to_target": distance_to_target,
-            "velocity_magnitude": velocity_magnitude,
-            "angular_velocity_magnitude": angular_velocity_magnitude,
-            "attitude_error": attitude_error,
-            "yaw_error": yaw_error,
-            "current_yaw": current_yaw,
-            "target_yaw": env_state.target_yaw,
-        }
-
     @property
     def name(self) -> str:
         """Environment name."""
@@ -468,20 +426,19 @@ class TilthexV0(environment.Environment):
                 - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
                 - 'actions': array of shape (T, 6)
                 - 'target_pos': optional target position array
-                - 'eval_metrics': optional dict with 'distance_to_target' array
             output: Optional path to save the figure. If None, displays interactively.
         """
         import matplotlib.pyplot as plt
         import numpy as np
         
         plt.style.use("seaborn-v0_8")
-        fig = plt.figure(figsize=(24, 20))
+        fig = plt.figure(figsize=(20, 10))
         
-        gs = fig.add_gridspec(4, 3, height_ratios=[1, 1, 1, 1], width_ratios=[1, 1, 1])
+        gs = fig.add_gridspec(4, 3, height_ratios=[2, 2, 1, 1], width_ratios=[1, 1, 1])
 
-        ax_path = fig.add_subplot(gs[0:2, 0:2], projection="3d")
-        ax_dist = fig.add_subplot(gs[0, 2])
-        ax_yaw_err = fig.add_subplot(gs[1, 2])
+        ax_path = fig.add_subplot(gs[0:2, 0], projection="3d")
+        ax_dist = fig.add_subplot(gs[0, 1:3])
+        ax_yaw_err = fig.add_subplot(gs[1, 1:3])
 
         ax_m1 = fig.add_subplot(gs[2, 0])
         ax_m2 = fig.add_subplot(gs[2, 1])
@@ -577,7 +534,7 @@ class TilthexV0(environment.Environment):
             ax_dist.text(
                 0.5, 0.9, 
                 f"Final: {final_mean:.3f} ± {final_std:.3f} m",
-                transform=ax_dist.transAxes, ha='center',
+                transform=ax_dist.transAxes, ha='right',
                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
             )
         else:
@@ -609,7 +566,7 @@ class TilthexV0(environment.Environment):
             ax_yaw_err.text(
                 0.5, 0.9, 
                 f"Final: {final_yaw_mean:.3f} ± {final_yaw_std:.3f} rad",
-                transform=ax_yaw_err.transAxes, ha='center',
+                transform=ax_yaw_err.transAxes, ha='right',
                 bbox=dict(boxstyle='round', facecolor='lightsalmon', alpha=0.5)
             )
         else:

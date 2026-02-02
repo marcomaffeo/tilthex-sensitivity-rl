@@ -108,7 +108,7 @@ class TilthexV1(environment.Environment):
 
         target_roll_deg = 0.0       # between -10 and 10 degrees
         target_pitch_deg = 0.0      # between -10 and 10 degrees
-        target_yaw_deg = 0.0        # between -180 and 180 degrees
+        target_yaw_deg = 90.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
         self.target_attitude = euler_to_quat(target_rpy)
@@ -195,7 +195,7 @@ class TilthexV1(environment.Environment):
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
         reward_orientation = jax.lax.select(
-            attitude_error_rad < 0.01,
+            attitude_error_rad < 0.05,
             1.0,
             -1.0 * attitude_error_rad
         )
@@ -484,9 +484,7 @@ class TilthexV1(environment.Environment):
 
         # Collect data
         all_dist_errors = []
-        all_roll_errors = []
-        all_pitch_errors = []
-        all_yaw_errors = []
+        all_att_errors = []
 
         for series in series_list:
             state = series.get("state", None)
@@ -510,7 +508,7 @@ class TilthexV1(environment.Environment):
                 dist = np.linalg.norm(pos - target_pos_val, axis=1).flatten()
                 all_dist_errors.append(dist)
 
-            # Target Attitude (Split RPY)
+            # Target Attitude 
             if "target_attitude" in series:
                 t_a = np.asarray(series["target_attitude"])
                 
@@ -521,23 +519,11 @@ class TilthexV1(environment.Environment):
                 else:
                     target_att = t_a
                 
-                rpy_deg = quat_to_euler_deg(quats)
-                target_rpy_deg = quat_to_euler_deg(target_att)
+                dot_prod = np.sum(quats * target_att, axis=1)
+                dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
+                total_error_rad = 2.0 * np.arccos(dot_prod)
                 
-                rpy_rad = np.deg2rad(rpy_deg)
-                target_rpy_rad = np.deg2rad(target_rpy_deg)
-                
-                diff_r = rpy_rad[:, 0] - target_rpy_rad[:, 0]
-                err_r = np.abs(np.arctan2(np.sin(diff_r), np.cos(diff_r))).flatten()
-                all_roll_errors.append(err_r)
-                
-                diff_p = rpy_rad[:, 1] - target_rpy_rad[:, 1]
-                err_p = np.abs(np.arctan2(np.sin(diff_p), np.cos(diff_p))).flatten()
-                all_pitch_errors.append(err_p)
-                
-                diff_y = rpy_rad[:, 2] - target_rpy_rad[:, 2]
-                err_y = np.abs(np.arctan2(np.sin(diff_y), np.cos(diff_y))).flatten()
-                all_yaw_errors.append(err_y)
+                all_att_errors.append(total_error_rad.flatten())
 
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
@@ -580,35 +566,19 @@ class TilthexV1(environment.Environment):
         else:
             ax_dist_err.text(0.5, 0.5, "No pos data", ha='center')
 
-        # Plot Attitude Error 
-        t_roll, mean_roll, std_roll = process_error_data(all_roll_errors)
-        t_pitch, mean_pitch, std_pitch = process_error_data(all_pitch_errors)
-        t_yaw, mean_yaw, std_yaw = process_error_data(all_yaw_errors)
+        # Plot Attitude Error
+        t_att, mean_att, std_att = process_error_data(all_att_errors)
 
-        if t_roll is not None and t_pitch is not None and t_yaw is not None:
+        if t_att is not None:
+            ax_att_err.plot(t_att, mean_att, color="red", linewidth=2, label="Mean Error")
+            ax_att_err.fill_between(t_att, mean_att - std_att, mean_att + std_att, color="red", alpha=0.2)
 
-            ax_att_err.plot(t_roll, mean_roll, color="red", linewidth=2, label="Roll")
-            ax_att_err.fill_between(t_roll, mean_roll - std_roll, mean_roll + std_roll, color="red", alpha=0.1)
-
-            ax_att_err.plot(t_pitch, mean_pitch, color="green", linewidth=2, label="Pitch")
-            ax_att_err.fill_between(t_pitch, mean_pitch - std_pitch, mean_pitch + std_pitch, color="green", alpha=0.1)
-            
-            ax_att_err.plot(t_yaw, mean_yaw, color="blue", linewidth=2, label="Yaw")
-            ax_att_err.fill_between(t_yaw, mean_yaw - std_yaw, mean_yaw + std_yaw, color="blue", alpha=0.1)
-
-            ax_att_err.text(0.5, 0.95, f"Roll: {mean_roll[-1]:.3f} ± {std_roll[-1]:.3f} rad", 
-                            transform=ax_att_err.transAxes, ha="right", fontsize=9,
+            final_att_err = mean_att[-1]
+            ax_att_err.text(0.5, 0.9, f"Final: {final_att_err:.3f} ± {std_att[-1]:.3f} rad", 
+                            transform=ax_att_err.transAxes, ha="right", 
                             bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
-            
-            ax_att_err.text(0.5, 0.85, f"Pitch: {mean_pitch[-1]:.3f} ± {std_pitch[-1]:.3f} rad", 
-                            transform=ax_att_err.transAxes, ha="right", fontsize=9,
-                            bbox=dict(boxstyle="round", fc="lightgreen", alpha=0.5))
-            
-            ax_att_err.text(0.5, 0.75, f"Yaw: {mean_yaw[-1]:.3f} ± {std_yaw[-1]:.3f} rad", 
-                            transform=ax_att_err.transAxes, ha="right", fontsize=9,
-                            bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
 
-            ax_att_err.set_title("Attitude Error (Roll, Pitch, Yaw) [rad]")
+            ax_att_err.set_title("Total Attitude Error [rad]")
             ax_att_err.set_ylabel("Error [rad]")
             ax_att_err.set_xlabel("Timestep")
             ax_att_err.grid(True, alpha=0.3)

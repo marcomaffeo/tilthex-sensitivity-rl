@@ -1,6 +1,6 @@
 [workspace]
 authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
-channels = ["conda-forge"]
+channels = ["conda-forge", "robostack-jazzy"]
 name = "telekyb_sim"
 platforms = ["linux-64"]
 version = "0.1.0"
@@ -14,6 +14,24 @@ build = { cmd = "sh ./development/scripts/pixi/build_telekyb3.sh" }
 components = { cmd = "sh ./scripts/components.sh" }
 web-gui = { cmd = "sh ./scripts/websocket.sh" }
 quadrotor-control = {cmd = "python -i src/tk3-quadrotor-control.py"}
+policy-control = {cmd = "python src/policy_control_node.py"}
+
+# Policy management tasks
+policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
+policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/SetBool \"{data: true}\"" }
+policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
+policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/SetBool \"{data: true}\"" }
+policy-loop-stop = { cmd = "ros2 service call /policy/stop std_srvs/srv/Trigger" }
+policy-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
+
+[tasks.policy-setpoint]
+args = [
+  { "arg" = "x", "default" = "0.0" },
+  { "arg" = "y", "default" = "0.0" },
+  { "arg" = "z", "default" = "1.0" },
+  { "arg" = "yaw", "default" = "0.0" },
+]
+cmd = "ros2 topic pub /policy/setpoint geometry_msgs/msg/PoseStamped \"{ header: {frame_id: 'world'}, pose: {position: {x: {{ x }}, y: {{ y }}, z: {{ z }}}, orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}} }\""
 
 [tasks.sim]
 args = [
@@ -67,3 +85,10 @@ bokeh = "*"
 jax = ">=0.7.2,<0.8"
 flax = ">=0.10.4,<0.11"
 distrax = ">=0.1.7,<0.2"
+# ROS2 Jazzy dependencies
+ros-jazzy-ros-core = "*"
+ros-jazzy-geometry-msgs = "*"
+ros-jazzy-sensor-msgs = "*"
+ros-jazzy-nav-msgs = "*"
+ros-jazzy-std-srvs = "*"
+colcon-common-extensions = "*"

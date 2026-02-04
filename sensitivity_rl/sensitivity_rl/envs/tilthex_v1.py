@@ -106,8 +106,8 @@ class TilthexV1(environment.Environment):
         self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
 
-        target_roll_deg = 0.0       # between -10 and 10 degrees
-        target_pitch_deg = 0.0      # between -10 and 10 degrees
+        target_roll_deg = 20.0       # between -10 and 10 degrees
+        target_pitch_deg = 20.0      # between -10 and 10 degrees
         target_yaw_deg = 90.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
@@ -578,7 +578,7 @@ class TilthexV1(environment.Environment):
                             transform=ax_att_err.transAxes, ha="right", 
                             bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
 
-            ax_att_err.set_title("Total Attitude Error [rad]")
+            ax_att_err.set_title("Attitude Error [rad]")
             ax_att_err.set_ylabel("Error [rad]")
             ax_att_err.set_xlabel("Timestep")
             ax_att_err.grid(True, alpha=0.3)

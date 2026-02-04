@@ -182,7 +182,7 @@ class TilthexV0(environment.Environment):
                                         jnp.cos(current_yaw - env_state.target_yaw)))
 
         reward_yaw = jax.lax.select(
-            yaw_error < 0.02,
+            yaw_error < 0.1,
             1.0, 
             -1.0 * yaw_error,
         )
@@ -322,7 +322,7 @@ class TilthexV0(environment.Environment):
         # Sample target yaw uniformly between -pi and pi
         target_yaw = jax.lax.select(
             params.is_testing,
-            jnp.array(0.0),  # Point forward when testing
+            jnp.array(pi),  # Point forward when testing
             jax.random.uniform(key_yaw, minval=-jnp.pi, maxval=jnp.pi),
         )
 
@@ -419,26 +419,18 @@ class TilthexV0(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot tilthex rollout trajectories.
-        
-        Args:
-            series_list: List of trajectory dictionaries with keys:
-                - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
-                - 'actions': array of shape (T, 6)
-                - 'target_pos': optional target position array
-            output: Optional path to save the figure. If None, displays interactively.
-        """
+        """Plot tilthex rollout trajectories (Robust Total Attitude Error)."""
         import matplotlib.pyplot as plt
         import numpy as np
-        
+
         plt.style.use("seaborn-v0_8")
         fig = plt.figure(figsize=(20, 10))
-        
         gs = fig.add_gridspec(4, 3, height_ratios=[2, 2, 1, 1], width_ratios=[1, 1, 1])
 
         ax_path = fig.add_subplot(gs[0:2, 0], projection="3d")
-        ax_dist = fig.add_subplot(gs[0, 1:3])
-        ax_yaw_err = fig.add_subplot(gs[1, 1:3])
+
+        ax_dist_err = fig.add_subplot(gs[0, 1:3])
+        ax_att_err = fig.add_subplot(gs[1, 1:3])
 
         ax_m1 = fig.add_subplot(gs[2, 0])
         ax_m2 = fig.add_subplot(gs[2, 1])
@@ -450,29 +442,68 @@ class TilthexV0(environment.Environment):
         labels = ["Force p1 [N]", "Force p2 [N]", "Force p3 [N]", "Force p4 [N]", "Force p5 [N]", "Force p6 [N]"]
 
         # Collect data
-        all_distances = []
-        all_yaw_errors = []
+        all_dist_errors = []
+        all_att_errors = []
 
         for series in series_list:
             state = series.get("state", None)
             if state is None:
                 continue
-            state = np.asarray(state)
-            pos = state[:, :3]
+            state = np.asarray(state) 
             
-            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+            pos = state[:, :3]
+            quats = state[:, 3:7]
 
+            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+            ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30)
+
+            # Target Pos
             if "target_pos" in series:
                 target = np.asarray(series["target_pos"])
-                if target.ndim >= 2:
-                    target = target[0]
-                ax_path.scatter(
-                    target[0], target[1], target[2], marker="x", color="red", s=30
-                )
+                if target.ndim >= 2: target = target[0]
+                target_pos_val = target
+                ax_path.scatter(target[0], target[1], target[2], marker="x", color="red", s=30)
+                
+                dist = np.linalg.norm(pos - target_pos_val, axis=1).flatten()
+                all_dist_errors.append(dist)
 
-            ax_path.scatter(
-                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
-            )
+            # --- GESTIONE TARGET ATTITUDE (V0 vs V1/V2) ---
+            target_att = None
+            
+            # CASO 1: V1/V2 (Target Attitude Esplicito)
+            if "target_attitude" in series:
+                t_a = np.asarray(series["target_attitude"])
+                if t_a.ndim == 1: 
+                    target_att = np.tile(t_a, (quats.shape[0], 1))
+                elif t_a.ndim >= 2 and t_a.shape[0] != quats.shape[0]:
+                    target_att = np.tile(t_a[0], (quats.shape[0], 1))
+                else:
+                    target_att = t_a
+            
+            # CASO 2: V0 (Solo Target Yaw -> Costruiamo Quaternione [0, 0, Yaw])
+            elif "target_yaw" in series:
+                t_yaw = np.asarray(series["target_yaw"]).flatten()
+                if t_yaw.size == 1:
+                    t_yaw = np.full(quats.shape[0], t_yaw[0])
+                
+                # Conversione Yaw -> Quaternione (Roll=0, Pitch=0)
+                # q = [cos(y/2), 0, 0, sin(y/2)]
+                cy = np.cos(t_yaw * 0.5)
+                sy = np.sin(t_yaw * 0.5)
+                
+                target_att = np.zeros((quats.shape[0], 4))
+                target_att[:, 0] = cy  # w
+                target_att[:, 3] = sy  # z
+                # x, y rimangono 0
+
+            # Calcolo Errore se abbiamo un target valido
+            if target_att is not None:
+                # Dot product
+                dot_prod = np.sum(quats * target_att, axis=1)
+                dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
+                total_error_rad = 2.0 * np.arccos(dot_prod)
+                
+                all_att_errors.append(total_error_rad.flatten())
 
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
@@ -483,94 +514,56 @@ class TilthexV0(environment.Environment):
                     ax.set_ylabel(labels[idx])
                     ax.grid(True, alpha=0.3)
 
-            if "target_pos" in series:
-                target = np.asarray(series["target_pos"])
-                if target.ndim >= 2: target = target[0]
-                dist = np.linalg.norm(pos - target, axis=1).flatten()
-                all_distances.append(dist)
-
-            if "target_yaw" in series:
-                t_yaw = np.asarray(series["target_yaw"]).flatten()
-                if t_yaw.size == 1:
-                    t_yaw = np.full(pos.shape[0], t_yaw[0])
-                
-                q = state[:, 3:7] 
-                w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
-                current_yaw = np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y**2 + z**2))
-                
-                diff = current_yaw - t_yaw
-                yaw_error = np.abs(np.arctan2(np.sin(diff), np.cos(diff)))
-                all_yaw_errors.append(yaw_error)
-
         ax_path.set_title("Tilthex position trajectories")
         ax_path.set_xlabel("x [m]")
         ax_path.set_ylabel("y [m]")
         ax_path.set_zlabel("z [m]")
         ax_path.grid(True, alpha=0.3)
 
-        # Plot Error Pos
-        if all_distances:
-            max_len = max(d.shape[0] for d in all_distances)
-            padded = np.array([
-                np.pad(d, (0, max_len - d.shape[0]), mode='edge') 
-                for d in all_distances
-            ])
-            mean_dist = np.mean(padded, axis=0)
-            std_dist = np.std(padded, axis=0)
-            timesteps = np.arange(max_len)
+        # Helper function
+        def process_error_data(errors):
+            if not errors: return None, None, None
+            max_len = max(len(e) for e in errors)
+            padded = np.array([np.pad(e, (0, max_len - len(e)), mode='edge') for e in errors])
+            mean = np.mean(padded, axis=0).flatten()
+            std = np.std(padded, axis=0).flatten()
+            t = np.arange(max_len)
+            return t, mean, std
 
-            ax_dist.plot(timesteps, mean_dist, color="blue", label="Mean Error", linewidth=2)
-            ax_dist.fill_between(
-                timesteps, mean_dist - std_dist, mean_dist + std_dist,
-                alpha=0.3, color="blue"
-            )
-            ax_dist.set_title("Position Error [m]")
-            ax_dist.set_xlabel("Timestep")
-            ax_dist.set_ylabel("Error [m]")
-            ax_dist.grid(True, alpha=0.3)
+        # Plot Position Error 
+        t_pos, mean_pos, std_pos = process_error_data(all_dist_errors)
+        if t_pos is not None:
+            ax_dist_err.plot(t_pos, mean_pos, color="blue", linewidth=2, label="Mean Error")
+            ax_dist_err.fill_between(t_pos, mean_pos - std_pos, mean_pos + std_pos, color="blue", alpha=0.2)
             
-            final_mean = mean_dist[-1]
-            final_std = std_dist[-1]
-            ax_dist.text(
-                0.5, 0.9, 
-                f"Final: {final_mean:.3f} ± {final_std:.3f} m",
-                transform=ax_dist.transAxes, ha='right',
-                bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
-            )
+            final_err = mean_pos[-1]
+            ax_dist_err.text(0.5, 0.9, f"Final: {final_err:.3f} ± {std_pos[-1]:.3f} m", 
+                             transform=ax_dist_err.transAxes, ha="right", 
+                             bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
+            ax_dist_err.set_title("Position Error [m]")
+            ax_dist_err.set_ylabel("Error [m]")
+            ax_dist_err.grid(True, alpha=0.3)
         else:
-            ax_dist.text(0.5, 0.5, "No pos data", ha='center')
+            ax_dist_err.text(0.5, 0.5, "No pos data", ha='center')
 
-        # Plot Errore Yaw
-        if all_yaw_errors:
-            max_len_yaw = max(y.shape[0] for y in all_yaw_errors)
-            padded_yaw = np.array([
-                np.pad(y, (0, max_len_yaw - y.shape[0]), mode='edge') 
-                for y in all_yaw_errors
-            ])
-            mean_yaw = np.mean(padded_yaw, axis=0)
-            std_yaw = np.std(padded_yaw, axis=0)
-            timesteps_yaw = np.arange(max_len_yaw)
+        # Plot Attitude Error 
+        t_att, mean_att, std_att = process_error_data(all_att_errors)
 
-            ax_yaw_err.plot(timesteps_yaw, mean_yaw, color="red", label="Mean Error", linewidth=2)
-            ax_yaw_err.fill_between(
-                timesteps_yaw, mean_yaw - std_yaw, mean_yaw + std_yaw,
-                alpha=0.3, color="red"
-            )
-            ax_yaw_err.set_title("Yaw Error [rad]")
-            ax_yaw_err.set_ylabel("Error [rad]")
-            ax_yaw_err.set_xlabel("Timestep")
-            ax_yaw_err.grid(True, alpha=0.3)
-            
-            final_yaw_mean = mean_yaw[-1]
-            final_yaw_std = std_yaw[-1]
-            ax_yaw_err.text(
-                0.5, 0.9, 
-                f"Final: {final_yaw_mean:.3f} ± {final_yaw_std:.3f} rad",
-                transform=ax_yaw_err.transAxes, ha='right',
-                bbox=dict(boxstyle='round', facecolor='lightsalmon', alpha=0.5)
-            )
+        if t_att is not None:
+            ax_att_err.plot(t_att, mean_att, color="red", linewidth=2, label="Mean Error")
+            ax_att_err.fill_between(t_att, mean_att - std_att, mean_att + std_att, color="red", alpha=0.2)
+
+            final_att_err = mean_att[-1]
+            ax_att_err.text(0.5, 0.9, f"Final: {final_att_err:.3f} ± {std_att[-1]:.3f} rad", 
+                            transform=ax_att_err.transAxes, ha="right", 
+                            bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
+
+            ax_att_err.set_title("Attitude Error [rad]")
+            ax_att_err.set_ylabel("Error [rad]")
+            ax_att_err.set_xlabel("Timestep")
+            ax_att_err.grid(True, alpha=0.3)
         else:
-            ax_yaw_err.text(0.5, 0.5, "No yaw data", ha='center')
+            ax_att_err.text(0.5, 0.5, "No attitude data", ha='center')
 
         plt.tight_layout()
 

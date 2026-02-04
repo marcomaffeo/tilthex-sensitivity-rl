@@ -155,15 +155,15 @@ mkdir -p build && cd build
 make install -j${CPU_COUNT}
 
 # qualisys-genom3
-echo "=========================================="
-echo "Starting build of qualisys-genom3 ..."
-echo "=========================================="
-cd ../..
-cd qualisys-genom3
-autoreconf -vif
-mkdir -p build && cd build
-../configure --with-templates=pocolibs/server,pocolibs/client/c --prefix=$CONDA_PREFIX CPPFLAGS="$CPPFLAGS -I$CONDA_PREFIX/include/qualisys_cpp_sdk"
-make install -j${CPU_COUNT}
+#echo "=========================================="
+#echo "Starting build of qualisys-genom3 ..."
+#echo "=========================================="
+#cd ../..
+#cd qualisys-genom3
+#autoreconf -vif
+#mkdir -p build && cd build
+#../configure --with-templates=pocolibs/server,pocolibs/client/c --prefix=$CONDA_PREFIX CPPFLAGS="$CPPFLAGS -I$CONDA_PREFIX/include/qualisys_cpp_sdk"
+#make install -j${CPU_COUNT}
 
 # ----------------
 # OpenRobots modules

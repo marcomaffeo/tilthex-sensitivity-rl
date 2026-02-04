@@ -5,7 +5,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 from time import time
-from .policy import Policy
+from policy import Policy
 
 
 
@@ -170,7 +170,7 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     desired_pos = np.array([x, y, z], dtype='float64')
     desired_yaw = yaw
 
-    policy = Policy(Path("configs/policy/default"))
+    policy = Policy(Path("configs/policy/PPO_DR_20260123-101710"))
 
     try:
         while (time() - init_time < 10):

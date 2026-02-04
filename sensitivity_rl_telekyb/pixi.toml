@@ -14,6 +14,7 @@ build = { cmd = "sh ./development/scripts/pixi/build_telekyb3.sh" }
 components = { cmd = "sh ./scripts/components.sh" }
 web-gui = { cmd = "sh ./scripts/websocket.sh" }
 quadrotor-control = {cmd = "python -i src/tk3-quadrotor-control.py"}
+tilthex-control = {cmd = "python -i src/tk3-tilthex-control.py"}
 
 [tasks.sim]
 args = [

@@ -106,6 +106,7 @@ class TilthexV0(environment.Environment):
         self.param_dim = 15 # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f)
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
 
+        #to be replaced with random sampling in reset
         target_roll_deg = 10.0 # between -10 and 10 degrees
         target_pitch_deg = 0.0 # between -10 and 10 degrees
         target_yaw_deg = 0.0 # between -180 and 180 degrees
@@ -377,7 +378,7 @@ class TilthexV0(environment.Environment):
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            target_attitude=self.target_attitude,
+            target_attitude=target_attitude, #self.target_attitude, --- IGNORE ---
             last_u=self.hovering_action,
             time=0,
         )

@@ -34,7 +34,7 @@ class ModelState:
 class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
-    target_yaw: jax.Array # Desired yaw angle in radians
+    target_attitude: jax.Array # Desired attitude as a unit quaternion [w, x, y, z]
     last_u: jax.Array  # Only needed for rendering
     time: int
 
@@ -66,7 +66,12 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
+    max_target_roll: float = struct.field(pytree_node=False, default=10.0)
+    max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
     max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
+
+    min_target_roll: float = struct.field(pytree_node=False, default=-10.0)
+    min_target_pitch: float = struct.field(pytree_node=False, default=-10.0)
     min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
     
     dt: float = struct.field(pytree_node=False, default=0.02)
@@ -77,11 +82,7 @@ class EnvParams(environment.EnvParams):
     beta: float = struct.field(pytree_node=False, default=0.0) # beta tilting angle
     wmin: float = struct.field(pytree_node=False, default=16) # min prop rotation speed in Hz
     wmax: float = struct.field(pytree_node=False, default=100) # max prop rotation speed in Hz
-
-    max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
-    is_testing: bool = struct.field(pytree_node=False, default=False)
   
-    
     # Uncertain parameters
     m: float = 3.072 #implicit pytree_node=True
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.076276, 0.078072, 0.147915]),) # inertia diagonal [kg*m^2]
@@ -90,6 +91,8 @@ class EnvParams(environment.EnvParams):
     c_f: float = struct.field(pytree_node=True, default=12.0e-4) # squared propeller speed to thrust force coefficient [N/hz^2]
     delay: float = struct.field(pytree_node=True, default=0.002) # input delay [s]
 
+    max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
+    is_testing: bool = struct.field(pytree_node=False, default=False)
 
 class TilthexV0(environment.Environment):
     """JAX Compatible version of Tilthex-v0 target approaching."""
@@ -97,10 +100,17 @@ class TilthexV0(environment.Environment):
     def __init__(self):
         self.type = ""
         self.state_dim = 13
-        self.obs_dim = 14 # 13 + 1 (yaw)
+        self.obs_dim = 17 # 13 + 4 (quaternion to target)
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
+
+        target_roll_deg = 0.0       # between -10 and 10 degrees
+        target_pitch_deg = 0.0      # between -10 and 10 degrees
+        target_yaw_deg = 0.0        # between -180 and 180 degrees
+
+        target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
+        self.target_attitude = euler_to_quat(target_rpy)
 
         # hovering action
         efficiency = jnp.cos(jnp.deg2rad(self.default_params.alpha))
@@ -129,6 +139,45 @@ class TilthexV0(environment.Environment):
     def default_params(self) -> EnvParams:
         """Default environment parameters for Tilthex-v0."""
         return EnvParams()
+    
+    def compute_attitude_error_matrix(self, q_current: jax.Array, q_target: jax.Array) -> tuple[jax.Array, float]:
+        """
+        Calcola l'errore di assetto usando le Matrici di Rotazione (Geometric Control).
+        Ritorna:
+            - error_vector (3,): Il vettore errore e_R (direzione e intensità correzione)
+            - error_magnitude (float): Uno scalare che rappresenta l'errore totale (0-1)
+        """
+        # 1. Converti quaternioni in Matrici di Rotazione
+        R = quat2rotm(q_current)       # Rotazione attuale
+        R_d = quat2rotm(q_target)      # Rotazione desiderata
+
+        # 2. Calcola la matrice errore relativa
+        # e_R_mat = 0.5 * (R_d.T @ R - R.T @ R_d)
+        # Nota: R.T @ R_d è l'inverso di R_d.T @ R. 
+        # La formula standard di Lee et al. usa: 0.5 * (R_d.T @ R - R.T @ R_d)
+        
+        # Calcolo intermedio
+        R_err_matrix = (R_d.T @ R) - (R.T @ R_d)
+        
+        # 3. Vee Map (Estrazione del vettore dalla matrice asimmetrica)
+        # La matrice R_err_matrix ha questa forma:
+        # [  0, -z,  y]
+        # [  z,  0, -x]
+        # [ -y,  x,  0]
+        # Dobbiamo estrarre [x, y, z]
+        
+        x = R_err_matrix[2, 1] 
+        y = R_err_matrix[0, 2]
+        z = R_err_matrix[1, 0]
+        
+        e_R = 0.5 * jnp.array([x, y, z])
+        
+        # 4. Magnitudo dell'errore (per la reward scalare)
+        # Si può usare la norma di e_R oppure la traccia: 1 - tr(R_d.T @ R)
+        # Usiamo la norma di e_R che è molto robusta.
+        error_magnitude = jnp.linalg.norm(e_R)
+        
+        return e_R, error_magnitude
 
     def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
         action_span = params.max_action - params.min_action
@@ -170,22 +219,12 @@ class TilthexV0(environment.Environment):
         action_rescaled = self.rescale_action(action_clipped, params)
 
         state = env_state.state
-
         state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
-
         pos_diff = state_next.pos - env_state.target_pos
 
-        q = state_next.attitude
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        
-        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                        jnp.cos(current_yaw - env_state.target_yaw)))
+        e_R_vector, e_R_mag = self.compute_attitude_error_matrix(state_next.attitude, env_state.target_attitude)
 
-        reward_yaw = jax.lax.select(
-            yaw_error < 0.1,
-            1.0, 
-            -1.0 * yaw_error,
-        )
+        reward_orientation = jnp.exp(-4.0 * e_R_mag)
         
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
@@ -199,7 +238,7 @@ class TilthexV0(environment.Environment):
         reward = (
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
-            + reward_yaw
+            + reward_orientation
             - 0.001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
@@ -209,7 +248,7 @@ class TilthexV0(environment.Environment):
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
-            target_yaw=env_state.target_yaw,
+            target_attitude=env_state.target_attitude,
             last_u=action_rescaled.reshape(-1),
             time=env_state.time + 1,
         )
@@ -307,29 +346,35 @@ class TilthexV0(environment.Environment):
         omega = jnp.array([0.0, 0.0, 0.0])
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
-        key, key_target, key_yaw = jax.random.split(key, 3)
+        key, key_pos, key_att = jax.random.split(key, 3)
         target_pos = jax.lax.select(
             params.is_testing,
             self.target_pos,
             jax.random.uniform(
-                key_target,
+                key_pos,
                 shape=(3,),
                 minval=params.env_min_limits,
                 maxval=params.env_max_limits,
             ),
         )
 
-        # Sample target yaw uniformly between -pi and pi
-        target_yaw = jax.lax.select(
+        roll_target = jax.random.uniform(key_att, minval=-params.min_target_roll, maxval=params.max_target_roll)
+        pitch_target = jax.random.uniform(key_att, minval=-params.min_target_pitch, maxval=params.max_target_pitch)
+        yaw_target = jax.random.uniform(key_att, minval=-params.min_target_yaw, maxval=params.max_target_yaw)
+
+        target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
+        target_attitude = euler_to_quat(target_rpy_rad)
+
+        target_attitude = jax.lax.select(
             params.is_testing,
-            jnp.array(pi),  # Point forward when testing
-            jax.random.uniform(key_yaw, minval=-jnp.pi, maxval=jnp.pi),
+            self.target_attitude, 
+            target_attitude
         )
 
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            target_yaw=target_yaw,
+            target_attitude=target_attitude,
             last_u=self.hovering_action,
             time=0,
         )
@@ -340,24 +385,31 @@ class TilthexV0(environment.Environment):
         state = env_state.state
 
         pos = state.pos
-        vel = state.vel
-        to_target = env_state.target_pos - pos
+        vel_world = state.vel
+        to_target_world = env_state.target_pos - pos
         q = state.attitude
         ang_vel = state.omega
 
+        rot_mat = quat2rotm(q)
+        to_target_body = rot_mat.T @ to_target_world
+        vel_body = rot_mat.T @ vel_world
 
-        # Compute current yaw and yaw error
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        yaw_error = jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                jnp.cos(current_yaw - env_state.target_yaw))
+        q_state_inv = quat_inverse(q)
+        q_error_body = quat_product(q_state_inv, env_state.target_attitude)
+
+        q_error_body = jax.lax.select(
+            q_error_body[0] < 0.0,
+            -q_error_body,
+            q_error_body
+        )
 
         return jnp.concatenate(
             [
-                to_target.reshape(-1),
-                vel.reshape(-1),
+                to_target_body.reshape(-1),
+                vel_body.reshape(-1),
                 q.reshape(-1),
                 ang_vel.reshape(-1),
-                jnp.array([yaw_error]),
+                q_error_body.reshape(-1),
             ]
         ).squeeze()
 
@@ -419,7 +471,16 @@ class TilthexV0(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot tilthex rollout trajectories (Robust Total Attitude Error)."""
+        """Plot tilthex rollout trajectories.
+        
+        Args:
+            series_list: List of trajectory dictionaries with keys:
+                - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
+                - 'actions': array of shape (T, 6)
+                - 'target_pos': optional target position array
+                - 'target_attitude': optional target quaternion array
+            output: Optional path to save the figure. If None, displays interactively.
+        """
         import matplotlib.pyplot as plt
         import numpy as np
 
@@ -467,38 +528,17 @@ class TilthexV0(environment.Environment):
                 dist = np.linalg.norm(pos - target_pos_val, axis=1).flatten()
                 all_dist_errors.append(dist)
 
-            # --- GESTIONE TARGET ATTITUDE (V0 vs V1/V2) ---
-            target_att = None
-            
-            # CASO 1: V1/V2 (Target Attitude Esplicito)
+            # Target Attitude 
             if "target_attitude" in series:
                 t_a = np.asarray(series["target_attitude"])
+                
                 if t_a.ndim == 1: 
                     target_att = np.tile(t_a, (quats.shape[0], 1))
                 elif t_a.ndim >= 2 and t_a.shape[0] != quats.shape[0]:
                     target_att = np.tile(t_a[0], (quats.shape[0], 1))
                 else:
                     target_att = t_a
-            
-            # CASO 2: V0 (Solo Target Yaw -> Costruiamo Quaternione [0, 0, Yaw])
-            elif "target_yaw" in series:
-                t_yaw = np.asarray(series["target_yaw"]).flatten()
-                if t_yaw.size == 1:
-                    t_yaw = np.full(quats.shape[0], t_yaw[0])
                 
-                # Conversione Yaw -> Quaternione (Roll=0, Pitch=0)
-                # q = [cos(y/2), 0, 0, sin(y/2)]
-                cy = np.cos(t_yaw * 0.5)
-                sy = np.sin(t_yaw * 0.5)
-                
-                target_att = np.zeros((quats.shape[0], 4))
-                target_att[:, 0] = cy  # w
-                target_att[:, 3] = sy  # z
-                # x, y rimangono 0
-
-            # Calcolo Errore se abbiamo un target valido
-            if target_att is not None:
-                # Dot product
                 dot_prod = np.sum(quats * target_att, axis=1)
                 dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
                 total_error_rad = 2.0 * np.arccos(dot_prod)
@@ -546,7 +586,7 @@ class TilthexV0(environment.Environment):
         else:
             ax_dist_err.text(0.5, 0.5, "No pos data", ha='center')
 
-        # Plot Attitude Error 
+        # Plot Attitude Error
         t_att, mean_att, std_att = process_error_data(all_att_errors)
 
         if t_att is not None:

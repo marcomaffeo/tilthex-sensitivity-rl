@@ -107,7 +107,7 @@ class TilthexV0(environment.Environment):
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
 
         #to be replaced with random sampling in reset
-        target_roll_deg = 10.0 # between -10 and 10 degrees
+        target_roll_deg = 0.0 # between -10 and 10 degrees
         target_pitch_deg = 0.0 # between -10 and 10 degrees
         target_yaw_deg = 0.0 # between -180 and 180 degrees
 

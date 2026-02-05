@@ -105,6 +105,7 @@ class TilthexV0(environment.Environment):
         self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
         self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
 
+        # to be replaced with random sampling in reset_env
         target_roll_deg = 0.0       # between -10 and 10 degrees
         target_pitch_deg = 0.0      # between -10 and 10 degrees
         target_yaw_deg = 0.0        # between -180 and 180 degrees
@@ -142,39 +143,24 @@ class TilthexV0(environment.Environment):
     
     def compute_attitude_error_matrix(self, q_current: jax.Array, q_target: jax.Array) -> tuple[jax.Array, float]:
         """
-        Calcola l'errore di assetto usando le Matrici di Rotazione (Geometric Control).
-        Ritorna:
-            - error_vector (3,): Il vettore errore e_R (direzione e intensità correzione)
-            - error_magnitude (float): Uno scalare che rappresenta l'errore totale (0-1)
+        Calculates the attitude error using Rotation Matrices (Geometric Control).
+        Returns:
+        - error_vector (3,): The error vector e_R (direction and magnitude of correction)
+        - error_magnitude (float): A scalar representing the total error (0-1)
         """
-        # 1. Converti quaternioni in Matrici di Rotazione
-        R = quat2rotm(q_current)       # Rotazione attuale
-        R_d = quat2rotm(q_target)      # Rotazione desiderata
+       
+        R = quat2rotm(q_current)     
+        R_d = quat2rotm(q_target)      
 
-        # 2. Calcola la matrice errore relativa
-        # e_R_mat = 0.5 * (R_d.T @ R - R.T @ R_d)
-        # Nota: R.T @ R_d è l'inverso di R_d.T @ R. 
-        # La formula standard di Lee et al. usa: 0.5 * (R_d.T @ R - R.T @ R_d)
-        
-        # Calcolo intermedio
         R_err_matrix = (R_d.T @ R) - (R.T @ R_d)
         
-        # 3. Vee Map (Estrazione del vettore dalla matrice asimmetrica)
-        # La matrice R_err_matrix ha questa forma:
-        # [  0, -z,  y]
-        # [  z,  0, -x]
-        # [ -y,  x,  0]
-        # Dobbiamo estrarre [x, y, z]
-        
+        #vee map
         x = R_err_matrix[2, 1] 
         y = R_err_matrix[0, 2]
         z = R_err_matrix[1, 0]
         
         e_R = 0.5 * jnp.array([x, y, z])
         
-        # 4. Magnitudo dell'errore (per la reward scalare)
-        # Si può usare la norma di e_R oppure la traccia: 1 - tr(R_d.T @ R)
-        # Usiamo la norma di e_R che è molto robusta.
         error_magnitude = jnp.linalg.norm(e_R)
         
         return e_R, error_magnitude
@@ -374,7 +360,7 @@ class TilthexV0(environment.Environment):
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            target_attitude=target_attitude,
+            target_attitude=target_attitude, #self.target_attitude, --- IGNORE ---
             last_u=self.hovering_action,
             time=0,
         )

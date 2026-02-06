@@ -210,7 +210,7 @@ class TilthexV0(environment.Environment):
 
         e_R_vector, e_R_mag = self.compute_attitude_error_matrix(state_next.attitude, env_state.target_attitude)
 
-        reward_orientation = jnp.exp(-4.0 * e_R_mag)
+        reward_orientation = jnp.exp(-5.0 * e_R_mag)
         
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
@@ -344,9 +344,9 @@ class TilthexV0(environment.Environment):
             ),
         )
 
-        roll_target = jax.random.uniform(key_att, minval=-params.min_target_roll, maxval=params.max_target_roll)
-        pitch_target = jax.random.uniform(key_att, minval=-params.min_target_pitch, maxval=params.max_target_pitch)
-        yaw_target = jax.random.uniform(key_att, minval=-params.min_target_yaw, maxval=params.max_target_yaw)
+        roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
+        pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
+        yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
 
         target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
         target_attitude = euler_to_quat(target_rpy_rad)

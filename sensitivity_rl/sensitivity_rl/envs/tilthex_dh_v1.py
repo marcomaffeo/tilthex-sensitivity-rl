@@ -1,4 +1,4 @@
-"""Tilthex-Sensitivity
+"""Tilthex-Sensitivity 
 JAX implementation of Tilthex OpenAI gym environment with added
 parametric sensitivity metric optimization."""
 
@@ -25,7 +25,7 @@ from .utils_operations import *
 @struct.dataclass
 class ModelState:
     pos: jax.Array
-    attitude: jax.Array # (unit quaternion [w, x, y, z])
+    attitude: jax.Array  # (unit quaternion [w, x, y, z])
     vel: jax.Array
     omega: jax.Array
 
@@ -35,7 +35,8 @@ class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
     target_attitude: jax.Array
-    last_u: jax.Array # Only needed for rendering
+    u_optimal_ref: jax.Array  # optimal action for dynamic hovering
+    last_u: jax.Array  # Only needed for rendering
     time: int
 
     # provide proxy access to regular attributes of wrapped object
@@ -76,7 +77,7 @@ class EnvParams(environment.EnvParams):
 
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    n: float = struct.field(pytree_node=False, default=6) # number of rotors
+    n: float = struct.field(pytree_node=False, default=6)  # number of rotors
     arm_length : float = struct.field(pytree_node=False, default=0.39) # length of single arm
     c_tau: float = struct.field(pytree_node=False, default=2.4e-5) # squared propeller speed to drag torque coefficient [Nm/Hz^2]
     beta: float = struct.field(pytree_node=False, default=0.0) # beta tilting angle
@@ -90,25 +91,26 @@ class EnvParams(environment.EnvParams):
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0)) # tilt_angle [deg] radial inclination angle of rotors
     c_f: float = struct.field(pytree_node=True, default=12.0e-4) # squared propeller speed to thrust force coefficient [N/hz^2]
     delay: float = struct.field(pytree_node=True, default=0.002) # actuation delay [s]
-    
+
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
-class TilthexV0(environment.Environment):
-    """JAX Compatible version of Tilthex-v0 target approaching."""
+class TilthexV1(environment.Environment):
+    """JAX Compatible version of Tilthex-v1 target approaching."""
 
     def __init__(self):
         self.type = ""
         self.state_dim = 13
         self.obs_dim = 17 # 13 + 4 (quaternion to target)
         self.action_dim = self.action_space(self.default_params).shape[0]
-        self.param_dim = 15 # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f)
-        self.target_pos = jnp.array([0.0, 0.0, 0.5])
+        self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
+        self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
 
-        target_roll_deg = 20.0 # between -10 and 10 degrees
-        target_pitch_deg = 20.0 # between -10 and 10 degrees
-        target_yaw_deg = 0.0 # between -180 and 180 degrees
+        # to be replaced with random sampling in reset
+        target_roll_deg = 0.0       # between -10 and 10 degrees
+        target_pitch_deg = 0.0      # between -10 and 10 degrees
+        target_yaw_deg = 0.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
         self.target_attitude = euler_to_quat(target_rpy)
@@ -119,26 +121,26 @@ class TilthexV0(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.8,                                    # mass
-            jnp.array([0.069, 0.071, 0.135]),       # inertia
-            jnp.array([-0.02, -0.02, -0.02]),       # com offset
-            jnp.full((6,), -25.0),                  # alpha tilt angles
-            jnp.array(11.8e-4),                     # c_f
-            0.002,                                  # delay
+            2.8,                                            # mass
+            jnp.array([0.069, 0.071, 0.135]),               # inertia
+            jnp.array([-0.02, -0.02, -0.02]),               # com offset
+            jnp.full((6,), -25.0),                          # alpha tilt angles
+            jnp.array(11.8e-4),                             # c_f
+            0.002,                                          # delay
         ]
         self.params_max = [
-            3.2,                                    # mass
-            jnp.array([0.079, 0.081, 0.156]),       # inertia
-            jnp.array([0.02, 0.02, 0.02]),          # com offset
-            jnp.full((6,), -15.0),                  # alpha tilt angles
-            jnp.array(12.5e-4),                     # c_f
-            0.008,                                  # delay
+            3.2,                                            # mass
+            jnp.array([0.079, 0.081, 0.156]),               # inertia
+            jnp.array([0.02, 0.02, 0.02]),                  # com offset
+            jnp.full((6,), -15.0),                          # alpha tilt angles
+            jnp.array(12.5e-4),                             # c_f
+            0.008,                                          # delay
         ]
         super().__init__()
 
     @property
     def default_params(self) -> EnvParams:
-        """Default environment parameters for Tilthex-v0."""
+        """Default environment parameters for Tilthex-v1."""
         return EnvParams()
 
     def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
@@ -147,78 +149,31 @@ class TilthexV0(environment.Environment):
         normalized = (action - params.min_action) / action_span
         return params.min_input + normalized * input_span
 
-    def solve_allocation_qp(self, W_des: jax.Array, M: jax.Array, params: EnvParams) -> jax.Array:
+    def solve_allocation_analytical(self, W_des: jax.Array, M: jax.Array, params: EnvParams) -> jax.Array:
         """
-        Risolve il problema di allocazione (QP) usando Projected Gradient Descent.
-        Trova u tale che Mu = W_des rispettando i limiti min/max di input.
+        Risolve Mu = W_des usando la Pseudo-Inversa (Least Squares).
+        Veloce ed esatta, ma non garantisce il rispetto dei limiti min/max (clipping a posteriori).
         """
+        M_pinv = jnp.linalg.pinv(M)
+        u = M_pinv @ W_des
+        u_clamped = jnp.clip(u, params.min_input, params.max_input)
         
-        # Iperparametri del solver
-        step_size = 4e-3   # Learning rate del solver interno (da tunare se diverge)
-        n_iter = 100        # Numero di iterazioni (20 è solitamente sufficiente per RL)
-        reg = 1e-2         # Regolarizzazione (lambda) per evitare singolarità e minimizzare energia
-        
-        # Inizializzazione: partiamo dall'hovering statico (ottimo guess iniziale)
-        # O meglio: partiamo dal centro del range per sicurezza, o da zero.
-        # Qui usiamo una inizializzazione a zero per pulizia.
-        avg_hover = (params.m * params.g) / params.n
-        u_init = jnp.full((params.n,), avg_hover)
-
-        weights = jnp.array([1.0, 1.0, 1.0, 20.0, 20.0, 20.0])
-
-        def update_step(u, _):
-            # 1. Calcolo Errore Attuale
-            W_pred = M @ u
-            raw_err = W_pred - W_des
-            
-            # 2. Applicazione Pesi
-            weighted_err = raw_err * weights
-            
-            # 3. Calcolo Gradiente Pesato
-            # d/du = M.T @ (error * weights^2) + reg * u
-            grad = M.T @ (weighted_err * weights) + reg * u
-            
-            # 4. Discesa del gradiente
-            u_next = u - step_size * grad
-            
-            # 5. Proiezione (Clipping)
-            u_projected = jnp.clip(u_next, params.min_input, params.max_input)
-            return u_projected, None
-
-        # Esegue n_iter passi di ottimizzazione
-        # jax.lax.scan è molto più efficiente di un ciclo for python in JAX
-        u_optimal, _ = jax.lax.scan(update_step, u_init, None, length=n_iter)
-        
-        return u_optimal
+        return u_clamped
     
-    def compute_dynamic_hover_qp(self, target_quat: jax.Array, params: EnvParams) -> jax.Array:
-        """
-        Calcola l'input motori ideale (QP) per mantenere l'equilibrio statico 
-        al target_quat specificato, rispettando i limiti fisici.
-        """
-        # 1. Matrice di Rotazione dal Quaternione Target
+    def compute_optimal_u_for_target(self, target_quat: jax.Array, params: EnvParams) -> jax.Array:
+        """Calcola l'input motori ideale per mantenere l'equilibrio al target_quat."""
         R_target = quat2rotm(target_quat)
-        
-        # 2. Vettore Gravità nel World Frame (ENU: z punta in alto)
         g_world = jnp.array([0.0, 0.0, params.m * params.g])
-        
-        # 3. Ruotiamo la gravità nel Body Frame (Forza richiesta)
         F_body_req = R_target.T @ g_world
-        
-        # 4. Wrench Desiderato: [Fx, Fy, Fz, 0, 0, 0]
         W_des = jnp.hstack([F_body_req, jnp.array([0.0, 0.0, 0.0])])
         
-        # 5. Calcolo Matrice di Allocazione (M)
         GF, GT = compute_allocation(
             params.n, params.arm_length, params.alpha, 
             params.beta, params.c_f, params.c_tau, params.com_default
         )
         M = jnp.vstack([GF, GT])
         
-        # 6. Risolvi QP
-        u_ref = self.solve_allocation_qp(W_des, M, params)
-        
-        return u_ref
+        return self.solve_allocation_analytical(W_des, M, params)
 
     @partial(jax.jit, static_argnames=("self",))
     def step(
@@ -259,77 +214,44 @@ class TilthexV0(environment.Environment):
 
         pos_diff = state_next.pos - env_state.target_pos
 
-        q = state_next.attitude
-        w, x, y, z = q[0], q[1], q[2], q[3]
+        q_state_inv = quat_inverse(state_next.attitude)
+        q_error_body = quat_product(q_state_inv, env_state.target_attitude)
+        q_error_body = jax.lax.select(q_error_body[0] < 0.0, -q_error_body, q_error_body)
 
-        # Roll
-        sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x * x + y * y)
-        current_roll = jnp.arctan2(sinr_cosp, cosr_cosp)
+        q_err_w = q_error_body[0]
+        q_err_vec = jnp.linalg.norm(q_error_body[1:])
+        attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        # Pitch
-        sinp = 2 * (w * y - z * x)
-        sinp = jnp.clip(sinp, -1.0, 1.0)
-        current_pitch = jnp.arcsin(sinp)
-
-        # Yaw
-        siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        current_yaw = jnp.arctan2(siny_cosp, cosy_cosp)
-
-        qt = env_state.target_attitude
-        wt, xt, yt, zt = qt[0], qt[1], qt[2], qt[3]
-        target_roll = jnp.arctan2(2*(wt*xt + yt*zt), 1-2*(xt*xt + yt*yt))
-        target_pitch = jnp.arcsin(jnp.clip(2*(wt*yt - zt*xt), -1.0, 1.0))
-        target_yaw = jnp.arctan2(2*(wt*zt + xt*yt), 1-2*(yt*yt + zt*zt))
-
-        err_roll = jnp.abs(jnp.arctan2(jnp.sin(current_roll - target_roll), jnp.cos(current_roll - target_roll)))
-        err_pitch = jnp.abs(jnp.arctan2(jnp.sin(current_pitch - target_pitch), jnp.cos(current_pitch - target_pitch)))
-        err_yaw = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - target_yaw), jnp.cos(current_yaw - target_yaw)))
-
-        r_roll = jax.lax.select(
-            err_roll < 0.05, 
-            1.0, 
-            -1.0 * err_roll)
-
-        r_pitch = jax.lax.select(
-            err_pitch < 0.05,
+        reward_orientation = jax.lax.select(
+            attitude_error_rad < 0.05,
             1.0,
-            -1.0 * err_pitch)
-
-        r_yaw = jax.lax.select(
-            err_yaw < 0.05,
-            1.0,
-            -1.0 * err_yaw)
-
-        reward_orientation = (r_roll + r_pitch + r_yaw) / 3.0
+            -1.0 * attitude_error_rad
+        )
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
-            10.0, # reward when close to target
-            1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
+            10.0,  # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
 
         thrust_normalized_input = action_rescaled / params.max_input
         thrust_normalized_input_last = env_state.last_u / params.max_input
 
-        u_hover_dynamic = self.compute_dynamic_hover_qp(env_state.target_attitude, params)
-        u_hover_dyn_norm = (u_hover_dynamic - params.min_input) / (params.max_input - params.min_input)
-        u_ref_norm = u_hover_dynamic / params.max_input
-        
         reward = (
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_orientation
-            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - u_ref_norm) ** 2)
+            - 0.001 * jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
         reward = reward.squeeze()
+    
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
             target_attitude=env_state.target_attitude,
+            u_optimal_ref=env_state.u_optimal_ref,
             last_u=action_rescaled.reshape(-1),
             time=env_state.time + 1,
         )
@@ -375,24 +297,25 @@ class TilthexV0(environment.Environment):
         """
 
         u = jnp.clip(action, params.min_input, params.max_input)
-
+   
         quat = state.attitude
         ang_vel = state.omega
-
+        
         orientation_mat = quat2rotm(quat)
-
+        
         GF, GT = compute_allocation(6, params.arm_length, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
         
-        F_body = GF @ u # [Fx, Fy, Fz]
-        tau_body = GT @ u # [Tx, Ty, Tz]
+        F_body = GF @ u       # [Fx, Fy, Fz] 
+        tau_body = GT @ u     # [Tx, Ty, Tz] 
 
         lin_acc_body = F_body / params.m
         J_vec = params.I
         gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
         ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
-        acc = jnp.hstack([lin_acc_body, ang_acc_body])
+        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
 
-        gravity_vec = jnp.array([0.0, 0.0, params.g])
+
+        gravity_vec = jnp.array([0.0, 0.0, params.g]) 
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
 
         pos = state.pos + params.dt * state.vel
@@ -400,7 +323,8 @@ class TilthexV0(environment.Environment):
         q = state.attitude + params.dt * 0.5 * quat_product(quat, ang_vel_quat)
         omega = state.omega + params.dt * acc[3:6]
 
-        q = q / jnp.linalg.norm(q)
+        q = q / jnp.linalg.norm(q) 
+    
         state_new = ModelState(
             pos=pos.squeeze(),
             attitude=q.squeeze(),
@@ -438,23 +362,26 @@ class TilthexV0(environment.Environment):
             ),
         )
 
-        roll_target = jax.random.uniform(key_att, minval=-params.min_target_roll, maxval=params.max_target_roll)
-        pitch_target = jax.random.uniform(key_att, minval=-params.min_target_pitch, maxval=params.max_target_pitch)
-        yaw_target = jax.random.uniform(key_att, minval=-params.min_target_yaw, maxval=params.max_target_yaw)
-        
+        roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
+        pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
+        yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
+
         target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
         target_attitude = euler_to_quat(target_rpy_rad)
 
         target_attitude = jax.lax.select(
             params.is_testing,
-            self.target_attitude,
+            self.target_attitude, 
             target_attitude
         )
+
+        u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) # compute optimal hovering action for the target attitude
 
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
-            target_attitude=self.target_attitude,
+            target_attitude=target_attitude, #self.target_attitude, --- IGNORE ---
+            u_optimal_ref=u_optimal_ref,
             last_u=self.hovering_action,
             time=0,
         )
@@ -501,7 +428,7 @@ class TilthexV0(environment.Environment):
     @property
     def name(self) -> str:
         """Environment name."""
-        return "Tilthex-v0"
+        return "Tilthex-v1"
 
     @property
     def num_actions(self) -> int:
@@ -540,7 +467,7 @@ class TilthexV0(environment.Environment):
                     jnp.float32,
                 ),
                 "target_attitude": spaces.Box(
-                    -1.0, 1.0, (4,),
+                    -1.0, 1.0, (4,), 
                     jnp.float32
                 ),
                 "last_u": spaces.Box(
@@ -552,6 +479,7 @@ class TilthexV0(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
+
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
@@ -612,7 +540,7 @@ class TilthexV0(environment.Environment):
                 dist = np.linalg.norm(pos - target_pos_val, axis=1).flatten()
                 all_dist_errors.append(dist)
 
-            # Total Error Calculation 
+            # Target Attitude 
             if "target_attitude" in series:
                 t_a = np.asarray(series["target_attitude"])
                 
@@ -670,7 +598,7 @@ class TilthexV0(environment.Environment):
         else:
             ax_dist_err.text(0.5, 0.5, "No pos data", ha='center')
 
-        # Plot Attitude Error 
+        # Plot Attitude Error
         t_att, mean_att, std_att = process_error_data(all_att_errors)
 
         if t_att is not None:

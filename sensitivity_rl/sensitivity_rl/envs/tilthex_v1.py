@@ -334,9 +334,9 @@ class TilthexV1(environment.Environment):
             ),
         )
 
-        roll_target = jax.random.uniform(key_att, minval=-params.min_target_roll, maxval=params.max_target_roll)
-        pitch_target = jax.random.uniform(key_att, minval=-params.min_target_pitch, maxval=params.max_target_pitch)
-        yaw_target = jax.random.uniform(key_att, minval=-params.min_target_yaw, maxval=params.max_target_yaw)
+        roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
+        pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
+        yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
 
         target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
         target_attitude = euler_to_quat(target_rpy_rad)

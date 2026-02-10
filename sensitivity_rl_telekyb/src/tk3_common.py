@@ -334,4 +334,22 @@ def wrench_to_rotor_speed(components, wrench):
     rotor_speed = np.sqrt(alloc_inverse @ wrench).tolist()
     
     return rotor_speed
-    
+
+
+def action_to_rotor_speed(components, action):
+    """
+    Converts the policy action [-1, 1] into rotor speed [rad/s].
+    Reads the lift coefficient (cf) dynamically from NHFC.
+    """
+    body_params = components.nhfc.get_body_parameters()["body"]
+    cf = 9.9016e-4
+    min_force_train = 0.3072  
+    max_force_train = 12.0    
+
+    action = np.array(action, dtype=np.float64)
+
+    force_cmds = min_force_train + (action + 1.0) * 0.5 * (max_force_train - min_force_train)
+    force_cmds = np.clip(force_cmds, 0.0, max_force_train)
+    rotor_speed = np.sqrt(force_cmds / cf).tolist()
+
+    return rotor_speed

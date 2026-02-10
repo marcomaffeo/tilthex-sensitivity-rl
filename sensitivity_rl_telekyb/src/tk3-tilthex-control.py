@@ -6,7 +6,7 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from time import time
 from policy import Policy
-from tk3_common import TK3Components_tilthex, read_state_and_rot_w, wrench_to_rotor_speed
+from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed
 
 
 CONTROL_FREQ = 200
@@ -42,17 +42,21 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
             # offset the horizontal position
             curr_state[:2] = curr_state[:2] - init_state[:2]
 
+            r = Rotation.from_euler('z', yaw, degrees=False)
+            q_scipy = r.as_quat() # Scipy esce in [x, y, z, w]
+            target_quat = np.array([q_scipy[3], q_scipy[0], q_scipy[1], q_scipy[2]])
+
             observation = np.concatenate([
                 desired_pos - curr_state[0:3], # position difference
                 curr_state[3:6],               # velocity
                 curr_state[6:10],              # attitude quaternion
                 curr_state[10:13],             # angular velocity
-                np.array([desired_yaw])        # yaw error
+                target_quat                    # yaw error
             ]).astype('float32')
             
             action = policy.get_action(observation)
 
-            rotors_vel_all =  wrench_to_rotor_speed(components, action) + [0, 0]
+            rotors_vel_all = action_to_rotor_speed(components, action)
                     
             print(f"Sending command at time {time()}")
             components.rotorcraft.set_velocity(rotors_vel_all, ack=True)

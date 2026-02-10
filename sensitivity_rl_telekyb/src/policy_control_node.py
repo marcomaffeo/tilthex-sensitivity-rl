@@ -330,6 +330,9 @@ class PolicyControlNode(Node):
         
         self.get_logger().info('Policy loop started')
         
+        # Debug counter to avoid flooding the console
+        debug_counter = 0
+        
         while not self.policy_stop_event.is_set():
             loop_start = time()
             
@@ -347,6 +350,23 @@ class PolicyControlNode(Node):
                 
                 # Convert to rotor speeds and apply
                 rotor_speed = wrench_to_rotor_speed(self.components, action)
+                
+                # --- DEBUGGING BLOCK ---
+                debug_counter += 1
+                if debug_counter % 20 == 0:  # Print every 20 iterations (approx 5Hz if loop is 100Hz)
+                    self.get_logger().info('--- DEBUG ---')
+                    # Check Z height
+                    pos_z = obs[2] # Based on _build_observation, however obs[0:3] is to_target. 
+                                   # We need absolute Z. Let's infer it roughly or read state again if strictly needed.
+                                   # Actually, simpler: print Action
+                    
+                    self.get_logger().info(f'Action (Wrench/Thrust?): {np.array2string(action, precision=3)}')
+                    self.get_logger().info(f'Rotor Speeds: {np.array2string(np.array(rotor_speed), precision=2)}')
+                    
+                    # Heuristic check: mass is ~1.28kg. Hover force ~12.5N.
+                    # If action[0] (often thrust) is < 1.0, and scaling is missing, drone won't lift.
+                # -----------------------
+
                 self._apply_rotor_speed(rotor_speed)
                 
             except Exception as exc:

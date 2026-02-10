@@ -6,178 +6,38 @@ import numpy as np
 from scipy.spatial.transform import Rotation
 from time import time
 from policy import Policy
+from tk3_common import TK3Components_tilthex, read_state_and_rot_w, wrench_to_rotor_speed
 
-
-
-# this connects to components running on the same host (localhost)
-g = genomix.connect()
-# to instead control components running on the remote computer "hostname" use
-# g = genomix.connect('hostname')
-
-# adapt path to your setup
-g.rpath(os.environ['ROBOTPKG_BASE'] + '/lib/genom/pocolibs/plugins')
-
-# load components clients
-optitrack = g.load('optitrack')
-rotorcraft = g.load('rotorcraft')
-pom = g.load('pom')
-nhfc = g.load('nhfc')
 
 CONTROL_FREQ = 200
 DT = 1/CONTROL_FREQ
 
-# --- setup ----------------------------------------------------------------
-#
-# configure components, to be called interactively
-def setup():
-  # optitrack
-  #
-  # connect to the simulated optitrack system on localhost
-  optitrack.connect({
-    'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'
-  })
-
-
-  # rotorcraft
-  #
-  # connect to the simulated hexarotor
-  rotorcraft.connect({'serial': '/tmp/pty-hr6', 'baud': 0})
-
-  # get IMU at 1kHz and motor data at 20Hz
-  rotorcraft.set_sensor_rate({'rate': {
-    'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1
-  }})
-
-  # Filter IMU: 20Hz cut-off frequency for gyroscopes and 5Hz for
-  # accelerometers. This is important for cancelling vibrations.
-  rotorcraft.set_imu_filter({
-    'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]
-  })
-
-  # read propellers velocities from nhfc controller
-  rotorcraft.connect_port({
-    'local': 'rotor_input', 'remote': 'nhfc/rotor_input'
-  })
-
-
-  # nhfc
-  #
-  # configure tilthex geometry: 6 rotors, 20 degrees tilted, 39cm arms
-  nhfc.set_gtmrp_geom({
-    'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.38998, 'mass': 2.72,
-    'rx':-20, 'ry': -20, 'rz': -1, 'cf': 9.9016e-4, 'ct': 1.9e-5
-  })
-
-  # emergency descent parameters
-  nhfc.set_emerg({'emerg': {
-    'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
-  }})
-
-  # PID tuning
-  nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
-  nhfc.set_servo_gain({ 'gain': {
-    'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
-    'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
-    'Kixy': 0, 'Kiz': 0
-  }})
-
-  # use tilt-prioritized controller
-  nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'})
-
-  # read measured propeller velocities from rotorcraft
-  nhfc.connect_port({
-    'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'
-  })
-
-  # read current state from pom
-  nhfc.connect_port({
-    'local': 'state', 'remote': 'pom/frame/robot'
-  })
-
-
-  # pom
-  #
-  # configure kalman filter
-  pom.set_prediction_model('::pom::constant_acceleration')
-  pom.set_process_noise({'max_jerk': 100, 'max_dw': 50})
-
-  # allow sensor data up to 250ms old
-  pom.set_history_length({'history_length': 0.25})
-
-  # configure magnetic field
-  pom.set_mag_field({'magdir': {
-    'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06
-  }})
-
-  # read IMU and magnetometers from rotorcraft
-  pom.connect_port({'local': 'measure/imu', 'remote': 'rotorcraft/imu'})
-  pom.add_measurement('imu')
-  pom.connect_port({'local': 'measure/mag', 'remote': 'rotorcraft/mag'})
-  pom.add_measurement('mag')
-
-  # read position and orientation from optitrack
-  pom.connect_port({
-    'local': 'measure/mocap', 'remote': 'optitrack/bodies/HR_6'
-  })
-  pom.add_measurement('mocap')
-
-
-# --- start ----------------------------------------------------------------
-#
-# Spin the motors and servo on current position. To be called interactively
-def start():
-  pom.log_state('/tmp/pom.log')
-  pom.log_measurements('/tmp/pom-measurements.log')
-
-  optitrack.set_logfile('/tmp/opti.log')
-
-  rotorcraft.log('/tmp/rotorcraft.log')
-  rotorcraft.start()
-  rotorcraft.servo(ack=True) # this runs until stopped or input error
-
-  nhfc.log('/tmp/nhfc.log')
-  nhfc.set_current_position() # hover on current position
-
-
-# --- stop -----------------------------------------------------------------
-#
-# Stop motors. To be called interactively
-def stop():
-  rotorcraft.stop()
-  rotorcraft.log_stop()
-
-  nhfc.stop()
-  nhfc.log_stop()
-
-  pom.log_stop()
-
-  optitrack.unset_logfile()
-
+components = TK3Components_tilthex(Path("logs"))
 
 ## interactively, one can start the simulation with
-# setup()
-# start()
+# components.setup()
+# components.start()
 ## and then for instance set a desired position with
-# nhfc.set_position(0, 0, 1, 0)
+# components.nhfc.set_position(0, 0, 1, 0)
 ## to stop, use
-# stop
+# components.stop()
 
 
 def policy_setpoint(x: float, y: float, z: float, yaw: float):
-    init_state = read_state_and_rot_w()
+    init_state = read_state_and_rot_w(components)
     init_time = time()
 
     desired_pos = np.array([x, y, z], dtype='float64')
     desired_yaw = yaw
 
-    policy = Policy(Path("configs/policy/SPPO_tilthex"))
+    policy = Policy(Path("configs/policy/PPO_tilthex"))
 
     try:
         while (time() - init_time < 10):
             # infinite loop, exit with Ctrl+c
             t_init = time()
             
-            curr_state = read_state_and_rot_w(print_state=False)
+            curr_state = read_state_and_rot_w(components, print_state=False)
             
             # offset the horizontal position
             curr_state[:2] = curr_state[:2] - init_state[:2]
@@ -192,10 +52,10 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
             
             action = policy.get_action(observation)
 
-            rotors_vel_all =  action_to_rotor_speed(action) + [0, 0]
+            rotors_vel_all =  wrench_to_rotor_speed(components, action) + [0, 0]
                     
             print(f"Sending command at time {time()}")
-            rotorcraft.set_velocity(rotors_vel_all, ack=True)
+            components.rotorcraft.set_velocity(rotors_vel_all, ack=True)
 
             t_elapsed = time() - t_init
             print(f"elapsed time: {t_elapsed}")
@@ -212,7 +72,7 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     except KeyboardInterrupt:
         print("Emergency stop")
         # log_stop()
-        stop()
+        components.stop()
         return
 
     # log_stop()
@@ -220,50 +80,3 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     # rotorcraft.set_ramp(1e-3)
     # land()
 
-
-
-def read_state_and_rot_w(print_state=False, NP_DTYPE='float64'):
-    '''Read state from pom, rotate the angular velocity in body frame, return a np array'''
-    # Read state
-    body = pom.frame('robot')['frame'] # body is a dictionary, we access the field 'frame'
-    pos_dict = body['pos']
-    pos = np.array([pos_dict['x'], pos_dict['y'], pos_dict['z']],dtype=NP_DTYPE)
-    att_dict = body['att']
-    quat = np.array([att_dict['qw'], att_dict['qx'], att_dict['qy'], att_dict['qz']],dtype=NP_DTYPE)
-    att_rotation = (Rotation.from_quat(quat, scalar_first=True)).as_matrix()
-    vel_dict = body['vel']
-    vel = np.array([vel_dict['vx'], vel_dict['vy'], vel_dict['vz']],dtype=NP_DTYPE)
-    avel_dict = body['avel']
-    avel_world = np.array([avel_dict['wx'], avel_dict['wy'], avel_dict['wz']],dtype=NP_DTYPE)
-    # POM gives angular velocity in WORLD frame!! Rotate it in body frame
-    # quat is the rotation from body frame to world frame, we need the inverse (world to body)
-    avel = att_rotation.T @ avel_world
-    
-    if print_state:
-        print('pos:\n', pos)
-        att_rpy = Rotation.from_quat(quat, scalar_first=True).as_euler('xyz')
-        print('att:\n', att_rpy)
-        print('vel:\n', vel)
-        print('avel:\n', avel)
-
-    return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE) # np array
-
-
-def action_to_rotor_speed(action):
-
-    min_force_train = 0.3072  
-    max_force_train = 12.0    
-    cf = 9.9016e-4 
-    rotor_speeds = []
-
-    for val in action:
-        force_cmd = (val + 1) / 2 * (max_force_train - min_force_train) + min_force_train
-
-        # F = cf * w^2  =>  w = sqrt(F / cf)
-        if force_cmd < 0: force_cmd = 0 # Sicurezza
-        w = np.sqrt(force_cmd / cf)
-        
-        rotor_speeds.append(w)
-
-    return rotor_speeds
-    

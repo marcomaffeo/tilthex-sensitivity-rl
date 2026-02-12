@@ -54,42 +54,42 @@ class EnvParams(environment.EnvParams):
     )
 
     min_input: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]),
+        pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]), # F = c_f*wmin^2
     )
     max_input: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),
+        pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),             # F = c_f*wmax^2
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 1.0])
+        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 2.0])
     )
     env_min_limits: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
-    max_target_roll: float = struct.field(pytree_node=False, default=10.0)
-    max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
+    max_target_roll: float = struct.field(pytree_node=False, default=5.0)
+    max_target_pitch: float = struct.field(pytree_node=False, default=5.0)
     max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
 
-    min_target_roll: float = struct.field(pytree_node=False, default=-10.0)
-    min_target_pitch: float = struct.field(pytree_node=False, default=-10.0)
+    min_target_roll: float = struct.field(pytree_node=False, default=-5.0)
+    min_target_pitch: float = struct.field(pytree_node=False, default=-5.0)
     min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
 
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    n: float = struct.field(pytree_node=False, default=6)  # number of rotors
-    arm_length : float = struct.field(pytree_node=False, default=0.39) # length of single arm
-    c_tau: float = struct.field(pytree_node=False, default=2.4e-5) # squared propeller speed to drag torque coefficient [Nm/Hz^2]
-    beta: float = struct.field(pytree_node=False, default=0.0) # beta tilting angle
-    wmin: float = struct.field(pytree_node=False, default=16) # min prop rotation speed in Hz
-    wmax: float = struct.field(pytree_node=False, default=100) # max prop rotation speed in Hz
+    n: float = struct.field(pytree_node=False, default=6)                   # number of rotors
+    arm_length : float = struct.field(pytree_node=False, default=0.39)      # length of single arm
+    c_tau: float = struct.field(pytree_node=False, default=2.4e-5)          # squared propeller speed to drag torque coefficient [Nm/Hz^2]
+    beta: float = struct.field(pytree_node=False, default=0.0)              # beta tilting angle
+    wmin: float = struct.field(pytree_node=False, default=16)               # min prop rotation speed in Hz
+    wmax: float = struct.field(pytree_node=False, default=100)              # max prop rotation speed in Hz
     
     # Uncertain parameters
-    m: float = 3.072 #implicit pytree_node=True
-    I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.076276, 0.078072, 0.147915]),) # inertia diagonal [kg*m^2]
-    com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.0, 0.0, 0.0]),) # center of mass offset from geometric center [m]
-    alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0)) # tilt_angle [deg] radial inclination angle of rotors
-    c_f: float = struct.field(pytree_node=True, default=12.0e-4) # squared propeller speed to thrust force coefficient [N/hz^2]
-    delay: float = struct.field(pytree_node=True, default=0.002) # actuation delay [s]
+    m: float = 2.91118 # implicit pytree_node=True
+    I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)      # inertia diagonal [kg*m^2]
+    com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.0, 0.0, 0.0]),)     # center of mass offset from geometric center [m]
+    alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                 # tilt_angle [deg] radial inclination angle of rotors
+    c_f: float = struct.field(pytree_node=True, default=12.0e-4)                                                   # squared propeller speed to thrust force coefficient [N/hz^2]
+    delay: float = struct.field(pytree_node=True, default=0.002)                                                    # actuation delay [s]
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
@@ -104,11 +104,11 @@ class TilthexV1(environment.Environment):
         self.obs_dim = 17 # 13 + 4 (quaternion to target)
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
-        self.target_pos = jnp.array([0.0, 0.0, 0.5]) 
+        self.target_pos = jnp.array([0.0, 0.0, 1.0]) 
 
         # to be replaced with random sampling in reset
-        target_roll_deg = 0.0       # between -10 and 10 degrees
-        target_pitch_deg = 0.0      # between -10 and 10 degrees
+        target_roll_deg = 0.0       # between -5 and 5 degrees
+        target_pitch_deg = 0.0      # between -5 and 5 degrees
         target_yaw_deg = 0.0        # between -180 and 180 degrees
 
         target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
@@ -120,20 +120,20 @@ class TilthexV1(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.8,                                            # mass
-            jnp.array([0.069, 0.071, 0.135]),               # inertia
-            jnp.array([-0.02, -0.02, -0.02]),               # com offset
-            jnp.full((6,), -25.0),                          # alpha tilt angles
-            jnp.array(11.8e-4),                             # c_f
-            0.002,                                          # delay
+            2.62,                                           # mass -10%
+            jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
+            jnp.array([-0.02, -0.02, -0.04]),               # com offset 
+            jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
+            jnp.array(1.08e-3),                             # c_f -10%
+            0.002,                                          # delay between
         ]
         self.params_max = [
-            3.2,                                            # mass
-            jnp.array([0.079, 0.081, 0.156]),               # inertia
-            jnp.array([0.02, 0.02, 0.02]),                  # com offset
-            jnp.full((6,), -15.0),                          # alpha tilt angles
-            jnp.array(12.5e-4),                             # c_f
-            0.008,                                          # delay
+            3.20,                                           # mass +10%
+            jnp.array([0.090, 0.093, 0.170]),               # inertia +10%
+            jnp.array([0.02, 0.02, 0.04]),                  # com offset 
+            jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
+            jnp.array(1.32e-3),                             # c_f +10%
+            0.010,                                          # delay
         ]
         super().__init__()
 

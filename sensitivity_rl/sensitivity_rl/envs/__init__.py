@@ -9,6 +9,7 @@ from .drone_flip import DroneFlipV0
 from .halfcheetah import HalfCheetahV5
 from .tilthex_v0 import TilthexV0
 from .tilthex_v1 import TilthexV1
+from .tilthex_v2 import TilthexV2
 from .reacher import ReacherV5
 
 ENV_REGISTRY = {
@@ -21,7 +22,8 @@ ENV_REGISTRY = {
     "drone_flip_v0": DroneFlipV0,
     "halfcheetah_v5": HalfCheetahV5,
     "tilthex_v0": TilthexV0,
-    "tilthex_v1": TilthexV1,    
+    "tilthex_v1": TilthexV1,
+    "tilthex_v2": TilthexV2,    
     "reacher_v5": ReacherV5,
 }
 
@@ -35,7 +37,8 @@ __all__ = [
     "DroneV3",
     "DroneObstacle",
     "HalfCheetahV5",
-    "TilthexV0"
+    "TilthexV0",
     "TilthexV1",
+    "TilthexV2",
     "ReacherV5",
 ]

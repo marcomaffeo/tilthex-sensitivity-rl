@@ -35,6 +35,7 @@ class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
     target_attitude: jax.Array
+    u_optimal_ref: jax.Array  # optimal action for dynamic hovering
     last_u: jax.Array  # Only needed for rendering
     time: int
 
@@ -148,6 +149,29 @@ class TilthexV1(environment.Environment):
         normalized = (action - params.min_action) / action_span
         return params.min_input + normalized * input_span
 
+    def solve_allocation_analytical(self, W_des: jax.Array, M: jax.Array, params: EnvParams) -> jax.Array:
+        """Solve Mu = W_des using Least Squares"""
+        M_pinv = jnp.linalg.pinv(M)
+        u = M_pinv @ W_des
+        u_clamped = jnp.clip(u, params.min_input, params.max_input)
+        
+        return u_clamped
+    
+    def compute_optimal_u_for_target(self, target_quat: jax.Array, params: EnvParams) -> jax.Array:
+        """Calculate the ideal motor input to maintain balance at target_quat"""
+        R_target = quat2rotm(target_quat)
+        g_world = jnp.array([0.0, 0.0, params.m * params.g])
+        F_body_req = R_target.T @ g_world
+        W_des = jnp.hstack([F_body_req, jnp.array([0.0, 0.0, 0.0])])
+        
+        GF, GT = compute_allocation(
+            params.n, params.arm_length, params.alpha, 
+            params.beta, params.c_f, params.c_tau, params.com_default
+        )
+        M = jnp.vstack([GF, GT])
+        
+        return self.solve_allocation_analytical(W_des, M, params)
+
     @partial(jax.jit, static_argnames=("self",))
     def step(
         self,
@@ -214,7 +238,7 @@ class TilthexV1(environment.Environment):
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_orientation
-            - 0.001 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
+            - 0.001 * jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
@@ -224,6 +248,7 @@ class TilthexV1(environment.Environment):
             state=state_next,
             target_pos=env_state.target_pos,
             target_attitude=env_state.target_attitude,
+            u_optimal_ref=env_state.u_optimal_ref,
             last_u=action_rescaled.reshape(-1),
             time=env_state.time + 1,
         )
@@ -347,10 +372,13 @@ class TilthexV1(environment.Environment):
             target_attitude
         )
 
+        u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) # compute optimal hovering action for the target attitude
+
         env_state = EnvState(
             state=state,
             target_pos=target_pos,
             target_attitude=target_attitude, #self.target_attitude, --- IGNORE ---
+            u_optimal_ref=u_optimal_ref,
             last_u=self.hovering_action,
             time=0,
         )

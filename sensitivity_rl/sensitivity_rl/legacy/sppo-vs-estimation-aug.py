@@ -837,6 +837,7 @@ def main(cfg: DictConfig):
                 os.path.dirname(__file__) + "/plots/plot_tilthex_rollouts.py"
                 if config["ENV_NAME"] == "tilthex_v0"
                 or config["ENV_NAME"] == "tilthex_v1"
+                or config["ENV_NAME"] == "tilthex_v2"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),
@@ -884,6 +885,7 @@ def main(cfg: DictConfig):
                 os.path.dirname(__file__) + "/plots/plot_tilthex_rollouts.py"
                 if config["ENV_NAME"] == "tilthex_v0"
                 or config["ENV_NAME"] == "tilthex_v1"
+                or config["ENV_NAME"] == "tilthex_v2"
                 else os.path.dirname(__file__)
                 + "/plots/plot_pendulum_rollouts.py"
             ),

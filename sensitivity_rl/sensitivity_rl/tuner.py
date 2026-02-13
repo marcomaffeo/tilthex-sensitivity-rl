@@ -87,15 +87,11 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = [
-    "sppo_aug",
-    # "rappo",
-    # "cppo",
-]
+METHODS = ["ppo", "sppo_aug", "sppo"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["drone_v1"]
+ENVIRONMENTS = ["drone_v2"]
 
 # Parameter sweeps - can be method-specific or shared across all methods
 # Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
@@ -106,7 +102,7 @@ ENVIRONMENTS = ["drone_v1"]
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
     "SEED": [0, 1, 2, 3],
-    # "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.2],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     # "GAMMA": [0.98],
@@ -123,8 +119,9 @@ SWEEP_PARAMS = {
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
     "sppo_aug": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.9, 1.5, 2.0],
-        "DOMAIN_RANDOMIZATION": [False],
+        "SEED": [0, 1, 2],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
+        "DOMAIN_RANDOMIZATION": [True, False],
     },
     "ppo": {
         "DOMAIN_RANDOMIZATION": [True, False],
@@ -134,6 +131,11 @@ METHOD_SPECIFIC_SWEEPS = {
     },
     "cppo": {
         "DOMAIN_RANDOMIZATION": [False],
+    },
+    "sppo": {
+        "SEED": [0, 1, 2],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
+        "DOMAIN_RANDOMIZATION": [True, False],
     },
     # "sac": {
     #     "SEED": [0, 1],
@@ -172,7 +174,6 @@ GENERATE_PLOTS = False
 # Evaluation settings
 EVAL_CONFIG = {
     "NUM_ROLLOUTS": 10,
-    "MAX_STEPS": 1000,
     "PARAM_SAMPLES": 10,
 }
 

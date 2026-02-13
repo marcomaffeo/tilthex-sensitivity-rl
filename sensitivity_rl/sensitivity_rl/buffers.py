@@ -3,15 +3,57 @@ import jax.numpy as jnp
 from typing import NamedTuple
 
 
-class RolloutTransition(NamedTuple):
+# ---------------------------------------------------------------------------
+# Unified rollout types for all PPO-family algorithms.
+#
+# Algorithm-specific fields live in the `extras` dict, which is a valid JAX
+# pytree container.  Each algorithm populates a fixed set of keys so the
+# structure stays constant within a single JIT-compiled training function.
+#
+# Examples:
+#   PPO / RAPPO  : extras = {}
+#   SPPO / SPPO_GRAD : extras = {"gru_hidden": ...}
+#   SPPO_AUG     : extras = {"value_s": ..., "reward_s": ..., "gru_hidden": ...}
+#   CPPO         : extras = {"nu": ..., "cvarlam": ...}   (runner/update only)
+# ---------------------------------------------------------------------------
+
+
+class Transition(NamedTuple):
+    """Rollout transition for all PPO-family algorithms."""
     done: jnp.ndarray
     action: jnp.ndarray
     value: jnp.ndarray
     reward: jnp.ndarray
     log_prob: jnp.ndarray
     obs: jnp.ndarray
-    info: jnp.ndarray
+    info: dict
+    extras: dict = {}
 
+
+class RunnerState(NamedTuple):
+    """Runner state for all PPO-family algorithms."""
+    train_state: object  # Flax TrainState
+    env_state: object
+    last_obs: jnp.ndarray
+    rng: jnp.ndarray
+    extras: dict = {}
+
+
+class UpdateState(NamedTuple):
+    """Update state for all PPO-family algorithms."""
+    train_state: object
+    traj_batch: object
+    advantages: jnp.ndarray
+    targets: jnp.ndarray
+    rng: jnp.ndarray
+    extras: dict = {}
+
+
+# ---------------------------------------------------------------------------
+# Legacy aliases – kept so that scripts in legacy/ keep working.
+# New algorithm code should use Transition / RunnerState / UpdateState.
+# ---------------------------------------------------------------------------
+RolloutTransition = Transition
 
 class RolloutSensTransition(NamedTuple):
     done: jnp.ndarray
@@ -24,7 +66,6 @@ class RolloutSensTransition(NamedTuple):
     obs: jnp.ndarray
     info: jnp.ndarray
 
-
 class RolloutSensAugTransition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -34,88 +75,8 @@ class RolloutSensAugTransition(NamedTuple):
     reward_s: jnp.ndarray
     log_prob: jnp.ndarray
     obs: jnp.ndarray
-    gru_hidden: jnp.ndarray  # GRU hidden state instead of sens_state
-    info: jnp.ndarray
-
-
-# Runner state NamedTuples for different algorithms
-class RunnerState(NamedTuple):
-    """Runner state for single-network algorithms (e.g., PPO)."""
-    train_state: object  # Flax TrainState
-    env_state: object
-    last_obs: jnp.ndarray
-    rng: jnp.ndarray
-
-
-class RunnerStateDual(NamedTuple):
-    """Runner state for dual-network algorithms (e.g., SPPO-aug with GRU)."""
-    train_state: object  # Main network TrainState
-    train_state_vs: object  # Sensitivity value network TrainState
-    env_state: object
-    last_obs: jnp.ndarray
-    gru_hidden: jnp.ndarray
-    rng: jnp.ndarray
-
-
-# Update state NamedTuples for different algorithms
-class UpdateState(NamedTuple):
-    """Update state for single-network algorithms (e.g., PPO)."""
-    train_state: object
-    traj_batch: object
-    advantages: jnp.ndarray
-    targets: jnp.ndarray
-    rng: jnp.ndarray
-
-
-class UpdateStateDual(NamedTuple):
-    """Update state for dual-network algorithms (e.g., SPPO-aug)."""
-    train_state: object
-    train_state_vs: object
-    traj_batch: object
-    advantages: jnp.ndarray
-    advantages_s: jnp.ndarray
-    targets: jnp.ndarray
-    targets_s: jnp.ndarray
-    rng: jnp.ndarray
-
-class UpdateStateCVaR(NamedTuple):
-    """Update state for CVaR-based algorithms (e.g., CPPO)."""
-    train_state: object
-    traj_batch: object
-    advantages: jnp.ndarray
-    targets: jnp.ndarray
-    nu : jnp.ndarray
-    cvarlam : jnp.ndarray
-    rng: jnp.ndarray
-
-class RolloutGRUTransition(NamedTuple):
-    """Transition for SPPO with single GRU-based ActorCritic."""
-    done: jnp.ndarray
-    action: jnp.ndarray
-    value: jnp.ndarray
-    reward: jnp.ndarray  
-    log_prob: jnp.ndarray
-    obs: jnp.ndarray
     gru_hidden: jnp.ndarray
     info: jnp.ndarray
-
-
-class RunnerStateGRU(NamedTuple):
-    """Runner state for GRU-based single-network algorithms (e.g., SPPO)."""
-    train_state: object  # Flax TrainState
-    env_state: object
-    last_obs: jnp.ndarray
-    gru_hidden: jnp.ndarray
-    rng: jnp.ndarray
-
-class RunnerStateCVaR(NamedTuple):
-    """Runner state for GRU-based single-network algorithms (e.g., SPPO)."""
-    train_state: object  # Flax TrainState
-    env_state: object
-    last_obs: jnp.ndarray
-    nu: jnp.ndarray
-    cvarlam: jnp.ndarray
-    rng: jnp.ndarray
 
 class ReplayTransition(NamedTuple):
     done: jnp.ndarray

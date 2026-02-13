@@ -13,55 +13,7 @@ from flax import struct
 from gymnax.environments import environment, spaces
 from gymnax.environments.environment import TEnvParams, TEnvState
 
-
-@jax.jit
-def skew(vec):
-    return jnp.array([[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]])
-
-
-@jax.jit
-def quat2rotm(quat):
-    eta = quat[0]
-    vec = quat[1:4]
-    return jnp.array(
-        [
-            [
-                2 * (eta * eta + vec[0] * vec[0]) - 1,
-                2 * (vec[0] * vec[1] - eta * vec[2]),
-                2 * (vec[0] * vec[2] + eta * vec[1]),
-            ],
-            [
-                2 * (vec[0] * vec[1] + eta * vec[2]),
-                2 * (eta * eta + vec[1] * vec[1]) - 1,
-                2 * (vec[1] * vec[2] - eta * vec[0]),
-            ],
-            [
-                2 * (vec[0] * vec[2] - eta * vec[1]),
-                2 * (vec[1] * vec[2] + eta * vec[0]),
-                2 * (eta * eta + vec[2] * vec[2]) - 1,
-            ],
-        ]
-    )
-
-
-@jax.jit
-def quat_product(quat1, quat2):
-    vec1 = quat1[1:4]
-    vec2 = quat2[1:4]
-
-    return jnp.concatenate(
-        [
-            jnp.array([quat1[0] * quat2[0] - vec1.dot(vec2)]),
-            quat1[0] * vec2 + quat2[0] * vec1 + skew(vec1) @ vec2,
-        ]
-    )
-
-
-@jax.jit
-def quat_inverse(q):
-    """For unit quaternions"""
-    res = jnp.array([q[0], -q[1], -q[2], -q[3]])
-    return res
+from .math import quat2rotm, quat_product, skew, quat_inverse
 
 
 @struct.dataclass
@@ -356,6 +308,39 @@ class DroneV1(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
+    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
+        """Compute evaluation metrics for the current state.
+        
+        Args:
+            env_state: Current environment state
+            params: Environment parameters
+            
+        Returns:
+            Dictionary of metric names to scalar values
+        """
+        state = env_state.state
+        
+        # Distance to target
+        distance_to_target = jnp.linalg.norm(state.pos - env_state.target_pos)
+        
+        # Velocity magnitude
+        velocity_magnitude = jnp.linalg.norm(state.vel)
+        
+        # Angular velocity magnitude
+        angular_velocity_magnitude = jnp.linalg.norm(state.omega)
+        
+        # Attitude error (deviation from upright quaternion [1, 0, 0, 0])
+        upright_quat = jnp.array([1.0, 0.0, 0.0, 0.0])
+        quat_error = quat_product(quat_inverse(state.attitude), upright_quat)
+        attitude_error = 2.0 * jnp.arccos(jnp.clip(jnp.abs(quat_error[0]), 0.0, 1.0))
+        
+        return {
+            "distance_to_target": distance_to_target,
+            "velocity_magnitude": velocity_magnitude,
+            "angular_velocity_magnitude": angular_velocity_magnitude,
+            "attitude_error": attitude_error,
+        }
+
     @property
     def name(self) -> str:
         """Environment name."""
@@ -416,18 +401,23 @@ class DroneV1(environment.Environment):
                 - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
                 - 'actions': array of shape (T, 4)
                 - 'target_pos': optional target position array
+                - 'eval_metrics': optional dict with 'distance_to_target' array
             output: Optional path to save the figure. If None, displays interactively.
         """
         import matplotlib.pyplot as plt
         
         plt.style.use("seaborn-v0_8")
-        fig = plt.figure(figsize=(14, 8))
-        gs = fig.add_gridspec(2, 4, height_ratios=[2, 1])
+        fig = plt.figure(figsize=(16, 8))
+        gs = fig.add_gridspec(2, 4, height_ratios=[2, 1], width_ratios=[1, 1, 1, 1])
 
-        ax_path = fig.add_subplot(gs[0, :], projection="3d")
+        ax_path = fig.add_subplot(gs[0, :2], projection="3d")
+        ax_dist = fig.add_subplot(gs[0, 2:])
         axes_act = [fig.add_subplot(gs[1, i]) for i in range(4)]
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
+
+        # Collect distance_to_target from all rollouts
+        all_distances = []
 
         for series in series_list:
             state = series.get("state", None)
@@ -460,11 +450,61 @@ class DroneV1(environment.Environment):
                     ax.set_ylabel(labels[idx])
                     ax.grid(True, alpha=0.3)
 
+            # Collect distance_to_target if available
+            eval_metrics = series.get("eval_metrics", {})
+            if "distance_to_target" in eval_metrics:
+                dist = np.asarray(eval_metrics["distance_to_target"]).flatten()
+                all_distances.append(dist)
+
         ax_path.set_title("Quadrotor position trajectories")
         ax_path.set_xlabel("x [m]")
         ax_path.set_ylabel("y [m]")
         ax_path.set_zlabel("z [m]")
         ax_path.grid(True, alpha=0.3)
+
+        # Plot mean distance to target with std shading
+        if all_distances:
+            # Pad to same length if needed
+            max_len = max(d.shape[0] for d in all_distances)
+            padded = np.array([
+                np.pad(d, (0, max_len - d.shape[0]), mode='edge') 
+                for d in all_distances
+            ])
+            mean_dist = np.mean(padded, axis=0)
+            std_dist = np.std(padded, axis=0)
+            timesteps = np.arange(max_len)
+
+            ax_dist.plot(timesteps, mean_dist, color="blue", label="Mean distance")
+            ax_dist.fill_between(
+                timesteps,
+                mean_dist - std_dist,
+                mean_dist + std_dist,
+                alpha=0.3,
+                color="blue",
+                label="± 1 std"
+            )
+            ax_dist.set_xlabel("Timestep")
+            ax_dist.set_ylabel("Distance to target [m]")
+            ax_dist.set_title("Distance to target over time")
+            ax_dist.legend(loc="upper right")
+            ax_dist.grid(True, alpha=0.3)
+            
+            # Display final mean and std
+            final_mean = mean_dist[-1]
+            final_std = std_dist[-1]
+            ax_dist.text(
+                0.02, 0.98, 
+                f"Final: {final_mean:.3f} ± {final_std:.3f} m",
+                transform=ax_dist.transAxes,
+                verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5)
+            )
+        else:
+            ax_dist.text(0.5, 0.5, "No eval_metrics available", 
+                        ha='center', va='center', transform=ax_dist.transAxes)
+            ax_dist.set_title("Distance to target over time")
+
+        plt.tight_layout()
 
         if output is None:
             plt.show()

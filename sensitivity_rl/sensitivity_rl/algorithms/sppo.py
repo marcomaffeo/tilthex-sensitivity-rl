@@ -5,9 +5,9 @@ import jax.numpy as jnp
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
-from .ppo import extract_losses, make_update_fn, pack_update_state  # Reuse from PPO
+from .ppo import make_update_fn  # Reuse PPO's standard update logic
 from algorithms.common import gae_standard
-from buffers import RolloutGRUTransition, RunnerStateGRU, UpdateState
+from buffers import Transition, RunnerState
 from net_utils import create_optimizer, make_linear_schedule
 from networks import ActorCriticGRU
 from envs.wrappers import (
@@ -59,7 +59,7 @@ def make_loss_fn(config, network):
     """
     def _loss_fn(params, traj_batch, advantages, targets):
         # Full forward pass (need hidden state for critic value)
-        pi, value, _ = network.apply(params, traj_batch.obs, traj_batch.gru_hidden)
+        pi, value, _ = network.apply(params, traj_batch.obs, traj_batch.extras["gru_hidden"])
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
@@ -127,14 +127,14 @@ def make_collect_fn(config, env, env_params, networks):
     """
     network = networks["network"]
     
-    def _env_step(runner_state: RunnerStateGRU, unused):
+    def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
         
         # Full forward pass (need hidden state for critic and to update it)
         pi, value, new_gru_hidden = network.apply(
             runner_state.train_state.params, 
             runner_state.last_obs, 
-            runner_state.gru_hidden
+            runner_state.extras["gru_hidden"]
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -156,16 +156,17 @@ def make_collect_fn(config, env, env_params, networks):
         env_state = jax.lax.stop_gradient(env_state)
         new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
 
-        transition = RolloutGRUTransition(
+        transition = Transition(
             done, action, value, reward,
-            log_prob, runner_state.last_obs, runner_state.gru_hidden, info
+            log_prob, runner_state.last_obs, info,
+            extras={"gru_hidden": runner_state.extras["gru_hidden"]},
         )
-        new_runner_state = RunnerStateGRU(
+        new_runner_state = RunnerState(
             train_state=runner_state.train_state,
             env_state=env_state,
             last_obs=obsv,
-            gru_hidden=new_gru_hidden,
             rng=rng,
+            extras={"gru_hidden": new_gru_hidden},
         )
         return new_runner_state, transition
     
@@ -174,7 +175,7 @@ def make_collect_fn(config, env, env_params, networks):
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
 
-    last_val, _ = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs, collect_state.gru_hidden, method=networks["network"].critic)
+    last_val, _ = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs, collect_state.extras["gru_hidden"], method=networks["network"].critic)
     
     advantages, targets = gae_standard(
         config, traj_batch, last_val,
@@ -183,17 +184,6 @@ def calculate_gae(config, traj_batch, networks, collect_state):
         "advantages": advantages,
         "targets": targets,
     }, collect_state
-
-def rebuild_runner_state(update_state: UpdateState, collect_state: RunnerStateGRU):
-    """Rebuild runner state after update epochs."""
-    return RunnerStateGRU(
-        train_state=update_state.train_state,
-        env_state=collect_state.env_state,
-        last_obs=collect_state.last_obs,
-        gru_hidden=collect_state.gru_hidden,
-        rng=update_state.rng,
-    )
-
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize GRU-based ActorCritic network for SPPO.
@@ -239,7 +229,7 @@ def init_runner_state(config, env, env_params, networks, rng):
     """Create initial runner state for SPPO.
     
     Returns:
-        RunnerStateGRU NamedTuple
+        RunnerState NamedTuple
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
@@ -251,34 +241,23 @@ def init_runner_state(config, env, env_params, networks, rng):
     # Extra split before scan
     rng, _rng = jax.random.split(rng)
     
-    return RunnerStateGRU(
+    return RunnerState(
         train_state=networks["train_state"],
         env_state=env_state,
         last_obs=obsv,
-        gru_hidden=init_gru_hidden,
         rng=_rng,
+        extras={"gru_hidden": init_gru_hidden},
     )
 
-def run_dir(config, runs_root, ts):
-    algo_name = "SPPO_AUG"
-    if config.get("DOMAIN_RANDOMIZATION", False):
-        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_DR_{ts}"
-    else:
-        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
-    
-    return run_dir
 
 SPEC = AlgorithmSpec(
+    algo_name="SPPO",
     wrap_env=wrap_env,
     make_loss_fn=make_loss_fn,
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
-    pack_update_state=pack_update_state,
-    rebuild_runner_state=rebuild_runner_state,
-    extract_losses=extract_losses,
     init_networks=init_networks,
     init_runner_state=init_runner_state,
-    run_dir=run_dir,
     uses_sensitivity=True,
 )

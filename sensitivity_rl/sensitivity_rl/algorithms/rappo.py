@@ -7,7 +7,7 @@ from flax.training.train_state import TrainState
 from .base import AlgorithmSpec
 from algorithms.common import gae_standard
 from net_utils import create_optimizer, make_linear_schedule
-from buffers import RolloutTransition, RunnerState, UpdateState
+from buffers import Transition, RunnerState, UpdateState
 from networks import ActorDCritic
 from envs.wrappers import (
     GymnaxWrapper,
@@ -156,7 +156,7 @@ def make_collect_fn(config, env, env_params, networks):
         )
         obsv = jax.lax.stop_gradient(obsv)
         env_state = jax.lax.stop_gradient(env_state)
-        transition = RolloutTransition(
+        transition = Transition(
             done.reshape(-1, 1, 1).repeat(config.get("N_TAUS", 64), 1),
             action,
             quantile_values,
@@ -216,6 +216,7 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             advantages=update_state.advantages,
             targets=update_state.targets,
             rng=rng,
+            extras=update_state.extras,
         )
         return new_update_state, total_loss
 
@@ -240,49 +241,6 @@ def calculate_gae(config, traj_batch, networks, collect_state):
         last_obs=collect_state.last_obs,
         rng=rng,
     )
-
-
-def pack_update_state(collect_state, traj_batch, gae_results):
-    """Pack state for update epochs."""
-    return UpdateState(
-        train_state=collect_state.train_state,
-        traj_batch=traj_batch,
-        advantages=gae_results["advantages"],
-        targets=gae_results["targets"],
-        rng=collect_state.rng,
-    )
-
-
-def rebuild_runner_state(update_state: UpdateState, collect_state: RunnerState):
-    """Rebuild runner state after update epochs."""
-    return RunnerState(
-        train_state=update_state.train_state,
-        env_state=collect_state.env_state,
-        last_obs=collect_state.last_obs,
-        rng=update_state.rng,
-    )
-
-
-def extract_losses(loss_info):
-    """Extract loss metrics from loss_info."""
-    total_losses, (
-        value_losses,
-        actor_losses,
-        entropies,
-        old_approx_kl,
-        approx_kl,
-        clipfracs,
-    ) = loss_info
-    losses = {
-        "total": total_losses.mean(),
-        "value": value_losses.mean(),
-        "actor": actor_losses.mean(),
-        "entropy": entropies.mean(),
-        "old_approx_kl": old_approx_kl.mean(),
-        "approx_kl": approx_kl.mean(),
-        "clipfrac": jnp.concatenate(clipfracs).mean(),
-    }
-    return losses, None  # losses, extra_losses
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
@@ -323,52 +281,12 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     }
 
 
-def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for PPO.
-
-    Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks
-        rng: PRNG key (will be split for env reset)
-
-    Returns:
-        RunnerState NamedTuple
-    """
-    rng, _rng = jax.random.split(rng)
-    reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-    obsv, env_state = env.reset(reset_rng, env_params)
-
-    # Extra split before scan (matching original ppo.py line 494-495)
-    rng, _rng = jax.random.split(rng)
-
-    return RunnerState(
-        train_state=networks["train_state"],
-        env_state=env_state,
-        last_obs=obsv,
-        rng=_rng,  # Use _rng, not rng, to match original
-    )
-
-
-def run_dir(config, runs_root, ts):
-    algo_name = "RAPPO"
-    run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
-
-    return run_dir
-
-
 SPEC = AlgorithmSpec(
+    algo_name="RAPPO",
     wrap_env=wrap_env,
     make_loss_fn=make_loss_fn,
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
-    pack_update_state=pack_update_state,
-    rebuild_runner_state=rebuild_runner_state,
-    extract_losses=extract_losses,
     init_networks=init_networks,
-    init_runner_state=init_runner_state,
-    run_dir=run_dir,
-    uses_sensitivity=False,
 )

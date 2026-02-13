@@ -407,49 +407,57 @@ class SensitivityWrapper(GymnaxWrapper):
         df_dp = self.df_dp(key, sens_state.env_state, state, action, params)
         dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params)
 
-        df_dx = jnp.clip(df_dx, -1e3, 1e3)
-        df_du = jnp.clip(df_du, -1e3, 1e3)
-        df_dp = jnp.clip(df_dp, -1e3, 1e3)
-        dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
+        # df_dx = jnp.clip(df_dx, -1e3, 1e3)
+        # df_du = jnp.clip(df_du, -1e3, 1e3)
+        # df_dp = jnp.clip(df_dp, -1e3, 1e3)
+        # dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
 
-        # Replace NaN with 1e3
-        df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
-        df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
-        df_dp = jnp.where(jnp.isnan(df_dp), 1e3, df_dp)
-        dobs_dx = jnp.where(jnp.isnan(dobs_dx), 1e3, dobs_dx)
+        # # Replace NaN with 1e3
+        # df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
+        # df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
+        # df_dp = jnp.where(jnp.isnan(df_dp), 1e3, df_dp)
+        # dobs_dx = jnp.where(jnp.isnan(dobs_dx), 1e3, dobs_dx)
 
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
 
-        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
-        dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
+        # dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
+        # dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
 
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
-        sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
+        # sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
 
         # Update sensitivities using chain rule
         sens_s_next = (
             df_dx @ sens_s
             + df_du @ sens_a
-            + df_dp
-            / (jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10) + 1e-4))
+            + df_dp / (jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10)))
         )
-        sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
+        # sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
 
         # not normalized
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
 
         # normalize
         sens_s_next = sens_s_next / (norm_next + 1e-6)
-        # Pack updated sensitivitie
-        return Sensitivity(
+        # Pack updated sensitivities
+        sensitivity = Sensitivity(
             log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             state=sens_s_next,
             action=sens_a,
             policy_gains=dmu_dobs,
         )
+        # Store Jacobians for gradient-based sensitivity loss in loss_fn
+        jac_info = {
+            "df_dx": df_dx @ sens_s,
+            "df_dp": df_dp
+            / (jnp.exp(jnp.clip(sens_state.sensitivity.log_norm, -1e4, 1e10))),
+            "df_du": df_du,
+            "dobs_dx_sens": dobs_dx @ sens_s,
+        }
+        return sensitivity, jac_info
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
         obs, env_state = self._env.reset(key, params)
@@ -469,12 +477,16 @@ class SensitivityWrapper(GymnaxWrapper):
             key, sens_state.env_state, action, params
         )
 
-        next_sensitivity = self.step_sensitivity(
+        next_sensitivity, jac_info = self.step_sensitivity(
             key, sens_state, action, params, obs, done
         )
 
         info["trw"] = reward
         info["sensitivity_state"] = next_sensitivity.log_norm
+        info["df_dx"] = jac_info["df_dx"]
+        info["df_dp"] = jac_info["df_dp"]
+        info["df_du"] = jac_info["df_du"]
+        info["dobs_dx_sens"] = jac_info["dobs_dx_sens"]
 
         sens_state = SensitivityEnvState(
             env_state=env_state, sensitivity=next_sensitivity

@@ -36,6 +36,7 @@ from torch.utils.tensorboard import SummaryWriter
 from omegaconf import DictConfig, OmegaConf
 
 from algorithms import ALGORITHM_REGISTRY, AlgorithmSpec
+from buffers import UpdateState, RunnerState
 from envs import ENV_REGISTRY
 from utils import (
     load_actor_params_from_file,
@@ -194,8 +195,15 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
             )
 
             # UPDATE NETWORK
-            update_state = spec.pack_update_state(
-                collect_state, traj_batch, gae_results
+            gae_extras = {k: v for k, v in gae_results.items()
+                          if k not in ("advantages", "targets")}
+            update_state = UpdateState(
+                train_state=collect_state.train_state,
+                traj_batch=traj_batch,
+                advantages=gae_results["advantages"],
+                targets=gae_results["targets"],
+                rng=collect_state.rng,
+                extras={**collect_state.extras, **gae_extras},
             )
             update_state, loss_info = jax.lax.scan(
                 update_fn, update_state, None, config["UPDATE_EPOCHS"]
@@ -221,7 +229,13 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
             )
 
             # Rebuild runner state with updated train_state(s)
-            runner_state = spec.rebuild_runner_state(update_state, collect_state)
+            runner_state = RunnerState(
+                train_state=update_state.train_state,
+                env_state=collect_state.env_state,
+                last_obs=collect_state.last_obs,
+                rng=update_state.rng,
+                extras={**collect_state.extras, **update_state.extras},
+            )
             return runner_state, metric
 
         # Run training loop

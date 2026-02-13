@@ -43,12 +43,12 @@ def gae_sensitivity(config, traj_batch, last_val, last_val_s):
         gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - transition.done) * gae
 
         delta_s = (
-            transition.reward_s
+            transition.extras["reward_s"]
             + config["GAMMA"] * next_value_s * (1 - transition.done)
-            - transition.value_s
+            - transition.extras["value_s"]
         )
         gae_s = delta_s + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - transition.done) * gae_s
-        return (gae, gae_s, transition.value, transition.value_s), (gae, gae_s)
+        return (gae, gae_s, transition.value, transition.extras["value_s"]), (gae, gae_s)
 
     _, (advantages, advantages_s) = jax.lax.scan(
         _get_advantages,
@@ -63,5 +63,5 @@ def gae_sensitivity(config, traj_batch, last_val, last_val_s):
         unroll=16,
     )
     targets = advantages + traj_batch.value
-    targets_s = advantages_s + traj_batch.value_s
+    targets_s = advantages_s + traj_batch.extras["value_s"]
     return advantages, advantages_s, targets, targets_s

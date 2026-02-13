@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
-from buffers import RolloutSensAugTransition, RunnerStateDual, UpdateStateDual
+from buffers import Transition, RunnerState, UpdateState
 from algorithms.common import gae_sensitivity
 from net_utils import create_optimizer, make_linear_schedule
 from networks import ActorCritic, CriticGRU
@@ -76,10 +76,24 @@ def make_loss_fn(config, network):
         approx_kl = ((ratio - 1) - log_ratio).mean()
         clipfracs = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
 
+        
         # Normalize and combine advantages
-        gae = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        gae_r = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         gae_s = (advantages_s - advantages_s.mean()) / (advantages_s.std() + 1e-8)
-        gae = gae + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s
+        # Conflict = Task is failing ( gae_rnegative) BUT is less sensitive than expected (gae_s positive)
+        # conflict_mask = (advantages < 0) & (advantages_s > 0)
+        conflict_mask = (gae_r < 0) & (gae_s > 0)
+
+        weights_s = jnp.where(conflict_mask, - 2.0*config["SENSITIVITY_REGULARIZATION_WEIGHT"], config["SENSITIVITY_REGULARIZATION_WEIGHT"])
+        # weights_s = config["SENSITIVITY_REGULARIZATION_WEIGHT"]  # Penalize positive and negative sensitivity, but stronger for negative (less sensitive than expected)
+
+        # gae = jnp.where(gae_r > 0, gae_r + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s, gae_r + 2.0 * config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s)
+        # gae = jnp.where(gae_r < 0, gae_r + 1.0 * config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s, gae)
+        # gae = jnp.where((gae_r < 0) & (gae_s < 0), - gae_r * config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s, gae)
+
+        gae = gae_r + (weights_s * gae_s)
+        # re-normalize combined advantage
+        gae = (gae - gae.mean()) / (gae.std() + 1e-8)
         
         loss_actor1 = ratio * gae
         loss_actor2 = (
@@ -121,12 +135,12 @@ def make_loss_fn_vs(config, network_vs):
         value_s, _ = network_vs.apply(
             params_vs,
             traj_batch.obs,
-            traj_batch.gru_hidden,
+            traj_batch.extras["gru_hidden"],
         )
 
         # CALCULATE VALUE SENSITIVITY LOSS
-        value_s_pred_clipped = traj_batch.value_s + (
-            value_s - traj_batch.value_s
+        value_s_pred_clipped = traj_batch.extras["value_s"] + (
+            value_s - traj_batch.extras["value_s"]
         ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
         value_s_losses = jnp.square(value_s - targets_s)
         value_s_losses_clipped = jnp.square(value_s_pred_clipped - targets_s)
@@ -152,11 +166,11 @@ def make_collect_fn(config, env, env_params, networks):
     network = networks["network"]
     network_vs = networks["network_vs"]
     
-    def _env_step(runner_state: RunnerStateDual, unused):
+    def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
         pi, value = network.apply(runner_state.train_state.params, runner_state.last_obs)
         value_s, new_gru_hidden = network_vs.apply(
-            runner_state.train_state_vs.params, runner_state.last_obs, runner_state.gru_hidden
+            runner_state.extras["train_state_vs"].params, runner_state.last_obs, runner_state.extras["gru_hidden"]
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -175,17 +189,17 @@ def make_collect_fn(config, env, env_params, networks):
         env_state = jax.lax.stop_gradient(env_state)
         new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
 
-        transition = RolloutSensAugTransition(
-            done, action, value, value_s, reward, reward_s,
-            log_prob, runner_state.last_obs, runner_state.gru_hidden, info
+        transition = Transition(
+            done, action, value, reward,
+            log_prob, runner_state.last_obs, info,
+            extras={"value_s": value_s, "reward_s": reward_s, "gru_hidden": runner_state.extras["gru_hidden"]},
         )
-        new_runner_state = RunnerStateDual(
+        new_runner_state = RunnerState(
             train_state=runner_state.train_state,
-            train_state_vs=runner_state.train_state_vs,
             env_state=env_state,
             last_obs=obsv,
-            gru_hidden=new_gru_hidden,
             rng=rng,
+            extras={**runner_state.extras, "gru_hidden": new_gru_hidden},
         )
         return new_runner_state, transition
     
@@ -204,7 +218,7 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
     Returns a function for use with jax.lax.scan that performs one epoch of updates.
     """
     loss_fn_vs = networks["loss_fn_vs"]
-    def _update_epoch(update_state: UpdateStateDual, unused):
+    def _update_epoch(update_state: UpdateState, unused):
         def _update_minbatch(ts, batch_info):
             train_state, train_state_vs = ts
             traj_batch, advantages, advantages_s, targets, targets_s = batch_info
@@ -228,21 +242,19 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
         rng, _rng = jax.random.split(update_state.rng)
         minibatches = shuffle_batch_fn(
             _rng,
-            (update_state.traj_batch, update_state.advantages, update_state.advantages_s, update_state.targets, update_state.targets_s),
+            (update_state.traj_batch, update_state.advantages, update_state.extras["advantages_s"], update_state.targets, update_state.extras["targets_s"]),
             config,
         )
         (train_state, train_state_vs), total_loss = jax.lax.scan(
-            _update_minbatch, (update_state.train_state, update_state.train_state_vs), minibatches
+            _update_minbatch, (update_state.train_state, update_state.extras["train_state_vs"]), minibatches
         )
-        new_update_state = UpdateStateDual(
+        new_update_state = UpdateState(
             train_state=train_state,
-            train_state_vs=train_state_vs,
             traj_batch=update_state.traj_batch,
             advantages=update_state.advantages,
-            advantages_s=update_state.advantages_s,
             targets=update_state.targets,
-            targets_s=update_state.targets_s,
             rng=rng,
+            extras={**update_state.extras, "train_state_vs": train_state_vs},
         )
         return new_update_state, total_loss
     
@@ -255,9 +267,9 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     _, last_val = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs)
     network_vs = networks["network_vs"]
     last_val_s, _ = network_vs.apply(
-        collect_state.train_state_vs.params,
+        collect_state.extras["train_state_vs"].params,
         collect_state.last_obs,
-        collect_state.gru_hidden,
+        collect_state.extras["gru_hidden"],
     )
     advantages, advantages_s, targets, targets_s = gae_sensitivity(
         config, traj_batch, last_val, last_val_s
@@ -268,32 +280,6 @@ def calculate_gae(config, traj_batch, networks, collect_state):
         "targets": targets,
         "targets_s": targets_s,
     }, collect_state
-
-
-def pack_update_state(collect_state, traj_batch, gae_results):
-    """Pack state for update epochs."""
-    return UpdateStateDual(
-        train_state=collect_state.train_state,
-        train_state_vs=collect_state.train_state_vs,
-        traj_batch=traj_batch,
-        advantages=gae_results["advantages"],
-        advantages_s=gae_results["advantages_s"],
-        targets=gae_results["targets"],
-        targets_s=gae_results["targets_s"],
-        rng=collect_state.rng,
-    )
-
-
-def rebuild_runner_state(update_state: UpdateStateDual, collect_state: RunnerStateDual):
-    """Rebuild runner state after update epochs."""
-    return RunnerStateDual(
-        train_state=update_state.train_state,
-        train_state_vs=update_state.train_state_vs,
-        env_state=collect_state.env_state,
-        last_obs=collect_state.last_obs,
-        gru_hidden=collect_state.gru_hidden,
-        rng=update_state.rng,
-    )
 
 
 def extract_losses(loss_info):
@@ -378,7 +364,7 @@ def init_runner_state(config, env, env_params, networks, rng):
     """Create initial runner state for SPPO-aug.
     
     Returns:
-        RunnerStateDual NamedTuple
+        RunnerState NamedTuple
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
@@ -390,37 +376,32 @@ def init_runner_state(config, env, env_params, networks, rng):
     # Extra split before scan (matching original sppo_aug.py)
     rng, _rng = jax.random.split(rng)
     
-    return RunnerStateDual(
+    # Dummy GAE extras for pytree consistency (overwritten each iteration)
+    dummy_gae = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]))
+
+    return RunnerState(
         train_state=networks["train_state"],
-        train_state_vs=networks["train_state_vs"],
         env_state=env_state,
         last_obs=obsv,
-        gru_hidden=init_gru_hidden,
         rng=_rng,  # Use _rng, not rng, to match original
+        extras={
+            "train_state_vs": networks["train_state_vs"],
+            "gru_hidden": init_gru_hidden,
+            "advantages_s": dummy_gae,
+            "targets_s": dummy_gae,
+        },
     )
-
-def run_dir(config, runs_root, ts):
-    algo_name = "SPPO_AUG"
-    if config.get("DOMAIN_RANDOMIZATION", False):
-        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_DR_{ts}"
-    else:
-        run_dir = runs_root / config["ENV_NAME"] / f"{algo_name}_{ts}"
-    
-    return run_dir
-
 
 
 SPEC = AlgorithmSpec(
+    algo_name="SPPO_AUG",
     wrap_env=wrap_env,
     make_loss_fn=make_loss_fn,
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
-    pack_update_state=pack_update_state,
-    rebuild_runner_state=rebuild_runner_state,
-    extract_losses=extract_losses,
     init_networks=init_networks,
+    extract_losses=extract_losses,
     init_runner_state=init_runner_state,
-    run_dir=run_dir,
     uses_sensitivity=True,
 )

@@ -4,25 +4,26 @@
 ENV_NAME: reacher_v5
 
 # Environment-specific parameters
-NUM_ENVS: 1000
-NUM_STEPS: 50
+NUM_ENVS: 100
+NUM_STEPS: 1000
 TOTAL_TIMESTEPS: 5e6
-NUM_MINIBATCHES: 20
+LR: 0.001
+UPDATE_EPOCHS: 10
 
-# Override network architecture for drone
-ACTIVATION: relu
+# Override network architecture 
+ACTIVATION: tanh
 ANNEAL_LR: true
 GRU_HIDDEN_SIZE: 64
 
-# Override some RL parameters for drone
+# Override some RL parameters 
 GAMMA: 0.99
 CLIP_EPS: 0.2
-ENT_COEF: 0.001
+ENT_COEF: 0.01
 
 ACTOR_LAYER_SIZES: [128, 128]
 CRITIC_LAYER_SIZES: [128, 128]
 
-SENSITIVITY_REGULARIZATION_WEIGHT: 0.5
+SENSITIVITY_REGULARIZATION_WEIGHT: 2.5
 
-# SAC-specific overrides for drone_v1
+# SAC-specific overrides 
 BUFFER_SIZE: 1e6

@@ -1,6 +1,9 @@
 import jax
 import jax.numpy as jnp
 import jax.flatten_util
+import os
+
+os.environ["MUJOCO_GL"] = "egl"
 import mujoco
 import mujoco.mjx as mjx
 from pathlib import Path
@@ -83,7 +86,9 @@ if not model_path.exists():
     model_path = Path(__file__).parent / "assets" / "reacher.xml"
 
 mj_model = mujoco.MjModel.from_xml_path(str(model_path))
+mj_model.opt.timestep = 0.02
 mj_data = mujoco.MjData(mj_model)
+
 
 # Pre-compute Subtree Mask
 subtree_mask = np.eye(mj_model.nbody)
@@ -155,8 +160,9 @@ def reset_env(rng_key, base_model, base_data, params):
     model = rebuild_model(base_model, params)
 
     qpos_noise = jax.random.uniform(
-        rng_qpos, base_data.qpos.shape, minval=-0.1, maxval=0.1
+        rng_qpos, base_data.qpos.shape, minval=-2.7, maxval=2.7
     )
+    qpos_noise = qpos_noise.at[2:].set(0.0)  # Only noise joints, not target
     data = base_data.replace(
         qpos=base_data.qpos + qpos_noise, qvel=jnp.zeros_like(base_data.qvel)
     )
@@ -258,7 +264,7 @@ manual_jac_fn = jax.jit(
 
 # Execution
 print("Running simulation...")
-rng = jax.random.PRNGKey(0)
+rng = jax.random.PRNGKey(20)
 frames = []
 
 rng, k1, k2 = jax.random.split(rng, 3)
@@ -274,7 +280,7 @@ try:
 except:
     renderer = None
 
-NUM_STEPS = 100
+NUM_STEPS = 500
 print(f"Starting {NUM_STEPS} steps loop...")
 
 for i in range(NUM_STEPS):
@@ -311,13 +317,15 @@ for i in range(NUM_STEPS):
         print(f"  Mean Jacobian Difference: {mean_diff:.6f}")
         print(f"{'='*80}")
 
-    if renderer and i % 2 == 0:
+    if renderer:  # Capture every frame for smoother animation
         data_cpu = mjx.get_data(mj_model, jax.tree_util.tree_map(lambda x: x[0], data))
-        renderer.update_scene(data_cpu)
+        renderer.update_scene(data_cpu, camera=0)
         frames.append(renderer.render())
 
 if frames:
-    imageio.mimsave("reacher_slice_noise.gif", frames, duration=0.02, loop=0)
+    imageio.mimsave(
+        "reacher_slice_noise.gif", frames, fps=50
+    )  # 50 fps to match dm_control
     print("GIF saved.")
 if renderer:
     renderer.close()

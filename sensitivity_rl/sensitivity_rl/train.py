@@ -23,7 +23,9 @@ from datetime import datetime
 # Environment setup before JAX import
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
-os.environ["XLA_FLAGS"] = "--xla_gpu_autotune_level=0"
+os.environ["XLA_FLAGS"] = (
+    "--xla_gpu_autotune_level=0 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
+)
 os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax
@@ -236,7 +238,6 @@ def run_evaluation(config, run_dir):
     """Run evaluation rollouts and plotting."""
     eval_config = {
         "NUM_ROLLOUTS": 10,
-        "MAX_STEPS": 200,
         "DETERMINISTIC": True,
         "SEED": 42,
         "PARAM_SAMPLES": 1,
@@ -251,8 +252,6 @@ def run_evaluation(config, run_dir):
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
             "--param_samples",
@@ -269,8 +268,6 @@ def run_evaluation(config, run_dir):
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
-            "--max_step",
-            f"{eval_config['MAX_STEPS']}",
             "--num_rollouts",
             f"{eval_config['NUM_ROLLOUTS']}",
             "--param_samples",

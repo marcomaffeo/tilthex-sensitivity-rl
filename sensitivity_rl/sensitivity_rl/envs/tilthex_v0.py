@@ -171,30 +171,6 @@ class TilthexV0(environment.Environment):
         M = jnp.vstack([GF, GT])
         
         return self.solve_allocation_analytical(W_des, M, params)
-    
-    def compute_attitude_error_matrix(self, q_current: jax.Array, q_target: jax.Array) -> tuple[jax.Array, float]:
-        """
-        Calculates the attitude error using Rotation Matrices (Geometric Control).
-        Returns:
-        - error_vector (3,): The error vector e_R (direction and magnitude of correction)
-        - error_magnitude (float): A scalar representing the total error (0-1)
-        """
-       
-        R = quat2rotm(q_current)     
-        R_d = quat2rotm(q_target)      
-
-        R_err_matrix = (R_d.T @ R) - (R.T @ R_d)
-        
-        #vee map
-        x = R_err_matrix[2, 1] 
-        y = R_err_matrix[0, 2]
-        z = R_err_matrix[1, 0]
-        
-        e_R = 0.5 * jnp.array([x, y, z])
-        
-        error_magnitude = jnp.linalg.norm(e_R)
-        
-        return e_R, error_magnitude
 
     @partial(jax.jit, static_argnames=("self",))
     def step(
@@ -230,17 +206,60 @@ class TilthexV0(environment.Environment):
         action_rescaled = self.rescale_action(action_clipped, params)
 
         state = env_state.state
+
         state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
+
         pos_diff = state_next.pos - env_state.target_pos
 
-        e_R_vector, e_R_mag = self.compute_attitude_error_matrix(state_next.attitude, env_state.target_attitude)
+        q = state_next.attitude
+        w, x, y, z = q[0], q[1], q[2], q[3]
 
-        reward_orientation = jnp.exp(-5.0 * e_R_mag)
-        
+        # Roll
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        current_roll = jnp.arctan2(sinr_cosp, cosr_cosp)
+
+        # Pitch
+        sinp = 2 * (w * y - z * x)
+        sinp = jnp.clip(sinp, -1.0, 1.0)
+        current_pitch = jnp.arcsin(sinp)
+
+        # Yaw
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        current_yaw = jnp.arctan2(siny_cosp, cosy_cosp)
+
+        qt = env_state.target_attitude
+        wt, xt, yt, zt = qt[0], qt[1], qt[2], qt[3]
+        target_roll = jnp.arctan2(2*(wt*xt + yt*zt), 1-2*(xt*xt + yt*yt))
+        target_pitch = jnp.arcsin(jnp.clip(2*(wt*yt - zt*xt), -1.0, 1.0))
+        target_yaw = jnp.arctan2(2*(wt*zt + xt*yt), 1-2*(yt*yt + zt*zt))
+
+        err_roll = jnp.abs(jnp.arctan2(jnp.sin(current_roll - target_roll), jnp.cos(current_roll - target_roll)))
+        err_pitch = jnp.abs(jnp.arctan2(jnp.sin(current_pitch - target_pitch), jnp.cos(current_pitch - target_pitch)))
+        err_yaw = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - target_yaw), jnp.cos(current_yaw - target_yaw)))
+
+        r_roll = jax.lax.select(
+            err_roll < 0.05, 
+            1.0, 
+            -1.0 * err_roll)
+
+        r_pitch = jax.lax.select(
+            err_pitch < 0.05,
+            1.0,
+            -1.0 * err_pitch)
+
+        r_yaw = jax.lax.select(
+            err_yaw < 0.05,
+            1.0,
+            -1.0 * err_yaw)
+
+        reward_orientation = (r_roll + r_pitch + r_yaw) / 3.0
+
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
-            10.0,                                # reward when close to target
-            1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
+            10.0, # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
         )
 
         thrust_normalized_input = action_rescaled / params.max_input
@@ -255,7 +274,6 @@ class TilthexV0(environment.Environment):
         )
 
         reward = reward.squeeze()
-    
         env_state = EnvState(
             state=state_next,
             target_pos=env_state.target_pos,
@@ -306,25 +324,24 @@ class TilthexV0(environment.Environment):
         """
 
         u = jnp.clip(action, params.min_input, params.max_input)
-   
+
         quat = state.attitude
         ang_vel = state.omega
-        
+
         orientation_mat = quat2rotm(quat)
-        
+
         GF, GT = compute_allocation(6, params.arm_length, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
         
-        F_body = GF @ u       # [Fx, Fy, Fz] 
-        tau_body = GT @ u     # [Tx, Ty, Tz] 
+        F_body = GF @ u # [Fx, Fy, Fz]
+        tau_body = GT @ u # [Tx, Ty, Tz]
 
         lin_acc_body = F_body / params.m
         J_vec = params.I
         gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
         ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
-        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
+        acc = jnp.hstack([lin_acc_body, ang_acc_body])
 
-
-        gravity_vec = jnp.array([0.0, 0.0, params.g]) 
+        gravity_vec = jnp.array([0.0, 0.0, params.g])
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
 
         pos = state.pos + params.dt * state.vel
@@ -332,8 +349,7 @@ class TilthexV0(environment.Environment):
         q = state.attitude + params.dt * 0.5 * quat_product(quat, ang_vel_quat)
         omega = state.omega + params.dt * acc[3:6]
 
-        q = q / jnp.linalg.norm(q) 
-    
+        q = q / jnp.linalg.norm(q)
         state_new = ModelState(
             pos=pos.squeeze(),
             attitude=q.squeeze(),
@@ -358,7 +374,8 @@ class TilthexV0(environment.Environment):
         omega = jnp.array([0.0, 0.0, 0.0])
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
-        key, key_pos, key_att = jax.random.split(key, 3)
+        key, key_pos, key_att= jax.random.split(key, 3)
+
         target_pos = jax.lax.select(
             params.is_testing,
             self.target_pos,
@@ -373,13 +390,13 @@ class TilthexV0(environment.Environment):
         roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
         pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
         yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
-
+        
         target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
         target_attitude = euler_to_quat(target_rpy_rad)
 
         target_attitude = jax.lax.select(
             params.is_testing,
-            self.target_attitude, 
+            self.target_attitude,
             target_attitude
         )
 
@@ -474,6 +491,10 @@ class TilthexV0(environment.Environment):
                     (3,),
                     jnp.float32,
                 ),
+                "target_attitude": spaces.Box(
+                    -1.0, 1.0, (4,),
+                    jnp.float32
+                ),
                 "last_u": spaces.Box(
                     -jnp.finfo(jnp.float32).max,
                     jnp.finfo(jnp.float32).max,
@@ -543,7 +564,7 @@ class TilthexV0(environment.Environment):
                 dist = np.linalg.norm(pos - target_pos_val, axis=1).flatten()
                 all_dist_errors.append(dist)
 
-            # Target Attitude 
+            # Total Error Calculation 
             if "target_attitude" in series:
                 t_a = np.asarray(series["target_attitude"])
                 
@@ -601,7 +622,7 @@ class TilthexV0(environment.Environment):
         else:
             ax_dist_err.text(0.5, 0.5, "No pos data", ha='center')
 
-        # Plot Attitude Error
+        # Plot Attitude Error 
         t_att, mean_att, std_att = process_error_data(all_att_errors)
 
         if t_att is not None:

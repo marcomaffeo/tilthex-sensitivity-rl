@@ -30,7 +30,7 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     desired_pos = np.array([x, y, z], dtype='float64')
     desired_yaw = yaw
 
-    policy = Policy(Path("configs/policy/PPO_DR_20260123-101710"))
+    policy = Policy(Path("configs/policy/default"))
 
     try:
         while (time() - init_time < 10):
@@ -79,4 +79,3 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     
     # rotorcraft.set_ramp(1e-3)
     # land()
-

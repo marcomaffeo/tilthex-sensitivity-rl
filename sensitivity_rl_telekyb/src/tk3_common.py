@@ -73,11 +73,11 @@ class TK3Components:
         }})
 
         # PID tuning
-        self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
+        self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 5.0}})
         self.nhfc.set_servo_gain({ 'gain': {
-            'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
-            'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
-            'Kixy': 0, 'Kiz': 0
+            'Kpxy': 5, 'Kpz': 10, 'Kqxy': 4, 'Kqz': 1,
+            'Kvxy': 6, 'Kvz': 8, 'Kwxy': 1, 'Kwz': 0.1,
+            'Kixy': 0, 'Kiz': 1.0
         }})
 
         # use tilt-prioritized controller
@@ -208,8 +208,8 @@ class TK3Components_tilthex:
         #
         # configure hexarotor geometry: 6 rotors, 20 degrees tilted, 39cm arms
         self.nhfc.set_gtmrp_geom({
-            'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.38998, 'mass': 2.72,
-            'rx':-20, 'ry': -20, 'rz': -1, 'cf': 9.9016e-4, 'ct': 1.9e-5
+            'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.42, 'mass': 3.119,
+            'rx':-20, 'ry': -20, 'rz': -1, 'cf': 11.25e-4, 'ct': 2.4e-5
         })
 
         # emergency descent parameters
@@ -281,7 +281,6 @@ class TK3Components_tilthex:
         self.nhfc.log('/tmp/nhfc.log')
         self.nhfc.set_current_position() # hover on current position
 
-
     # --- stop -----------------------------------------------------------------
     #
     # Stop motors. To be called interactively
@@ -295,7 +294,6 @@ class TK3Components_tilthex:
         self.pom.log_stop()
 
         self.optitrack.unset_logfile()
-
 
 
 def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
@@ -325,31 +323,29 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
 
     return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE) # np array
 
-
 def wrench_to_rotor_speed(components, wrench):
 
     # inverse allocation matrix mapping thrust (z-body) to squared propeller speed
     alloc_inverse = np.array(components.nhfc.get_body_parameters()["body"]["iG"]).reshape(8, 6)[:4, 2:6]
     
-    rotor_speed = np.sqrt(alloc_inverse @ wrench).tolist()
-    
-    return rotor_speed
+    rotor_force = alloc_inverse @ wrench
+    rotor_force = np.nan_to_num(rotor_force, nan=0.0, posinf=0.0, neginf=0.0)
+    rotor_force = np.clip(rotor_force, 0.0, 1e6)
 
+    rotor_speed = np.sqrt(rotor_force).tolist()
+        
+    return rotor_speed
 
 def action_to_rotor_speed(components, action):
     """
     Converts the policy action [-1, 1] into rotor speed [rad/s].
-    Reads the lift coefficient (cf) dynamically from NHFC.
     """
-    body_params = components.nhfc.get_body_parameters()["body"]
-    cf = 9.9016e-4
-    min_force_train = 0.3072  
-    max_force_train = 12.0    
+    cf = 12.0e-4
 
-    action = np.array(action, dtype=np.float64)
+    force_cmds = np.array(action, dtype=np.float64)
+    force_cmds = np.clip(force_cmds, 0.3072, 12.0)
+    force_cmds = np.maximum(force_cmds, 0.0)
 
-    force_cmds = min_force_train + (action + 1.0) * 0.5 * (max_force_train - min_force_train)
-    force_cmds = np.clip(force_cmds, 0.0, max_force_train)
     rotor_speed = np.sqrt(force_cmds / cf).tolist()
 
     return rotor_speed

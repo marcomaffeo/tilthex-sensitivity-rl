@@ -42,7 +42,7 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
             # offset the horizontal position
             curr_state[:2] = curr_state[:2] - init_state[:2]
 
-            r = Rotation.from_euler('z', yaw, degrees=False)
+            r = Rotation.from_euler('z', desired_yaw, degrees=False)
             q_scipy = r.as_quat() # Scipy esce in [x, y, z, w]
             target_quat = np.array([q_scipy[3], q_scipy[0], q_scipy[1], q_scipy[2]])
 

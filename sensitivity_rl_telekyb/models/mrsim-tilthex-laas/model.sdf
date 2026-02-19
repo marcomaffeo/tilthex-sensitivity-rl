@@ -1,0 +1,147 @@
+<?xml version="1.0" ?>
+
+<sdf version="1.7">
+  <model name="mrsim-tilthex-laas">
+    <link name="base">
+      <inertial>
+        <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
+        <mass>2.91118</mass>
+        <inertia>
+          <ixx>0.082529</ixx>
+          <ixy>0.00175324</ixy>
+          <ixz>1.3135e-06</ixz>
+          <iyy>0.0846092</iyy>
+          <iyz>-5.1512e-05</iyz>
+          <izz>0.154814</izz>
+        </inertia>
+      </inertial>
+      
+      <visual name="visual_mesh">
+        <pose>0.000122973 0.00013006 0.0248586 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://mrsim-tilthex-laas/assets/merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.558611 0.483785 0.395435 1</ambient>
+          <diffuse>0.558611 0.483785 0.395435 1</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+        </material>
+      </visual>
+
+      <collision name="collision_mesh">
+        <pose>0.000122973 0.00013006 0.0248586 0 -0 0</pose>
+        <geometry>
+          <mesh>
+             <uri>model://mrsim-tilthex-laas/assets/merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_collision.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+    </link>
+
+    <frame name="motor1" attached_to="base">
+      <pose>0.39 0.00485669 0.0133436 -0.349066 3.96782e-15 1.25044e-14</pose>
+    </frame>
+    <frame name="motor2" attached_to="base">
+      <pose>0.199206 0.335322 0.0133436 0.349066 -3.72628e-15 1.0472</pose>
+    </frame>
+    <frame name="motor3" attached_to="base">
+      <pose>-0.199206 0.335322 0.0133436 -0.349066 3.96782e-15 2.0944</pose>
+    </frame>
+    <frame name="motor4" attached_to="base">
+      <pose>-0.39 0.00485669 0.0133436 0.349066 -3.73367e-15 -3.14159</pose>
+    </frame>
+    <frame name="motor5" attached_to="base">
+      <pose>-0.190794 -0.340178 0.0133436 -0.349066 3.75163e-15 -2.0944</pose>
+    </frame>
+    <frame name="motor6" attached_to="base">
+      <pose>0.190794 -0.340178 0.0133436 0.349066 -3.63648e-15 -1.0472</pose>
+    </frame>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-1</name>
+      <pose relative_to="motor1">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-1" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-1::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-2</name>
+      <pose relative_to="motor2">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-2" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-2::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-3</name>
+      <pose relative_to="motor3">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-3" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-3::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-4</name>
+      <pose relative_to="motor4">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-4" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-4::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-5</name>
+      <pose relative_to="motor5">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-5" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-5::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <include>
+      <uri>model://mrsim-rotor</uri>
+      <name>hr-rotor-6</name>
+      <pose relative_to="motor6">0 0 0 0 0 0</pose>
+    </include>
+    <joint name="hr-motor-6" type="revolute">
+      <parent>base</parent>
+      <child>hr-rotor-6::propeller</child>
+      <axis><xyz>0 0 -1</xyz></axis>
+    </joint>
+
+    <plugin name="mrsim" filename="mrsim-gazebo.so">
+      <link>base</link>
+      <rotors>
+        <noise>0.0</noise>
+        <cf>12.0e-4</cf>
+        <ct>2.4e-5</ct>
+        <vfxy>0.5</vfxy><vfz>0.5</vfz>
+        <vtxy>0.5</vtxy><vtz>0.5</vtz>
+
+        <rotor><joint spin="cw">hr-motor-1</joint></rotor>
+        <rotor><joint spin="ccw">hr-motor-2</joint></rotor>
+        <rotor><joint spin="cw">hr-motor-3</joint></rotor>
+        <rotor><joint spin="ccw">hr-motor-4</joint></rotor>
+        <rotor><joint spin="cw">hr-motor-5</joint></rotor>
+        <rotor><joint spin="ccw">hr-motor-6</joint></rotor>
+      </rotors>
+    </plugin>
+
+  </model>
+</sdf>

@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "1f891e9fd9f68cc59dd7e0a5",
+    "documentMicroversion": "55bcf2ec7227fa1b36b77f45",
+    "documentVersion": "906b996f6392ce70752082c2",
+    "elementId": "0dfac9bd58e3d1b9ca7a7a9b",
+    "fullConfiguration": "default",
+    "id": "MtLfyjaR85tIp2nmZ",
+    "isStandardContent": false,
+    "name": "Ball Damper <5>",
+    "partId": "JFD",
+    "suppressed": false,
+    "type": "Part"
+}

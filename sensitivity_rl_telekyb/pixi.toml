@@ -16,14 +16,16 @@ web-gui = { cmd = "sh ./scripts/websocket.sh" }
 quadrotor-control = {cmd = "python -i src/tk3-quadrotor-control.py"}
 tilthex-control = {cmd = "python -i src/tk3-tilthex-control.py"}
 policy-control = {cmd = "python src/policy_control_node.py"}
+policy-control-tilthex = {cmd = "python src/policy_control_node_tilthex.py"}
 
 # Policy management tasks
 policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
-policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/SetBool \"{data: true}\"" }
-policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
-policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/SetBool \"{data: true}\"" }
+policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/Trigger" }
+policy-takeoff = { cmd = "ros2 service call /control/takeoff std_srvs/srv/Trigger" }
+policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/Trigger" }
 policy-loop-stop = { cmd = "ros2 service call /policy/stop std_srvs/srv/Trigger" }
 policy-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
+policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
 
 [tasks.policy-setpoint]
 args = [
@@ -32,7 +34,7 @@ args = [
   { "arg" = "z", "default" = "1.0" },
   { "arg" = "yaw", "default" = "0.0" },
 ]
-cmd = "ros2 topic pub /policy/setpoint geometry_msgs/msg/PoseStamped \"{ header: {frame_id: 'world'}, pose: {position: {x: {{ x }}, y: {{ y }}, z: {{ z }}}, orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}} }\""
+cmd = "ros2 topic pub -1 /policy/setpoint geometry_msgs/msg/PoseStamped \"{ header: {frame_id: 'world'}, pose: {position: {x: {{ x }}, y: {{ y }}, z: {{ z }}}, orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}} }\""
 
 [tasks.sim]
 args = [

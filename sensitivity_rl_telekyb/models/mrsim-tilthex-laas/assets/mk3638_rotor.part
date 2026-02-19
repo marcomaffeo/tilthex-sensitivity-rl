@@ -1,0 +1,14 @@
+{
+    "configuration": "default",
+    "documentId": "2bf13fbf5734b36eef8ba80f",
+    "documentMicroversion": "53ee5741a3fdc1394754e283",
+    "documentVersion": "cf6bd0c1c60bf398924a09b9",
+    "elementId": "816faa657024574c5c573625",
+    "fullConfiguration": "default",
+    "id": "MScMA5c6mjjhJoP77",
+    "isStandardContent": false,
+    "name": "MK3638 Rotor <1>",
+    "partId": "JHD",
+    "suppressed": false,
+    "type": "Part"
+}

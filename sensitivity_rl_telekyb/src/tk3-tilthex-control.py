@@ -9,7 +9,7 @@ from policy import Policy
 from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed
 
 
-CONTROL_FREQ = 200
+CONTROL_FREQ = 100
 DT = 1/CONTROL_FREQ
 
 components = TK3Components_tilthex(Path("logs"))

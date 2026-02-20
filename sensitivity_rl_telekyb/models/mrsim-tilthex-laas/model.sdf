@@ -60,69 +60,69 @@
     </frame>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-1</name>
       <pose relative_to="motor1">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-1" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-1::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-1::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-2</name>
       <pose relative_to="motor2">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-2" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-2::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-2::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-3</name>
       <pose relative_to="motor3">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-3" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-3::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-3::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-4</name>
       <pose relative_to="motor4">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-4" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-4::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-4::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-5</name>
       <pose relative_to="motor5">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-5" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-5::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-5::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <include>
-      <uri>model://mrsim-rotor</uri>
+      <uri>model://propeller</uri>
       <name>hr-rotor-6</name>
       <pose relative_to="motor6">0 0 0 0 0 0</pose>
     </include>
     <joint name="hr-motor-6" type="revolute">
       <parent>base</parent>
-      <child>hr-rotor-6::propeller</child>
-      <axis><xyz>0 0 -1</xyz></axis>
+      <child>hr-rotor-6::blade</child>
+      <axis><xyz>0 0 1</xyz></axis>
     </joint>
 
     <plugin name="mrsim" filename="mrsim-gazebo.so">

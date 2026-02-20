@@ -212,18 +212,36 @@ class TK3Components_tilthex:
             'rx':-20, 'ry': -20, 'rz': -1, 'cf': 11.25e-4, 'ct': 2.4e-5
         })
 
-        # emergency descent parameters
+         # emergency descent parameters
         self.nhfc.set_emerg({'emerg': {
             'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
         }})
 
-        # PID tuning
+         # PID tuning
         self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
         self.nhfc.set_servo_gain({ 'gain': {
             'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
             'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
             'Kixy': 0, 'Kiz': 0
         }})
+
+        # self.nhfc.set_gtmrp_geom({
+        #     'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.39, 'mass': 2.992,
+        #     'rx':20, 'ry': 0, 'rz': -1, 'cf': 12.0e-4, 'ct': 2.4e-5
+        # })
+
+        # # emergency descent parameters
+        # self.nhfc.set_emerg({'emerg': {
+        #     'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
+        # }})
+
+        # # PID tuning
+        # self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
+        # self.nhfc.set_servo_gain({ 'gain': {
+        #     'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
+        #     'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
+        #     'Kixy': 0, 'Kiz': 0
+        # }})
 
         # use tilt-prioritized controller
         self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'})

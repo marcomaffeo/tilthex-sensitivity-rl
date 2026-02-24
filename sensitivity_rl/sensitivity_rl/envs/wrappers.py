@@ -4,19 +4,10 @@ import jax.numpy as jnp
 import jax.flatten_util
 import chex
 import numpy as np
-from flax import struct
-from typing import Optional, Tuple, Union
+from typing import NamedTuple, Optional, Tuple, Union
 from gymnax.environments import environment, spaces
 from envs.base import Sensitivity, SensitivityOff
 from utils import angle_normalize, normalize
-
-
-def dataclass_with_custom_replace(cls):
-    cls = struct.dataclass(cls)
-    cls.replace = (
-        cls._replace  # reuse the same _replace function (or ReplaceMixin.replace)
-    )
-    return cls
 
 
 class GymnaxWrapper(object):
@@ -66,8 +57,7 @@ class FlattenObservationWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
-@dataclass_with_custom_replace
-class LogEnvState:
+class LogEnvState(NamedTuple):
     env_state: environment.EnvState
     episode_returns_true: float
     episode_returns: float
@@ -76,23 +66,6 @@ class LogEnvState:
     returned_episode_returns_true: float
     returned_episode_lengths: int
     timestep: int
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return LogEnvState(
-            self.env_state.replace(**kwargs),
-            self.episode_returns_true,
-            self.episode_returns,
-            self.episode_lengths,
-            self.returned_episode_returns,
-            self.returned_episode_returns_true,
-            self.returned_episode_lengths,
-            self.timestep,
-        )
 
 
 class LogWrapper(GymnaxWrapper):
@@ -189,8 +162,7 @@ class VecEnv(GymnaxWrapper):
         self.step = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
 
 
-@dataclass_with_custom_replace
-class NormalizeVecRewSensEnvState:
+class NormalizeVecRewSensEnvState(NamedTuple):
     mean: jnp.ndarray
     var: jnp.ndarray
     mean_sens: jnp.ndarray
@@ -199,14 +171,6 @@ class NormalizeVecRewSensEnvState:
     return_val: float
     return_val_sens: jnp.ndarray
     env_state: environment.EnvState
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return struct.replace(self.env_state, **kwargs)
 
 
 class NormalizeVecRewardSensitivity(GymnaxWrapper):
@@ -282,21 +246,12 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
 
 
-@dataclass_with_custom_replace
-class NormalizeVecRewEnvState:
+class NormalizeVecRewEnvState(NamedTuple):
     mean: jnp.ndarray
     var: jnp.ndarray
     count: float
     return_val: float
     env_state: environment.EnvState
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return struct.replace(self.env_state, **kwargs)
 
 
 class NormalizeVecReward(GymnaxWrapper):
@@ -346,18 +301,9 @@ class NormalizeVecReward(GymnaxWrapper):
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
 
 
-@dataclass_with_custom_replace
-class SensitivityEnvState:
+class SensitivityEnvState(NamedTuple):
     env_state: environment.EnvState
     sensitivity: Sensitivity
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return struct.replace(self.env_state, **kwargs)
 
 
 class SensitivityWrapper(GymnaxWrapper):
@@ -399,7 +345,7 @@ class SensitivityWrapper(GymnaxWrapper):
         done,
     ):
         """Compute the next environment state and update sensitivities."""
-        state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
+        state = jax.flatten_util.ravel_pytree(sens_state.env_state.state)[0]
         params = jax.flatten_util.ravel_pytree(params)[0]
         # Compute Jacobians
         df_dx = self.df_dx(key, sens_state.env_state, state, action, params)
@@ -641,18 +587,9 @@ class ResetEnvWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
-@dataclass_with_custom_replace
-class DomainRandomizationEnvState:
+class DomainRandomizationEnvState(NamedTuple):
     env_state: environment.EnvState
     params: environment.EnvParams
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return struct.replace(self.env_state, **kwargs)
 
 
 class DomainRandomizationWrapper(GymnaxWrapper):
@@ -745,18 +682,9 @@ Off-policy sensitivity wrappers
 """
 
 
-@dataclass_with_custom_replace
-class SensitivityOffEnvState:
+class SensitivityOffEnvState(NamedTuple):
     env_state: environment.EnvState
     sensitivity: SensitivityOff
-
-    # provide proxy access to regular attributes of wrapped object
-    def __getattr__(self, name):
-        return getattr(self.env_state, name)
-
-    def _replace(self, **kwargs):
-        """Return a copy with updated fields (Flax-style replace)."""
-        return struct.replace(self.env_state, **kwargs)
 
 
 class SensitivityOffWrapper(GymnaxWrapper):
@@ -824,7 +752,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         done,
     ):
         """Compute the next environment state and update sensitivities."""
-        state = jax.flatten_util.ravel_pytree(sens_state.state)[0]
+        state = jax.flatten_util.ravel_pytree(sens_state.env_state.state)[0]
         params_flat = jax.flatten_util.ravel_pytree(params)[0]
         # Compute Jacobians
         # _dynamics_jacs_fn returns: (jacs_of_next_state, jacs_of_obs)

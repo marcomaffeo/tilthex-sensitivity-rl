@@ -22,7 +22,7 @@ from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger 
 
 from policy import Policy 
-from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed 
+from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed, quat_multiply
 
 class PolicyControlNode(Node): 
     def __init__(self): 
@@ -46,8 +46,8 @@ class PolicyControlNode(Node):
         
         self.setpoint_sub = self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group) 
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO_tilthex') 
-        self.declare_parameter('policy_duration', 500.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO_euler') #PPO/SPPO_euler PPO/SPPO_quat PPO/SPPO_rotmat
+        self.declare_parameter('policy_duration', 5.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
         
@@ -64,7 +64,6 @@ class PolicyControlNode(Node):
         self.policy_land_event = threading.Event() 
         self.frequency_hz = self.get_parameter('frequency_hz').value 
         
-        # State machine flags 
         self.hardware_initialized = False 
         self.motors_armed = False 
         self.is_flying = False 
@@ -204,7 +203,6 @@ class PolicyControlNode(Node):
     
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
-            # VINCOLO RIMOSSO: Ora basta che i motori siano accesi, non serve più il takeoff
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed before starting policy.') 
             
@@ -219,7 +217,6 @@ class PolicyControlNode(Node):
             self.policy_stop_event.clear() 
             self.policy_land_event.clear() 
             
-            # Settiamo is_flying a True perché la policy sta prendendo il controllo
             self.is_flying = True 
 
             self.policy_thread = threading.Thread(target=self._policy_loop, daemon=True) 
@@ -253,7 +250,6 @@ class PolicyControlNode(Node):
     
     def land_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
-            # VINCOLO RIMOSSO: Puoi atterrare da qualsiasi stato, basta che i motori girino
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
 
@@ -274,33 +270,45 @@ class PolicyControlNode(Node):
             response.success = False 
             response.message = f'Land failed: {str(e)}' 
         return response 
+
     
     def _build_observation(self, state: np.ndarray) -> Optional[jnp.ndarray]: 
         if state is None: return None 
         
         pos = state[0:3] 
-        vel = state[3:6] 
-        quat = state[6:10] 
+        vel_world = state[3:6] 
+        quat_wxyz = state[6:10] 
         avel = state[10:13] 
         
         with self.lock: 
-            target = self.setpoint.copy() 
+            target_pos = self.setpoint[0:3].copy()
+            target_yaw = self.setpoint[3]
         
-        target_pos = target[0:3] 
-        target_yaw = target[3] 
+        to_target_world = target_pos - pos 
         
-        to_target = target_pos - pos 
+        r_current = Rotation.from_quat([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]]) 
+        rot_mat = r_current.as_matrix()
         
-        r = Rotation.from_euler('z', target_yaw, degrees=False) 
-        q_scipy = r.as_quat()  
-        target_quat = np.array([q_scipy[3], q_scipy[0], q_scipy[1], q_scipy[2]]) 
+        to_target_body = rot_mat.T @ to_target_world
+        vel_body = rot_mat.T @ vel_world
+        
+        r_target = Rotation.from_euler('z', target_yaw, degrees=False) 
+        t_xyzw = r_target.as_quat()  
+        target_quat_wxyz = np.array([t_xyzw[3], t_xyzw[0], t_xyzw[1], t_xyzw[2]])
+
+        q_state_inv = np.array([quat_wxyz[0], -quat_wxyz[1], -quat_wxyz[2], -quat_wxyz[3]])
+        
+        q_error_body = quat_multiply(q_state_inv, target_quat_wxyz)
+
+        if q_error_body[0] < 0.0:
+            q_error_body = -q_error_body
 
         obs = np.concatenate([ 
-            to_target, 
-            vel, 
-            quat, 
+            to_target_body, 
+            vel_body, 
+            quat_wxyz, 
             avel, 
-            target_quat  
+            q_error_body  
         ]).astype(np.float32) 
         
         return jnp.array(obs) 
@@ -308,7 +316,7 @@ class PolicyControlNode(Node):
     def _apply_rotor_speed(self, rotor_speed: list): 
         self.components.rotorcraft.set_velocity(rotor_speed, ack=True) 
 
-    def plot_results(self, log_data): 
+    def plot_results(self, log_data, policy_name): 
         self.get_logger().info("Generating plots...") 
         
         times = np.array(log_data['t']) 
@@ -317,58 +325,81 @@ class PolicyControlNode(Node):
         euler_act = np.array(log_data['euler']) 
         pos_ref = np.array(log_data['pos_ref']) 
         yaw_ref = np.array(log_data['yaw_ref']) 
+        actions = np.array(log_data['action'])
         
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
 
-        fig, axs = plt.subplots(3, 2, figsize=(15, 12)) 
-        fig.suptitle(f'TiltHex Policy Performance ({times[-1]:.1f}s)', fontsize=16) 
-
-        axs[0, 0].plot(times, np.degrees(euler_act[:, 0]), label='Actual', color='blue') 
-        axs[0, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
-        axs[0, 0].set_title('Roll [deg]') 
-        axs[0, 0].grid(True) 
-        axs[0, 0].legend() 
-
-        axs[1, 0].plot(times, np.degrees(euler_act[:, 1]), label='Actual', color='green') 
-        axs[1, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
-        axs[1, 0].set_title('Pitch [deg]') 
-        axs[1, 0].grid(True) 
-        axs[1, 0].legend() 
-
-        axs[2, 0].plot(times, np.degrees(euler_act[:, 2]), label='Actual', color='red') 
-        axs[2, 0].plot(times, np.degrees(yaw_ref), '--', label='Desired', color='black') 
-        axs[2, 0].set_title('Yaw [deg]') 
-        axs[2, 0].grid(True) 
-        axs[2, 0].legend() 
-
-        axs[0, 1].plot(times, pos_err, color='purple') 
-        axs[0, 1].set_title('Position Error (Euclidean) [m]') 
-        axs[0, 1].set_ylim(bottom=0) 
-        axs[0, 1].grid(True) 
-
-        axs[1, 1].plot(times, vel_err, color='orange') 
-        axs[1, 1].set_title('Velocity Error (Magnitude) [m/s]') 
-        axs[1, 1].set_ylim(bottom=0) 
-        axs[1, 1].grid(True) 
-
-        axs[2, 1].plot(times, pos_act[:, 2], label='Actual Z', color='cyan') 
-        axs[2, 1].plot(times, pos_ref[:, 2], '--', label='Desired Z', color='black') 
-        axs[2, 1].set_title('Height (Z) [m]') 
-        axs[2, 1].grid(True) 
-        axs[2, 1].legend() 
-
+        # Create specific folder for this simulation run
         timestamp = strftime("%Y%m%d_%H%M%S") 
-        filename = self.log_path / f'policy_plot_{timestamp}.png' 
-        
-        plt.tight_layout() 
-        plt.savefig(filename) 
-        self.get_logger().info(f"Plot saved to: {filename}") 
-        plt.close() 
+        sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+        sim_folder.mkdir(parents=True, exist_ok=True)
+
+        # --- PLOT 1: OUTPUTS ---
+        fig1, axs1 = plt.subplots(3, 2, figsize=(15, 12)) 
+        fig1.suptitle(f'TiltHex Policy Outputs ({times[-1]:.1f}s)', fontsize=16) 
+
+        axs1[0, 0].plot(times, np.degrees(euler_act[:, 0]), label='Actual', color='blue') 
+        axs1[0, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
+        axs1[0, 0].set_title('Roll [deg]') 
+        axs1[0, 0].grid(True) 
+        axs1[0, 0].legend() 
+
+        axs1[1, 0].plot(times, np.degrees(euler_act[:, 1]), label='Actual', color='green') 
+        axs1[1, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
+        axs1[1, 0].set_title('Pitch [deg]') 
+        axs1[1, 0].grid(True) 
+        axs1[1, 0].legend() 
+
+        axs1[2, 0].plot(times, np.degrees(euler_act[:, 2]), label='Actual', color='red') 
+        axs1[2, 0].plot(times, np.degrees(yaw_ref), '--', label='Desired', color='black') 
+        axs1[2, 0].set_title('Yaw [deg]') 
+        axs1[2, 0].grid(True) 
+        axs1[2, 0].legend() 
+
+        axs1[0, 1].plot(times, pos_err, color='purple') 
+        axs1[0, 1].set_title('Position Error (Euclidean) [m]') 
+        axs1[0, 1].set_ylim(bottom=0) 
+        axs1[0, 1].grid(True) 
+
+        axs1[1, 1].plot(times, vel_err, color='orange') 
+        axs1[1, 1].set_title('Velocity Error (Magnitude) [m/s]') 
+        axs1[1, 1].set_ylim(bottom=0) 
+        axs1[1, 1].grid(True) 
+
+        axs1[2, 1].plot(times, pos_act[:, 2], label='Actual Z', color='cyan') 
+        axs1[2, 1].plot(times, pos_ref[:, 2], '--', label='Desired Z', color='black') 
+        axs1[2, 1].set_title('Height (Z) [m]') 
+        axs1[2, 1].grid(True) 
+        axs1[2, 1].legend() 
+
+        fig1.tight_layout() 
+        fig1.savefig(sim_folder / 'outputs.png') 
+        plt.close(fig1)
+
+        # --- PLOT 2: INPUTS ---
+        fig2, axs2 = plt.subplots(3, 2, figsize=(15, 12)) 
+        fig2.suptitle(f'TiltHex Policy Inputs (Rotor Forces) ({times[-1]:.1f}s)', fontsize=16) 
+
+        for i in range(6):
+            row = i // 2
+            col = i % 2
+            if actions.shape[1] > i:
+                axs2[row, col].plot(times, actions[:, i], color='darkorange') 
+                axs2[row, col].set_title(f'Rotor {i+1} Command') 
+                axs2[row, col].grid(True) 
+
+        fig2.tight_layout() 
+        fig2.savefig(sim_folder / 'inputs.png') 
+        plt.close(fig2)
+
+        self.get_logger().info(f"Plots saved in: {sim_folder}") 
     
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
+        policy_dir = self.get_parameter('policy_dir').value
+        policy_name = Path(policy_dir).name
         period = 1.0 / frequency if frequency > 0 else 0.0 
 
         self.get_logger().info(f'--- POLICY ACTIVE ({duration}s) ---') 
@@ -377,7 +408,8 @@ class PolicyControlNode(Node):
         log_data = { 
             't': [],  
             'pos': [], 'vel': [], 'euler': [],  
-            'pos_ref': [], 'yaw_ref': [] 
+            'pos_ref': [], 'yaw_ref': [],
+            'action': []
         } 
 
         try: 
@@ -429,6 +461,7 @@ class PolicyControlNode(Node):
                 log_data['euler'].append(euler) 
                 log_data['pos_ref'].append(target_pos) 
                 log_data['yaw_ref'].append(target_yaw) 
+                log_data['action'].append(action.copy())
 
             except Exception as exc: 
                 self.get_logger().error(f'Policy loop error: {exc}') 
@@ -454,12 +487,48 @@ class PolicyControlNode(Node):
 
         if len(log_data['t']) > 10: 
             try: 
-                plot_thread = threading.Thread(target=self.plot_results, args=(log_data,)) 
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name)) 
                 plot_thread.start() 
             except Exception as e: 
                 self.get_logger().error(f"Plotting thread failed to start: {e}") 
         else: 
             self.get_logger().warn("Not enough data to plot.") 
+
+def publish_setpoint_cli(args):
+    import math
+    import sys
+    if len(args) < 4:
+        print("Errore: argomenti mancanti. Uso: --setpoint x y z yaw_deg")
+        return
+
+    x, y, z, yaw_deg = map(float, args[:4])
+    yaw_rad = math.radians(yaw_deg)
+
+    rclpy.init()
+    node = rclpy.create_node('cli_setpoint_publisher')
+    pub = node.create_publisher(PoseStamped, '/policy/setpoint', 10)
+    
+    msg = PoseStamped()
+    msg.header.frame_id = 'world'
+    msg.header.stamp = node.get_clock().now().to_msg()
+    msg.pose.position.x = x
+    msg.pose.position.y = y
+    msg.pose.position.z = z
+    
+    # Conversione da gradi (Eulero Yaw) a Quaternione
+    msg.pose.orientation.w = math.cos(yaw_rad / 2.0)
+    msg.pose.orientation.x = 0.0
+    msg.pose.orientation.y = 0.0
+    msg.pose.orientation.z = math.sin(yaw_rad / 2.0)
+
+    # Leggero ritardo per permettere la discovery del publisher sulla rete ROS 2
+    sleep(0.2) 
+    pub.publish(msg)
+    node.get_logger().info(f"Setpoint inviato con successo: X={x}, Y={y}, Z={z}, Yaw={yaw_deg}°")
+    sleep(0.1)
+    
+    node.destroy_node()
+    rclpy.shutdown()
 
 def main(args=None): 
     rclpy.init(args=args) 
@@ -474,4 +543,9 @@ def main(args=None):
         rclpy.shutdown() 
 
 if __name__ == '__main__': 
-    main()
+    import sys
+    # Se il file viene lanciato con l'argomento --setpoint, esegue solo il publisher istantaneo
+    if len(sys.argv) > 1 and sys.argv[1] == '--setpoint':
+        publish_setpoint_cli(sys.argv[2:])
+    else:
+        main()

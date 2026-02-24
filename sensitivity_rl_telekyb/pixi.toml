@@ -34,23 +34,23 @@ args = [
   { "arg" = "z", "default" = "1.0" },
   { "arg" = "yaw", "default" = "0.0" },
 ]
-cmd = "ros2 topic pub -1 /policy/setpoint geometry_msgs/msg/PoseStamped \"{ header: {frame_id: 'world'}, pose: {position: {x: {{ x }}, y: {{ y }}, z: {{ z }}}, orientation: {w: 1.0, x: 0.0, y: 0.0, z: 0.0}} }\""
+cmd = "python src/policy_control_node_tilthex.py --setpoint {{ x }} {{ y }} {{ z }} {{ yaw }}"
 
 [tasks.sim]
 args = [
-  { "arg" = "world_file", "default" = "worlds/example.world" },
+  { "arg" = "world_file", "default" = "worlds/myworld.world" },
 ]
 cmd = "gz sim -v 4 -r {{ world_file }}"
 
 [tasks.sim-server]
 args = [
-  { "arg" = "world_file", "default" = "worlds/example.world" },
+  { "arg" = "world_file", "default" = "worlds/myworld.world" },
 ]
 cmd = "gz sim -v 4 -r -s {{ world_file }}"
 
 [tasks.sim-remote]
 args = [
-  { "arg" = "world_file", "default" = "worlds/example.world" },
+  { "arg" = "world_file", "default" = "worlds/myworld.world" },
 ]
 cmd = "sh ./scripts/websocket.sh & gz sim -v 4 -r -s {{ world_file }}"
 

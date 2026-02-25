@@ -199,9 +199,11 @@ def debug_callback(config, metric):
     def callback(info):
         return_values = info["returned_episode_returns"][info["returned_episode"]]
         timesteps = info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
-        print(
-            f"global step={timesteps[-1]}, mean episodic return={return_values.mean()}"
-        )
+        
+        if len(timesteps) > 0:
+            print(
+                f"global step={timesteps[-1]}, mean episodic return={return_values.mean()}"
+            )
 
     jax.debug.callback(callback, metric)
 

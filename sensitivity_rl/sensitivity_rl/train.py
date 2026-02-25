@@ -33,7 +33,7 @@ import jax
 import jax.numpy as jnp
 import optax
 import hydra
-from flax import serialization
+from flax import nnx, serialization
 from torch.utils.tensorboard import SummaryWriter
 from omegaconf import DictConfig, OmegaConf
 
@@ -41,10 +41,7 @@ from algorithms import ALGORITHM_REGISTRY, AlgorithmSpec
 from buffers import UpdateState, RunnerState
 from envs import ENV_REGISTRY
 from utils import (
-    load_actor_params_from_file,
-    merge_actor_params_with_fresh_critic,
     update_latest_symlink,
-    init_network_params,
     shuffle_batch,
 )
 
@@ -131,13 +128,14 @@ def debug_callback(config, metric):
     jax.debug.callback(callback, metric)
 
 
-def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
+def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
     """Create unified training function for PPO-family algorithms.
 
     Args:
         config: Training configuration dict
         spec: Algorithm specification
         writer: TensorBoard writer
+        init_rng: PRNG key used for network initialisation (concrete, not traced)
 
     Returns:
         JIT-compilable train function
@@ -155,26 +153,24 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter):
     env_params = env.default_params
     env = spec.wrap_env(env, config)
 
+    # INIT NETWORKS outside JIT (NNX needs concrete rngs)
+    networks = spec.init_networks(
+        config,
+        env,
+        env_params,
+        init_rng,
+    )
+    graphdef = networks["graphdef"]
+
+    if config.get("SENSITIVITY", False):
+        env.set_actor(graphdef, networks["train_state"].params)
+
+    # Create algorithm-specific functions (closures over graphdef)
+    loss_fn = spec.make_loss_fn(config, graphdef)
+    collect_fn = spec.make_collect_fn(config, env, env_params, networks)
+    update_fn = spec.make_update_fn(config, loss_fn, shuffle_batch, networks)
+
     def train(rng):
-        # INIT NETWORKS (algorithm handles all network creation)
-        rng, init_rng = jax.random.split(rng)
-        networks = spec.init_networks(
-            config,
-            env,
-            env_params,
-            init_rng,
-            load_params_fn=init_network_params,
-        )
-        network = networks["network"]
-
-        if config.get("SENSITIVITY", False):
-            env.set_actor(network, networks["train_state"].params)
-
-        # Create algorithm-specific functions (closures over network)
-        loss_fn = spec.make_loss_fn(config, network)
-        collect_fn = spec.make_collect_fn(config, env, env_params, networks)
-        update_fn = spec.make_update_fn(config, loss_fn, shuffle_batch, networks)
-
         # INIT RUNNER STATE (algorithm handles state structure and RNG splitting)
         runner_state = spec.init_runner_state(config, env, env_params, networks, rng)
 
@@ -322,7 +318,8 @@ def main(cfg: DictConfig):
     writer = SummaryWriter(f"{run_dir}")
 
     # Create unified training function
-    train_fn = make_train(config, spec, writer)
+    rng, init_rng = jax.random.split(rng)
+    train_fn = make_train(config, spec, writer, init_rng)
 
     # JIT compile and train
     train_jit = jax.jit(train_fn)
@@ -344,7 +341,8 @@ def main(cfg: DictConfig):
 
     # Save params
     params = final_state.train_state.params
-    (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(params))
+    pure_params = params.to_pure_dict()
+    (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(pure_params))
 
     # Add environment-specific attributes to config
     env = ENV_REGISTRY[config["ENV_NAME"]]()

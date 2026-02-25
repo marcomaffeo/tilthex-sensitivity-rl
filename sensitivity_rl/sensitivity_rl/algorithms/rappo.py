@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
@@ -63,7 +64,7 @@ def calculate_quantile_huber_loss(huber_loss, predictions, targets, taus):
     )
 
 
-def make_loss_fn(config, network):
+def make_loss_fn(config, graphdef):
     """Create PPO loss function.
 
     Returns a function with signature:
@@ -72,7 +73,8 @@ def make_loss_fn(config, network):
 
     def _loss_fn(params, traj_batch, advantages, targets, rng):
         # RERUN NETWORK
-        pi, (quantile_values, taus) = network.apply(params, traj_batch.obs, rng)
+        model = nnx.merge(graphdef, params)
+        pi, (quantile_values, taus) = model(traj_batch.obs, rng)
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
@@ -139,12 +141,13 @@ def make_collect_fn(config, env, env_params, networks):
 
     Returns a function for use with jax.lax.scan that collects transitions.
     """
-    network = networks["network"]
+    graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        pi, (quantile_values, _) = network.apply(
-            runner_state.train_state.params, runner_state.last_obs, rng
+        model = nnx.merge(graphdef, runner_state.train_state.params)
+        pi, (quantile_values, _) = model(
+            runner_state.last_obs, rng
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -226,8 +229,9 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for PPO."""
     rng, _rng = jax.random.split(collect_state.rng)
-    _, (last_val, _) = networks["network"].apply(
-        collect_state.train_state.params, collect_state.last_obs, _rng
+    model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
+    _, (last_val, _) = model(
+        collect_state.last_obs, _rng
     )
     # Standard GAE but giving B x T
     advantages, targets = gae_standard(config, traj_batch, last_val)
@@ -247,10 +251,14 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize network and train state for PPO.
 
     Returns:
-        dict with keys: network, train_state, and any secondary networks/states
+        dict with keys: graphdef, train_state, and any secondary networks/states
     """
+    obs_dim = env.observation_space(env_params).shape[0]
+    action_dim = env.action_space(env_params).shape[0]
+
     network = ActorDCritic(
-        env.action_space(env_params).shape[0],
+        obs_dim,
+        action_dim,
         activation=config["ACTIVATION"],
         actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         hidden_size=config.get("CRITIC_HIDDEN_SIZE", 256),
@@ -258,25 +266,21 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         n_taus=config.get("N_TAUS", 64),
         lb=config.get("SAMPLE_LB", 0.0),
         ub=config.get("ALPHA", 1.0),
+        rngs=nnx.Rngs(int(rng[0])),
     )
 
-    init_x = jnp.zeros(env.observation_space(env_params).shape)
-
-    if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
-        network_params = load_params_fn(rng, network, init_x, config)
-    else:
-        network_params = network.init(rng, init_x, rng)
+    graphdef, state = nnx.split(network)
 
     linear_schedule = make_linear_schedule(config)
     tx = create_optimizer(config, linear_schedule)
     train_state = TrainState.create(
-        apply_fn=network.apply,
-        params=network_params,
+        apply_fn=None,
+        params=state,
         tx=tx,
     )
 
     return {
-        "network": network,
+        "graphdef": graphdef,
         "train_state": train_state,
     }
 

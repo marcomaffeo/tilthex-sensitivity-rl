@@ -4,6 +4,7 @@ import jax.numpy as jnp
 import jax.flatten_util
 import chex
 import numpy as np
+from flax import nnx
 from typing import NamedTuple, Optional, Tuple, Union
 from gymnax.environments import environment, spaces
 from envs.base import Sensitivity, SensitivityOff
@@ -322,16 +323,17 @@ class SensitivityWrapper(GymnaxWrapper):
         self.df_dp = jax.jacfwd(self._step_to_state_wrapped, argnums=4)
         self.dobs_dx = jax.jacfwd(self._step_to_obs_wrapped, argnums=2)
 
-    def set_actor(self, actor, network_params):
+    def set_actor(self, graphdef, network_params):
         # Should add a check for dimension compatibility
-        self.actorCritic = actor
+        self.graphdef = graphdef
         self.network_params = network_params
 
     def update_network_params(self, network_params):
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
-        pi = self.actorCritic.apply(network_params, obs, method=self.actorCritic.actor)
+        model = nnx.merge(self.graphdef, network_params)
+        pi = model.actor(obs)
         action = pi.sample(seed=rng)
         return action
 
@@ -706,9 +708,9 @@ class SensitivityOffWrapper(GymnaxWrapper):
             self._step_to_state_and_obs_wrapped, argnums=(2, 3, 4)
         )
 
-    def set_actor(self, actor, network_params, get_action, action_scale, action_bias):
+    def set_actor(self, graphdef, network_params, get_action, action_scale, action_bias):
         # Should add a check for dimension compatibility
-        self._actor = actor
+        self.graphdef = graphdef
         self.network_params = network_params
         self.get_action = get_action
         self.action_scale = action_scale
@@ -718,7 +720,8 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
-        pi = self._actor.apply(network_params, obs)
+        model = nnx.merge(self.graphdef, network_params)
+        pi = model.actor(obs)
         action, _, _, _ = self.get_action(
             pi,
             self.action_scale,
@@ -730,7 +733,8 @@ class SensitivityOffWrapper(GymnaxWrapper):
         return action
 
     def compute_action_mean(self, rng, obs, network_params):
-        pi = self._actor.apply(network_params, obs)
+        model = nnx.merge(self.graphdef, network_params)
+        pi = model.actor(obs)
         _, _, mean, _ = self.get_action(
             pi,
             self.action_scale,

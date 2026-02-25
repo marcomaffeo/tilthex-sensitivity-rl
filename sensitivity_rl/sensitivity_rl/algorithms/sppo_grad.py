@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
@@ -50,11 +51,11 @@ def wrap_env(env, config):
     return env
 
 
-def make_loss_fn(config, network):
+def make_loss_fn(config, graphdef):
     """Create SPPO loss function with GRU-based ActorCritic.
 
     Args:
-        network: ActorCriticGRU network instance
+        graphdef: NNX graphdef for ActorCriticGRU network
 
     Returns a function with signature:
         loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
@@ -62,8 +63,9 @@ def make_loss_fn(config, network):
 
     def _loss_fn(params, traj_batch, advantages, targets):
         # Full forward pass (need hidden state for critic value)
-        pi, value, _ = network.apply(
-            params, traj_batch.obs, traj_batch.extras["gru_hidden"]
+        model = nnx.merge(graphdef, params)
+        pi, value, _ = model(
+            traj_batch.obs, traj_batch.extras["gru_hidden"]
         )
         log_prob = pi.log_prob(traj_batch.action)
 
@@ -113,7 +115,8 @@ def make_loss_fn(config, network):
             df_dx_i = jax.lax.stop_gradient(df_dx_i)
 
             def mu_fn(o):
-                pi = network.apply(params, o, method=network.actor)
+                m = nnx.merge(graphdef, params)
+                pi = m.actor(o)
                 return pi.loc  # mean action
 
             def compute_col(tangent):
@@ -165,14 +168,14 @@ def make_collect_fn(config, env, env_params, networks):
 
     Returns a function for use with jax.lax.scan that collects transitions.
     """
-    network = networks["network"]
+    graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
 
         # Full forward pass (need hidden state for critic and to update it)
-        pi, value, new_gru_hidden = network.apply(
-            runner_state.train_state.params,
+        model = nnx.merge(graphdef, runner_state.train_state.params)
+        pi, value, new_gru_hidden = model(
             runner_state.last_obs,
             runner_state.extras["gru_hidden"],
         )
@@ -230,11 +233,10 @@ def make_collect_fn(config, env, env_params, networks):
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
 
-    last_val, _ = networks["network"].apply(
-        collect_state.train_state.params,
+    model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
+    last_val, _ = model.critic(
         collect_state.last_obs,
         collect_state.extras["gru_hidden"],
-        method=networks["network"].critic,
     )
 
     advantages, targets = gae_standard(
@@ -252,37 +254,34 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize GRU-based ActorCritic network for SPPO.
 
     Returns:
-        dict with keys: network, train_state, gru_hidden_size
+        dict with keys: graphdef, train_state, gru_hidden_size
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
+    obs_dim = env.observation_space(env_params).shape[0]
+    action_dim = env.action_space(env_params).shape[0]
 
     network = ActorCriticGRU(
-        env.action_space(env_params).shape[0],
+        obs_dim,
+        action_dim,
         activation=config["ACTIVATION"],
         actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         gru_hidden_size=gru_hidden_size,
+        rngs=nnx.Rngs(int(rng[0])),
     )
 
-    init_x = jnp.zeros(env.observation_space(env_params).shape)
-    init_gru_hidden = jnp.zeros((1, gru_hidden_size))
-
-    if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
-        # For GRU network, we need custom loading logic
-        network_params = network.init(rng, init_x, init_gru_hidden)
-    else:
-        network_params = network.init(rng, init_x, init_gru_hidden)
+    graphdef, state = nnx.split(network)
 
     linear_schedule = make_linear_schedule(config)
     tx = create_optimizer(config, linear_schedule)
     train_state = TrainState.create(
-        apply_fn=network.apply,
-        params=network_params,
+        apply_fn=None,
+        params=state,
         tx=tx,
     )
 
     return {
-        "network": network,
+        "graphdef": graphdef,
         "train_state": train_state,
         "gru_hidden_size": gru_hidden_size,
     }

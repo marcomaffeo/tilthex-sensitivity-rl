@@ -20,15 +20,12 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 import numpy as np
-import flax.linen as nn
-import distrax
-from flax import serialization
-from flax.linen.initializers import constant, orthogonal
+from flax import nnx, serialization
 from envs import ENV_REGISTRY
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
-from networks import Actor
+from networks import ActorCritic, ActorCriticDual, ActorCriticGRU, ActorDCritic
 from utils import sample_env_params
 
 
@@ -86,16 +83,16 @@ def _flatten_value(x):
     return flat
 
 
-# NOTE: Treating env and actor as static keeps the function JIT-able while
+# NOTE: Treating env and graphdef as static keeps the function JIT-able while
 # allowing vmap to supply different rng/env_params externally.
 @partial(
     jax.jit,
-    static_argnames=("env", "actor", "max_steps", "deterministic"),
+    static_argnames=("env", "graphdef", "max_steps", "deterministic"),
 )
 def rollout_episode(
     env,
     env_params,
-    actor,
+    graphdef,
     params,
     rng_key: jax.Array,
     max_steps: int,
@@ -135,7 +132,8 @@ def rollout_episode(
     def body_fun(i, carry):
         rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = carry
 
-        pi = actor.apply(params, obs)
+        model = nnx.merge(graphdef, params)
+        pi = model.actor(obs)
         if deterministic:
             action = pi.mean()
         else:
@@ -185,35 +183,75 @@ def save_trajectory(
     path.write_bytes(serialization.msgpack_serialize(to_save))
 
 
-def extract_actor_params(params: Dict) -> Dict:
-    """Extract actor parameters from any ActorCritic network params.
-    
-    Works with ActorCritic, ActorCriticDual, ActorCriticGRU - all use
-    the same actor layer naming convention.
+def extract_actor_params(pure_dict: Dict) -> Dict:
+    """Extract actor parameters from a full model's NNX pure dict.
+
+    Kept for reference / debug but not used in the default NNX flow
+    which loads the full model directly.
     """
-    flat_params = params.get("params", params)
-    actor_params = {}
-    for key, value in flat_params.items():
-        if key.startswith("actor_") or key == "actor_log_std":
-            actor_params[key] = value
-    return {"params": actor_params}
+    actor_dict = {}
+    for key, value in pure_dict.items():
+        if key.startswith("actor_"):
+            actor_dict[key[len("actor_"):]] = value
+    return actor_dict
 
 
 def init_model_and_params(
     config: Dict[str, Any], env, env_params, params_bytes: bytes
 ):
-    full_params = serialization.msgpack_restore(params_bytes)
-    actor_params = extract_actor_params(full_params)
+    full_pure_dict = serialization.msgpack_restore(params_bytes)
 
     actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
-
-    action_dim = env.action_space(env_params).shape[0]
-    model = Actor(
-        action_dim=action_dim,
-        activation=config.get("ACTIVATION", "tanh"),
-        layer_sizes=actor_layer_sizes,
+    critic_layer_sizes = tuple(
+        config.get("CRITIC_LAYER_SIZES", config["ACTOR_LAYER_SIZES"])
     )
-    return model, actor_params
+    action_dim = env.action_space(env_params).shape[0]
+    obs_dim = env.observation_space(env_params).shape[0]
+    activation = config.get("ACTIVATION", "tanh")
+    rngs = nnx.Rngs(0)  # dummy rngs; weights are overwritten below
+
+    algorithm = config.get("ALGORITHM", "ppo").lower()
+    if algorithm in ("rappo",):
+        model = ActorDCritic(
+            obs_dim, action_dim,
+            activation=activation,
+            actor_layer_sizes=actor_layer_sizes,
+            rngs=rngs,
+        )
+    elif algorithm in ("sppo", "sppo_grad"):
+        gru_hidden_size = config.get("HIDDEN_SIZE", 64)
+        model = ActorCriticGRU(
+            obs_dim, action_dim,
+            activation=activation,
+            actor_layer_sizes=actor_layer_sizes,
+            critic_layer_sizes=critic_layer_sizes,
+            gru_hidden_size=gru_hidden_size,
+            rngs=rngs,
+        )
+    elif algorithm in ("sppo_aug",):
+        # sppo_aug main network is ActorCritic (secondary CriticGRU not saved)
+        model = ActorCritic(
+            obs_dim, action_dim,
+            activation=activation,
+            actor_layer_sizes=actor_layer_sizes,
+            critic_layer_sizes=critic_layer_sizes,
+            rngs=rngs,
+        )
+    else:
+        model = ActorCritic(
+            obs_dim, action_dim,
+            activation=activation,
+            actor_layer_sizes=actor_layer_sizes,
+            critic_layer_sizes=critic_layer_sizes,
+            rngs=rngs,
+        )
+
+    graphdef, template_state = nnx.split(model)
+    treedef = jax.tree.structure(template_state)
+    flat_leaves = jax.tree.leaves(full_pure_dict)
+    restored_state = jax.tree.unflatten(treedef, flat_leaves)
+
+    return graphdef, restored_state
 
 
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
@@ -221,7 +259,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     config, params_bytes = load_run_artifacts(run_dir)
     env, env_params, env_name, env_cls = build_env_from_config(config)
 
-    actor, params = init_model_and_params(
+    graphdef, params = init_model_and_params(
         config, env, env_params, params_bytes
     )
 
@@ -269,7 +307,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         actions_batch, state_batch, eval_metrics_batch = batched_rollout(
             env,
             env_params_batched,
-            actor,
+            graphdef,
             params,
             episode_keys,
             rcfg.max_steps,

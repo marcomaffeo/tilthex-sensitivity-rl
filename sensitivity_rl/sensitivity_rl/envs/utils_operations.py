@@ -4,34 +4,9 @@ import jax
 import numpy as np
 
 @jax.jit
-def quat_multiply(q1, q2):
-    """Quaternion multiplication"""
-    w2, x2, y2, z2 = q2
-    w1, x1, y1, z1 = q1
-    return jnp.array([-x1 * x2 - y1 * y2 - z1 * z2 + w1 * w2,
-                      x1 * w2 + y1 * z2 - z1 * y2 + w1 * x2,
-                      -x1 * z2 + y1 * w2 + z1 * x2 + w1 * y2,
-                      x1 * y2 - y1 * x2 + z1 * w2 + w1 * z2], dtype=jnp.float32)
-
-
-@jax.jit
-def quat_derivative(q, w):
-    """Quaternion derivative given quat and angular velocity"""
-    w_vec = jnp.concatenate([jnp.array([0.0]), w])
-    return quat_multiply(q, w_vec) * 0.5
-
-@jax.jit
-def quat_inverse(q):
-    """Quaternion inverse"""
-    return (q * jnp.array([1.0, -1.0, -1.0, -1.0])) / (jnp.linalg.norm(q) ** 2)
-
-@jax.jit
 def rotate_vec3(v, q):
-    """Rotate a 3D vector using a quaternion"""
-    p = jnp.concatenate([jnp.array([0.0]), v])
-    q_inv = quat_inverse(q)
-    p_rotated = quat_multiply(quat_multiply(q, p), q_inv)
-    return p_rotated[1:4]
+    """Rotate a 3D vector using a quaternion via rotation matrix"""
+    return quat2rotm(q) @ v
 
 @jax.jit
 def euler_to_quat(rpy):
@@ -53,13 +28,6 @@ def euler_to_quat(rpy):
     z = cr * cp * sy - sr * sp * cy
 
     return jnp.array([w, x, y, z])
-
-@jax.jit
-def skew(vec):
-    return jnp.array(
-        [[0, -vec[2], vec[1]], [vec[2], 0, -vec[0]], [-vec[1], vec[0], 0]]
-    )
-
 
 @jax.jit
 def quat2rotm(quat):
@@ -85,18 +53,23 @@ def quat2rotm(quat):
         ]
     )
 
+@jax.jit
+def quat_product(q1, q2):
+    """Quaternion multiplication (Hamilton product)"""
+    w1, x1, y1, z1 = q1
+    w2, x2, y2, z2 = q2
+    return jnp.array([
+        w1*w2 - x1*x2 - y1*y2 - z1*z2,
+        w1*x2 + x1*w2 + y1*z2 - z1*y2,
+        w1*y2 - x1*z2 + y1*w2 + z1*x2,
+        w1*z2 + x1*y2 - y1*x2 + z1*w2
+    ], dtype=jnp.float32)
 
 @jax.jit
-def quat_product(quat1, quat2):
-    vec1 = quat1[1:4]
-    vec2 = quat2[1:4]
-
-    return jnp.concatenate(
-        [
-            jnp.array([quat1[0] * quat2[0] - vec1.dot(vec2)]),
-            quat1[0] * vec2 + quat2[0] * vec1 + skew(vec1) @ vec2,
-        ]
-    )
+def quat_derivative(q, w):
+    """Quaternion derivative given quat and angular velocity"""
+    w_vec = jnp.concatenate([jnp.array([0.0]), w])
+    return quat_product(q, w_vec) * 0.5
 
 
 @jax.jit
@@ -135,18 +108,13 @@ def quat_to_euler_deg(q_array):
 
 
 def compute_attitude_error_deg(q_curr, q_tgt):
-    """
-    Computes the geodesic angular distance (in degrees) between two sets of quaternions.
-    Expects numpy arrays (CPU).
-    """
-    # q_err = q_tgt^(-1) * q_curr
     q_tgt_inv = np.copy(q_tgt)
     q_tgt_inv[:, 1:] *= -1  
     
-    # Quaternion multiplication
     w1, x1, y1, z1 = q_tgt_inv[:, 0], q_tgt_inv[:, 1], q_tgt_inv[:, 2], q_tgt_inv[:, 3]
     w2, x2, y2, z2 = q_curr[:, 0], q_curr[:, 1], q_curr[:, 2], q_curr[:, 3]
     
     w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-    return np.degrees(2.0 * np.arccos(np.clip(np.abs(w), 0.0, 1.0)))
-   
+    
+    return np.degrees(2.0 * np.arccos(np.clip(np.abs(w), -1.0, 1.0)))
+

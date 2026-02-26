@@ -83,14 +83,15 @@ class EnvParams(environment.EnvParams):
     beta: float = struct.field(pytree_node=False, default=0.0)              # beta tilting angle
     wmin: float = struct.field(pytree_node=False, default=16)               # min prop rotation speed in Hz
     wmax: float = struct.field(pytree_node=False, default=100)              # max prop rotation speed in Hz
-    
+    I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))
+
     # Uncertain parameters
     m: float = 2.91118 # implicit pytree_node=True
-    I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)      # inertia diagonal [kg*m^2]
-    com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.0, 0.0, 0.0]),)            # center of mass offset from geometric center [m]
-    alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                        # tilt_angle [deg] radial inclination angle of rotors
-    c_f: float = struct.field(pytree_node=True, default=12.0e-4)                                                           # squared propeller speed to thrust force coefficient [N/hz^2]
-    delay: float = struct.field(pytree_node=True, default=0.002)                                                           # actuation delay [s]
+    I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
+    com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
+    alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors
+    c_f: float = struct.field(pytree_node=True, default=12.0e-4)                                                                                # squared propeller speed to thrust force coefficient [N/hz^2]
+    delay: float = struct.field(pytree_node=True, default=0.002)                                                                                # actuation delay [s]
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
@@ -106,14 +107,7 @@ class TilthexV1(environment.Environment):
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 15  # len(jax.tree.leaves(self.default_params)): 1 (m) + 3 (I) + 3 (com_default) + 6(alpha) + 1 (c_f) + 1 (delay)
         self.target_pos = jnp.array([0.0, 0.0, 1.0]) 
-
-        # to be replaced with random sampling in reset
-        target_roll_deg = 0.0       # between -5 and 5 degrees
-        target_pitch_deg = 0.0      # between -5 and 5 degrees
-        target_yaw_deg = 0.0        # between -180 and 180 degrees
-
-        target_rpy = jnp.deg2rad(jnp.array([target_roll_deg, target_pitch_deg, target_yaw_deg]))
-        self.target_attitude = euler_to_quat(target_rpy)
+        self.target_attitude = euler_to_quat(jnp.deg2rad(jnp.array([0.0, 0.0, 0.0])))
 
         # hovering action
         efficiency = jnp.cos(jnp.deg2rad(self.default_params.alpha))
@@ -123,7 +117,7 @@ class TilthexV1(environment.Environment):
         self.params_min = [
             2.62,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([-0.02, -0.02, -0.04]),               # com offset 
+            jnp.array([-0.02, -0.02, 0.015]),               # com offset 
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
             0.002,                                          # delay between
@@ -131,7 +125,7 @@ class TilthexV1(environment.Environment):
         self.params_max = [
             3.20,                                           # mass +10%
             jnp.array([0.090, 0.093, 0.170]),               # inertia +10%
-            jnp.array([0.02, 0.02, 0.04]),                  # com offset 
+            jnp.array([0.02, 0.02, 0.035]),                 # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
             0.010,                                          # delay
@@ -219,17 +213,14 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        # pos_norm = jnp.linalg.norm(pos_diff)
-
-        reward_orientation = jnp.exp(-5.0 * attitude_error_rad)
+        #reward_orientation = jnp.exp(-5.0 * attitude_error_rad) male 
+        reward_orientation = -0.5 * attitude_error_rad + 1.0 * jnp.exp(-2.5 * attitude_error_rad) #bene
 
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.02,
             10.0, # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
         )
-
-        # reward_app = -1.0 * pos_norm + 10.0 * jnp.exp(-50.0 * pos_norm)
 
         thrust_normalized_input = action_rescaled / params.max_input
         thrust_normalized_input_last = env_state.last_u / params.max_input
@@ -306,11 +297,17 @@ class TilthexV1(environment.Environment):
         tau_body = GT @ u     # [Tx, Ty, Tz] 
 
         lin_acc_body = F_body / params.m
-        J_vec = params.I
-        gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
-        ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
-        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
+        ixy, ixz, iyz = params.I_off_diag
 
+        J_mat = jnp.array([
+            [params.I[0], ixy,         ixz        ],
+            [ixy,         params.I[1], iyz        ],
+            [ixz,         iyz,         params.I[2]]
+        ])
+
+        gyro_term = jnp.cross(ang_vel, J_mat @ ang_vel)
+        ang_acc_body = jnp.linalg.solve(J_mat, tau_body - gyro_term)
+        acc = jnp.hstack([lin_acc_body, ang_acc_body])
 
         gravity_vec = jnp.array([0.0, 0.0, params.g]) 
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
@@ -331,71 +328,121 @@ class TilthexV1(environment.Environment):
 
         return state_new
 
+    def reset_env(
+        self, key: jax.Array, params: EnvParams
+    ) -> tuple[jax.Array, EnvState]:
+        """Reset environment state by sampling theta, theta_dot.
+            key_pos: drone initial position
+            key_att: drone initial attitude
+            key_target_pos: target position
+            key_target_att: target attitude
+        """
+        key, key_pos, key_att, key_target_pos, key_target_att = jax.random.split(key, 5)
+        
+        pos = jax.random.uniform(
+            key_pos,
+            shape=(3,),
+            minval=params.env_min_limits,
+            maxval=params.env_max_limits,
+        )
+
+        # Force exploration on initial attitude for Sim-to-Sim robustness
+        min_rpy_rad = jnp.deg2rad(jnp.array([-2.0, -2.0, -45.0])) 
+        max_rpy_rad = jnp.deg2rad(jnp.array([2.0, 2.0, 45.0]))
+
+        att_rad = jax.random.uniform(
+            key_att,
+            shape=(3,),
+            minval=min_rpy_rad,
+            maxval=max_rpy_rad,
+        )
+        attitude = euler_to_quat(att_rad)
+
+        vel = jnp.zeros(3)
+        omega = jnp.zeros(3)
+        state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
+
+        target_pos = jax.lax.select(
+            params.is_testing,
+            self.target_pos,
+            jax.random.uniform(
+                key_target_pos,
+                shape=(3,),
+                minval=params.env_min_limits,
+                maxval=params.env_max_limits,
+            ),
+        )
+
+        min_target_rpy_rad = jnp.deg2rad(jnp.array([params.min_target_roll, params.min_target_pitch, params.min_target_yaw]))
+        max_target_rpy_rad = jnp.deg2rad(jnp.array([params.max_target_roll, params.max_target_pitch, params.max_target_yaw]))
+
+        target_att_rad_rnd = jax.random.uniform(
+            key_target_att,
+            shape=(3,),
+            minval=min_target_rpy_rad,
+            maxval=max_target_rpy_rad,
+        )
+        target_attitude_rnd = euler_to_quat(target_att_rad_rnd)
+
+        target_attitude = jax.lax.select(
+            params.is_testing,
+            self.target_attitude,   
+            target_attitude_rnd     
+        )
+
+        u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) 
+
+        env_state = EnvState(
+            state=state,
+            target_pos=target_pos,
+            target_attitude=target_attitude,
+            u_optimal_ref=u_optimal_ref,
+            last_u=self.hovering_action,
+            time=jnp.array(0, dtype=jnp.int32),
+        )
+        return self.get_obs(env_state), env_state
+
     # def reset_env(
     #     self, key: jax.Array, params: EnvParams
     # ) -> tuple[jax.Array, EnvState]:
-    #     """Reset environment state by sampling theta, theta_dot.
-    #         key_pos: drone initial position
-    #         key_att: drone initial attitude
-    #         key_target_pos: target position
-    #         key_target_att: target attitude
-    #     """
-    #     key, key_pos, key_att, key_target_pos, key_target_att = jax.random.split(key, 5)
-        
-    #     # Random drone initial position and attitude during training and tesing 
+    #     """Reset environment state by sampling theta, theta_dot."""
     #     pos = jax.random.uniform(
-    #         key_pos,
+    #         key,
     #         shape=(3,),
     #         minval=params.env_min_limits,
     #         maxval=params.env_max_limits,
     #     )
-
-    #     min_rpy = jnp.array([0.0, 0.0, 0.0]) 
-    #     max_rpy = jnp.array([0.0, 0.0, 0.0])
-
-    #     att_deg = jax.random.uniform(
-    #         key_att,
-    #         shape=(3,),
-    #         minval=min_rpy,
-    #         maxval=max_rpy,
-    #     )
-    #     attitude = euler_to_quat(jnp.deg2rad(att_deg))
-
-    #     vel = jnp.zeros(3)
-    #     omega = jnp.zeros(3)
+    #     attitude = jnp.array([1.0, 0.0, 0.0, 0.0])
+    #     vel = jnp.array([0.0, 0.0, 0.0])
+    #     omega = jnp.array([0.0, 0.0, 0.0])
     #     state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
-    #     # Random final target position and attitude during training, fixed during testing
+    #     key, key_pos, key_att = jax.random.split(key, 3)
     #     target_pos = jax.lax.select(
     #         params.is_testing,
     #         self.target_pos,
     #         jax.random.uniform(
-    #             key_target_pos,
+    #             key_pos,
     #             shape=(3,),
     #             minval=params.env_min_limits,
     #             maxval=params.env_max_limits,
     #         ),
     #     )
 
-    #     min_target_rpy = jnp.array([params.min_target_roll, params.min_target_pitch, params.min_target_yaw])
-    #     max_target_rpy = jnp.array([params.max_target_roll, params.max_target_pitch, params.max_target_yaw])
+    #     roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
+    #     pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
+    #     yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
 
-    #     target_att_deg_rnd = jax.random.uniform(
-    #         key_target_att,
-    #         shape=(3,),
-    #         minval=min_target_rpy,
-    #         maxval=max_target_rpy,
-    #     )
-    #     target_attitude_rnd = euler_to_quat(jnp.deg2rad(target_att_deg_rnd))
+    #     target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
+    #     target_attitude = euler_to_quat(target_rpy_rad)
 
     #     target_attitude = jax.lax.select(
     #         params.is_testing,
-    #         self.target_attitude,   
-    #         target_attitude_rnd     
+    #         self.target_attitude, 
+    #         target_attitude
     #     )
 
-    #     # Dynamically compute optimal hovering action for the target attitude to be used in reward calculation
-    #     u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) 
+    #     u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) # compute optimal hovering action for the target attitude
 
     #     env_state = EnvState(
     #         state=state,
@@ -406,58 +453,6 @@ class TilthexV1(environment.Environment):
     #         time=0,
     #     )
     #     return self.get_obs(env_state), env_state
-
-    def reset_env(
-        self, key: jax.Array, params: EnvParams
-    ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling theta, theta_dot."""
-        pos = jax.random.uniform(
-            key,
-            shape=(3,),
-            minval=params.env_min_limits,
-            maxval=params.env_max_limits,
-        )
-        attitude = jnp.array([1.0, 0.0, 0.0, 0.0])
-        vel = jnp.array([0.0, 0.0, 0.0])
-        omega = jnp.array([0.0, 0.0, 0.0])
-        state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
-
-        key, key_pos, key_att = jax.random.split(key, 3)
-        target_pos = jax.lax.select(
-            params.is_testing,
-            self.target_pos,
-            jax.random.uniform(
-                key_pos,
-                shape=(3,),
-                minval=params.env_min_limits,
-                maxval=params.env_max_limits,
-            ),
-        )
-
-        roll_target = jax.random.uniform(key_att, minval=params.min_target_roll, maxval=params.max_target_roll)
-        pitch_target = jax.random.uniform(key_att, minval=params.min_target_pitch, maxval=params.max_target_pitch)
-        yaw_target = jax.random.uniform(key_att, minval=params.min_target_yaw, maxval=params.max_target_yaw)
-
-        target_rpy_rad = jnp.deg2rad(jnp.array([roll_target, pitch_target, yaw_target]))
-        target_attitude = euler_to_quat(target_rpy_rad)
-
-        target_attitude = jax.lax.select(
-            params.is_testing,
-            self.target_attitude, 
-            target_attitude
-        )
-
-        u_optimal_ref = self.compute_optimal_u_for_target(target_attitude, params) # compute optimal hovering action for the target attitude
-
-        env_state = EnvState(
-            state=state,
-            target_pos=target_pos,
-            target_attitude=target_attitude, #self.target_attitude, --- IGNORE ---
-            u_optimal_ref=u_optimal_ref,
-            last_u=self.hovering_action,
-            time=0,
-        )
-        return self.get_obs(env_state), env_state
 
     def get_obs(self, env_state: EnvState) -> jax.Array:
         """Return a vector of observations from the state."""

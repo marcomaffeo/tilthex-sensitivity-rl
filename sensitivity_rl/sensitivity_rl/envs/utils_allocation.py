@@ -44,9 +44,9 @@ def axis_rot(axis, angle):
 def single_prop_geometry(i, n, l, alpha, beta, com):
     """Calculate the geometry for a single engine"""
     gamma = i * (2 * jnp.pi / n)
-    tilt_sign = jnp.power(-1.0, i)
+    tilt_sign = jax.lax.select(i % 2 == 0, 1.0, -1.0)
     vec_base = jnp.array([1.0, 0.0, 0.0])
-    p = l * (rot_z(gamma) @ vec_base) + com
+    p = l * (rot_z(gamma) @ vec_base) - com
     R = rot_z(gamma) @ rot_x(tilt_sign * alpha) @ rot_y(beta)
     
     return p, R
@@ -54,14 +54,13 @@ def single_prop_geometry(i, n, l, alpha, beta, com):
 def single_prop_matrix(R, p, i, c_f, c_t, sign):
     """Calculate the allocation matrix column for a single engine"""
     vec_z = jnp.array([0.0, 0.0, 1.0])
-    Riz = R @ vec_z  # Vettore (3,)
+    Riz = R @ vec_z
 
-    prop_dir = sign * jnp.power(-1.0, i)
+    prop_dir = sign * jax.lax.select(i % 2 == 0, 1.0, -1.0)
 
     col_f = Riz
-
     moment_thrust = jnp.cross(p, Riz)
-    moment_drag = (c_t / c_f) * prop_dir * Riz
+    moment_drag = -1.0 * (c_t / c_f) * prop_dir * Riz
     
     col_t = moment_thrust + moment_drag
 

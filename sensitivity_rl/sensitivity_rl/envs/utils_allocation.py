@@ -54,18 +54,14 @@ def single_prop_geometry(i, n, l, alpha, beta, com):
 def single_prop_matrix(R, p, i, c_f, c_t, sign):
     """Calculate the allocation matrix column for a single engine"""
     vec_z = jnp.array([0.0, 0.0, 1.0])
-    Riz = R @ vec_z
-
+    Riz = R @ vec_z 
     prop_dir = sign * jax.lax.select(i % 2 == 0, 1.0, -1.0)
-
     col_f = Riz
     moment_thrust = jnp.cross(p, Riz)
-    moment_drag = -1.0 * (c_t / c_f) * prop_dir * Riz
-    
+    moment_drag = -1.0 *(c_t / c_f) * prop_dir * Riz
     col_t = moment_thrust + moment_drag
 
     return col_f, col_t
-
 
 def GTMRP_props(n, l, alpha, beta, com):
     """

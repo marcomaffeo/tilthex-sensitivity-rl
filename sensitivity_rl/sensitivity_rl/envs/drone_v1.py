@@ -140,7 +140,7 @@ class DroneV1(environment.Environment):
 
         state = env_state.state
 
-        state_next = self.step_dynamics(key, state, input, params)
+        state_next = self.step_dynamics(key, env_state, input, params)
 
         pos_diff = state_next.pos - env_state.target_pos
 
@@ -179,6 +179,16 @@ class DroneV1(environment.Environment):
         )
 
     def step_dynamics(
+        self,
+        key: jax.Array,
+        env_state: EnvState,
+        action: int | float | jax.Array,
+        params: EnvParams,
+    ) -> ModelState:
+        """Step dynamics extracting state from env_state."""
+        return self._step_dynamics(key, env_state.state, action, params)
+
+    def _step_dynamics(
         self,
         key: jax.Array,
         state: ModelState,

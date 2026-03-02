@@ -158,8 +158,8 @@ class DroneV3(environment.Environment):
 
         state = env_state.state
 
-        state_next = self.step_dynamics_delay(
-            key, state, action_rescaled, env_state.last_u, params
+        state_next = self.step_dynamics(
+            key, env_state, action_rescaled, params
         )
 
         pos_diff = state_next.pos - env_state.target_pos
@@ -228,27 +228,29 @@ class DroneV3(environment.Environment):
             {"discount": self.discount(env_state, params)},
         )
 
-    def step_dynamics_delay(
+    def step_dynamics(
         self,
         key: jax.Array,
-        state: ModelState,
+        env_state: EnvState,
         action: int | float | jax.Array,
-        last_action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
         """Step dynamics with input delay."""
+
+        state = env_state.state
+        last_action = env_state.last_u
 
         dt1 = jnp.clip(params.delay, 0.0, params.dt)
         dt2 = params.dt - dt1
 
         params = params.replace(dt=dt1)
-        state_intermediate = self.step_dynamics(key, state, last_action, params)
+        state_intermediate = self._step_dynamics(key, state, last_action, params)
         params = params.replace(dt=dt2)
-        state_final = self.step_dynamics(key, state_intermediate, action, params)
+        state_final = self._step_dynamics(key, state_intermediate, action, params)
 
         return state_final
 
-    def step_dynamics(
+    def _step_dynamics(
         self,
         key: jax.Array,
         state: ModelState,

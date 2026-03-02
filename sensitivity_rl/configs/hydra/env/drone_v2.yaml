@@ -1,6 +1,3 @@
-# Configuration for Drone V2 environment
-defaults:
-  - config
 
 # Environment settings
 ENV_NAME: drone_v2

@@ -353,10 +353,21 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
                 env_params_samples[sample_idx],
             )
 
+            sample_params = env_params_samples[sample_idx]
+            default_dt = getattr(env.default_params, "dt", 1.0)
+            if isinstance(sample_params, dict):
+                dt_val = sample_params.get("dt", default_dt)
+            else:
+                dt_val = getattr(sample_params, "dt", default_dt)
+            try:
+                dt_val = float(np.asarray(dt_val))
+            except Exception:
+                dt_val = float(default_dt)
             # Collect series for plotting
             series_entry = {"actions": actions}
             series_entry.update(state_flat)
             series_entry["eval_metrics"] = eval_metrics_flat
+            series_entry["dt"] = dt_val
             all_series.append(series_entry)
 
             suffix = (
@@ -454,6 +465,8 @@ def main() -> None:
             print(f"[rollouts] Skipping missing run directory: {run_dir}")
             continue
         try:
+            # Clear JAX caches to avoid pytree metadata conflicts between runs
+            jax.clear_caches()
             run_rollouts_for_run(run_dir, rcfg)
         except Exception as exc:  # pragma: no cover - guardrail for CLI use
             print(f"[rollouts] Error processing {run_dir}: {exc}")

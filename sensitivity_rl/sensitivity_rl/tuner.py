@@ -87,11 +87,11 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["ppo", "sppo_aug", "sppo"]
+METHODS = ["ppo", "sppo_grad"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["drone_v2"]
+ENVIRONMENTS = ["drone_v3"]
 
 # Parameter sweeps - can be method-specific or shared across all methods
 # Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
@@ -102,7 +102,7 @@ ENVIRONMENTS = ["drone_v2"]
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
     "SEED": [0, 1, 2, 3],
-    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
+    # "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     # "GAMMA": [0.98],
@@ -110,19 +110,14 @@ SWEEP_PARAMS = {
     # "CLIP_EPS": [0.2],
     # "UPDATE_EPOCHS": [4],
     # "ENT_COEF": [0.001],
-    "DOMAIN_RANDOMIZATION": [True, False],
-    "TOTAL_TIMESTEPS": [5_000_000],
+    # "DOMAIN_RANDOMIZATION": [True, False],
+    # "TOTAL_TIMESTEPS": [5_000_000],
 }
 
 # Method-specific parameter sweeps (optional)
 # If specified, each method uses its own sweep parameters
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
-    "sppo_aug": {
-        "SEED": [0, 1, 2],
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
-        "DOMAIN_RANDOMIZATION": [True, False],
-    },
     "ppo": {
         "DOMAIN_RANDOMIZATION": [True, False],
     },
@@ -132,10 +127,9 @@ METHOD_SPECIFIC_SWEEPS = {
     "cppo": {
         "DOMAIN_RANDOMIZATION": [False],
     },
-    "sppo": {
-        "SEED": [0, 1, 2],
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.2, 0.3, 0.4],
-        "DOMAIN_RANDOMIZATION": [True, False],
+    "sppo_grad": {
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
+        "DOMAIN_RANDOMIZATION": [False],
     },
     # "sac": {
     #     "SEED": [0, 1],
@@ -151,9 +145,7 @@ USE_SHARED_PARAMS_AS_FALLBACK = False
 # Maps script names to config group names
 METHOD_CONFIG_NAMES = {
     "ppo": "ppo",
-    "sppo_aug": "ppo",
-    "sppo-vs-estimation": "ppo",
-    "sppo-vs-estimation-aug": "ppo",
+    "sppo_grad": "ppo",
     "rappo": "rappo",
     "cppo": "cppo",
     "sac-estimation": "sac",
@@ -249,12 +241,13 @@ def run_experiment_job(
     config = normalize_config(config_dict, method)
 
     writer = SummaryWriter(str(run_dir))
-    train_fn = make_train(config, spec, writer)
+    train_fn = make_train(config, spec, writer, rng)
     train_jit = jax.jit(train_fn)
     final_state = train_jit(rng)
 
     params = final_state.train_state.params
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(params))
+    pure_params = params.to_pure_dict()
+    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(pure_params))
 
     with open(run_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)

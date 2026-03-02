@@ -247,7 +247,7 @@ def run_experiment_job(
 
     params = final_state.train_state.params
     pure_params = params.to_pure_dict()
-    (run_dir / "params.msgpack").write_bytes(serialization.to_bytes(pure_params))
+    (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(pure_params))
 
     with open(run_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)

@@ -70,7 +70,7 @@ class EnvParams(environment.EnvParams):
     com_pos: jax.Array = struct.field(
         pytree_node=True, default_factory=lambda: jnp.array([0.0, 0.0, 0.0])
     )
-    delay: float = struct.field(pytree_node=True, default=0.002)
+    delay: float = 0.002
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)

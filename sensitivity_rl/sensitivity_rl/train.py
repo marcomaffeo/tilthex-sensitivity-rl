@@ -56,8 +56,15 @@ jax.config.update(
 )
 
 
+# Module-level mutable state for wall-clock timing inside jax.debug.callback.
+# jax.debug.callback returns None, so timing cannot be threaded through JAX
+# scans.  Instead we track it purely on the Python/host side.
+_timing_state: dict = {"last_time": None}
+
+
 def log_metrics(
-    writer, losses, metric, targets, traj_batch_value, timestep, extra_losses=None
+    writer, losses, metric, targets, traj_batch_value, timestep,
+    num_steps, num_envs, extra_losses=None,
 ):
     """Create logging callback for training metrics."""
     targets_var = jnp.var(targets)
@@ -73,8 +80,6 @@ def log_metrics(
         episodic_length = metric["returned_episode_lengths"][
             metric["returned_episode"]
         ].mean()
-        sensitivity_state_max = metric["sensitivity_state"].max(axis=0).mean()
-        sensitivity_state_mean = metric["sensitivity_state"].mean()
 
         writer.add_scalar("train/total_loss", float(losses["total"]), int(timestep))
         writer.add_scalar("train/value_loss", float(losses["value"]), int(timestep))
@@ -89,14 +94,21 @@ def log_metrics(
         writer.add_scalar(
             "returns/episodic_length", float(episodic_length), int(timestep)
         )
-        writer.add_scalar(
-            "returns/sensitivity_state_max", float(sensitivity_state_max), int(timestep)
-        )
-        writer.add_scalar(
-            "returns/sensitivity_state_mean",
-            float(sensitivity_state_mean),
-            int(timestep),
-        )
+
+        # Sensitivity metrics (only present when sensitivity wrapper is active)
+        if "sensitivity_state" in metric:
+            sensitivity_state_max = metric["sensitivity_state"].max(axis=0).mean()
+            sensitivity_state_mean = metric["sensitivity_state"].mean()
+            # print(f"  sensitivity: max={float(sensitivity_state_max):.4f}, mean={float(sensitivity_state_mean):.4f}")
+            writer.add_scalar(
+                "returns/sensitivity_state_max", float(sensitivity_state_max), int(timestep)
+            )
+            writer.add_scalar(
+                "returns/sensitivity_state_mean",
+                float(sensitivity_state_mean),
+                int(timestep),
+            )
+
         writer.add_scalar(
             "train/old_approx_kl", float(losses["old_approx_kl"]), int(timestep)
         )
@@ -105,6 +117,19 @@ def log_metrics(
         writer.add_scalar(
             "train/explained_variance", float(explained_var), int(timestep)
         )
+
+        # Wall-clock timing via Python-side mutable state
+        now = time.time()
+        if _timing_state["last_time"] is not None:
+            elapsed = now - _timing_state["last_time"]
+            steps_per_second = (num_steps * num_envs) / elapsed
+            print(
+                f"step={int(timestep)}  {elapsed:.2f}s  ({steps_per_second:.0f} steps/s)"
+            )
+            writer.add_scalar("perf/steps_per_second", steps_per_second, int(timestep))
+        else:
+            print(f"step={int(timestep)}  (first update, timing starts now)")
+        _timing_state["last_time"] = now
 
         if extra_losses:
             for name, val in extra_losses.items():
@@ -170,12 +195,15 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
     collect_fn = spec.make_collect_fn(config, env, env_params, networks)
     update_fn = spec.make_update_fn(config, loss_fn, shuffle_batch, networks)
 
+    
+    total_steps = config["TOTAL_TIMESTEPS"]
+
     def train(rng):
         # INIT RUNNER STATE (algorithm handles state structure and RNG splitting)
         runner_state = spec.init_runner_state(config, env, env_params, networks, rng)
 
         # TRAIN LOOP
-        def _update_step(runner_state, unused):
+        def _update_step(runner_state, _unused):
             if config.get("SENSITIVITY", False):
                 env.update_network_params(runner_state.train_state.params)
 
@@ -217,7 +245,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
             if config.get("DEBUG", False):
                 debug_callback(config, metric)
 
-            # Logging
+            # Logging (timing tracked via Python-side _timing_state)
             current_timestep = metric["timestep"].mean() * config["NUM_ENVS"]
             log_metrics(
                 writer,
@@ -226,7 +254,9 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
                 gae_results["targets"],
                 traj_batch.value,
                 current_timestep,
-                extra_losses,
+                num_steps=config["NUM_STEPS"],
+                num_envs=config["NUM_ENVS"],
+                extra_losses=extra_losses,
             )
 
             # Rebuild runner state with updated train_state(s)
@@ -237,7 +267,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
                 rng=update_state.rng,
                 extras={**collect_state.extras, **update_state.extras},
             )
-            return runner_state, metric
+            return runner_state, None
 
         # Run training loop
         runner_state, _ = jax.lax.scan(
@@ -332,11 +362,7 @@ def main(cfg: DictConfig):
     # Log training speed (total time includes compilation)
     total_time = end_time - start_time
     total_steps = config["TOTAL_TIMESTEPS"]
-    steps_per_second = total_steps / total_time
-    print(
-        f"Training completed in {total_time:.2f}s ({steps_per_second:.2f} steps/second)"
-    )
-    writer.add_scalar("perf/steps_per_second", steps_per_second, total_steps)
+    
     writer.add_scalar("perf/total_time_seconds", total_time, total_steps)
 
     # Save params

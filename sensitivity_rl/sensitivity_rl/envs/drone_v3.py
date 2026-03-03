@@ -70,7 +70,7 @@ class EnvParams(environment.EnvParams):
     com_pos: jax.Array = struct.field(
         pytree_node=True, default_factory=lambda: jnp.array([0.0, 0.0, 0.0])
     )
-    actuator_tau: float = 0.05  # Actuator time constant [s] (low-pass filter)
+    actuator_tau: float = 0.04  # Actuator time constant [s] (low-pass filter)
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
@@ -92,9 +92,6 @@ class DroneV3(environment.Environment):
             [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]
         )
 
-        self.hovering_input_normalized = jnp.array(
-            [self.default_params.m * self.default_params.g / self.default_params.max_input[0], 0.0, 0.0, 0.0]
-        )
 
         self.params_min = [
             1.0,  # mass
@@ -162,10 +159,10 @@ class DroneV3(environment.Environment):
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
 
-        reward_app = jax.lax.select(
-            pos_diff_norm < 0.02,
+        reward_app = - 1.0 * pos_diff_norm + jax.lax.select(
+            pos_diff_norm < 0.05,
             10.0,  # reward when close to target
-            - 1.0 * pos_diff_norm,  # distance improvement reward
+            0.0,  # distance improvement reward
         )
 
         # Compute yaw error from quaternion
@@ -175,21 +172,19 @@ class DroneV3(environment.Environment):
         yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
                                          jnp.cos(current_yaw - env_state.target_yaw)))
 
-        reward_yaw = jax.lax.select(
+        reward_yaw = - 1.0 * yaw_error + jax.lax.select(
             yaw_error < 0.05,
             1.0,  # reward when close to target
-            - 1.0 * yaw_error,
+            0.0,  # no reward otherwise
         )
 
-        thrust_normalized_input = u_actual.at[0].set(u_actual[0] / (params.max_input[0]))
-        thrust_normalized_input_last = env_state.last_u.at[0].set(env_state.last_u[0] / (params.max_input[0]))
 
         reward = (
             # -0.01 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_yaw
-            - 0.01 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_input_normalized)))
-            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - env_state.last_u/params.max_input[0]))
+            - 2.0 * (jnp.linalg.norm((action_rescaled - self.hovering_input)/params.max_input))
+            - 1.0 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
         )
 
         reward = reward.squeeze()

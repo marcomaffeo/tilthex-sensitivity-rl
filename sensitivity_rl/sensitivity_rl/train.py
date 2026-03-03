@@ -22,12 +22,12 @@ from pathlib import Path
 from datetime import datetime
 
 # Environment setup before JAX import
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=0 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
+    "--xla_gpu_autotune_level=1 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
 )
-os.environ["JAX_PLATFORMS"] = "cuda,cpu"
+# os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax
 import jax.numpy as jnp
@@ -47,14 +47,14 @@ from utils import (
 
 
 # JAX compilation cache setup
-jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
-jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
-jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
-jax.config.update(
-    "jax_persistent_cache_enable_xla_caches",
-    "xla_gpu_per_fusion_autotune_cache_dir",
-)
-
+# jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
+# jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
+# jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)
+# jax.config.update(
+#     "jax_persistent_cache_enable_xla_caches",
+#     "xla_gpu_per_fusion_autotune_cache_dir"
+# )
+# jax.clear_caches()
 
 # Module-level mutable state for wall-clock timing inside jax.debug.callback.
 # jax.debug.callback returns None, so timing cannot be threaded through JAX

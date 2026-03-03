@@ -1,6 +1,7 @@
 # Configuration for Drone V3 environment
 defaults:
   - config
+  - _self_
 
 # Environment settings
 ENV_NAME: drone_v3

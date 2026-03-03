@@ -1,8 +1,0 @@
-# Base configuration
-defaults:
-  - method: ppo
-  - env: drone_v1
-  - _self_
-
-# Random seed
-SEED: 0

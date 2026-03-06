@@ -47,13 +47,11 @@ class EnvState(environment.EnvState):
 @struct.dataclass
 class EnvParams(environment.EnvParams):
     min_action: jax.Array = struct.field(
-        pytree_node=False,
-        default_factory=lambda: jnp.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
+        pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
     )
     max_action: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     )
-
     min_input: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([0.3072, 0.3072, 0.3072, 0.3072, 0.3072, 0.3072]), # F = c_f*wmin^2
     )
@@ -83,10 +81,10 @@ class EnvParams(environment.EnvParams):
     beta: float = struct.field(pytree_node=False, default=0.0)              # beta tilting angle
     wmin: float = struct.field(pytree_node=False, default=16)               # min prop rotation speed in Hz
     wmax: float = struct.field(pytree_node=False, default=100)              # max prop rotation speed in Hz
-    I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))
-
+    h : float = struct.field(pytree_node=False, default=0.01334)            # height of the propellers above the body frame
+    
     # Uncertain parameters
-    m: float = 2.91118 # implicit pytree_node=True
+    m: float = 2.91118
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors
@@ -117,7 +115,7 @@ class TilthexV1(environment.Environment):
         self.params_min = [
             2.62,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([-0.02, -0.02, 0.015]),               # com offset 
+            jnp.array([-0.02, -0.02, -0.04]),               # com offset 
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
             0.002,                                          # delay between
@@ -125,11 +123,12 @@ class TilthexV1(environment.Environment):
         self.params_max = [
             3.20,                                           # mass +10%
             jnp.array([0.090, 0.093, 0.170]),               # inertia +10%
-            jnp.array([0.02, 0.02, 0.035]),                 # com offset 
+            jnp.array([0.02, 0.02, 0.04]),                  # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
             0.010,                                          # delay
         ]
+
         super().__init__()
 
     @property
@@ -159,7 +158,7 @@ class TilthexV1(environment.Environment):
         W_des = jnp.hstack([F_body_req, jnp.array([0.0, 0.0, 0.0])])
         
         GF, GT = compute_allocation(
-            params.n, params.arm_length, params.alpha, 
+            params.n, params.arm_length, params.h, params.alpha, 
             params.beta, params.c_f, params.c_tau, params.com_default
         )
         M = jnp.vstack([GF, GT])
@@ -213,21 +212,13 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        # reward_orientation = jax.lax.select(
-        #     attitude_error_rad < 0.1,
-        #     10.0,
-        #     1.0 * (-attitude_error_rad),
-        # )
+        reward_orientation = jnp.exp(-50.0 * attitude_error_rad) #5.0 ppo
 
-        reward_orientation = jnp.exp(-3.0 * attitude_error_rad)
-
-        # reward_app = jax.lax.select(
-        #     jnp.linalg.norm(pos_diff) < 0.01,
-        #     10.0, 
-        #     1.0 * (-jnp.linalg.norm(pos_diff)), 
-        # )
-
-        reward_app = jnp.exp(-1.0 * jnp.linalg.norm(pos_diff))
+        reward_app = jax.lax.select(
+            jnp.linalg.norm(pos_diff) < 0.05,   #0.02 ppo
+            10.0,                               # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
+        )
 
         thrust_normalized_input = action_rescaled / params.max_input
         thrust_normalized_input_last = env_state.last_u / params.max_input
@@ -236,7 +227,7 @@ class TilthexV1(environment.Environment):
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_orientation
-            - 0.001 * (jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2)
+            - 0.001 * jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
@@ -298,23 +289,17 @@ class TilthexV1(environment.Environment):
         
         orientation_mat = quat2rotm(quat)
         
-        GF, GT = compute_allocation(6, params.arm_length, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
+        GF, GT = compute_allocation(6, params.arm_length, params.h, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
         
         F_body = GF @ u       # [Fx, Fy, Fz] 
         tau_body = GT @ u     # [Tx, Ty, Tz] 
 
         lin_acc_body = F_body / params.m
+        J_vec = params.I
+        gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
+        ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
+        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
 
-        ixy, ixz, iyz = params.I_off_diag
-        J_mat = jnp.array([
-            [params.I[0], ixy,         ixz        ],
-            [ixy,         params.I[1], iyz        ],
-            [ixz,         iyz,         params.I[2]]
-        ])
-
-        gyro_term = jnp.cross(ang_vel, J_mat @ ang_vel)
-        ang_acc_body = jnp.linalg.solve(J_mat, tau_body - gyro_term)
-        acc = jnp.hstack([lin_acc_body, ang_acc_body])
 
         gravity_vec = jnp.array([0.0, 0.0, params.g]) 
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
@@ -365,7 +350,7 @@ class TilthexV1(environment.Environment):
         attitude = euler_to_quat(att_rad)
 
         vel = jax.random.uniform(key_vel, (3,), minval=-0.1, maxval=0.1)
-        omega = jax.random.uniform(key_omega, (3,), minval=-0.1, maxval=0.1)
+        omega = jax.random.uniform(key_omega, (3,), minval=-0.02, maxval=0.02)
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
         target_pos = jax.lax.select(

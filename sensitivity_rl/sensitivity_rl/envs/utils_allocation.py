@@ -41,12 +41,13 @@ def axis_rot(axis, angle):
         return rot_z(angle)
     return jnp.eye(3)
 
-def single_prop_geometry(i, n, l, alpha, beta, com):
-    """Calculate the geometry for a single engine"""
+def single_prop_geometry(i, n, l, h, alpha, beta, com):
     gamma = i * (2 * jnp.pi / n)
-    tilt_sign = jax.lax.select(i % 2 == 0, 1.0, -1.0)
+    tilt_sign = jnp.power(-1.0, i)
     vec_base = jnp.array([1.0, 0.0, 0.0])
-    p = l * (rot_z(gamma) @ vec_base) - com
+    
+    p_local = l * (rot_z(gamma) @ vec_base) + jnp.array([0.0, 0.0, h])
+    p = p_local - com
     R = rot_z(gamma) @ rot_x(tilt_sign * alpha) @ rot_y(beta)
     
     return p, R
@@ -54,33 +55,39 @@ def single_prop_geometry(i, n, l, alpha, beta, com):
 def single_prop_matrix(R, p, i, c_f, c_t, sign):
     """Calculate the allocation matrix column for a single engine"""
     vec_z = jnp.array([0.0, 0.0, 1.0])
-    Riz = R @ vec_z 
-    prop_dir = sign * jax.lax.select(i % 2 == 0, 1.0, -1.0)
+    Riz = R @ vec_z  # Vettore (3,)
+
+    prop_dir = sign * jnp.power(-1.0, i)
+
     col_f = Riz
+
     moment_thrust = jnp.cross(p, Riz)
-    moment_drag = -1.0 *(c_t / c_f) * prop_dir * Riz
+    moment_drag = (c_t / c_f) * prop_dir * Riz
+    
     col_t = moment_thrust + moment_drag
 
     return col_f, col_t
 
-def GTMRP_props(n, l, alpha, beta, com):
+    
+def GTMRP_props(n, l, h, alpha, beta, com):
     """
     Compute position and orientation of propellers in a Generically Tilted Multi-Rotor Platform.
 
     Inputs:
         n       Number of propellers
         l       Distance from propellers to CoM
+        h       Height of the propellers above the body frame
         alpha   Alpha tilting angles in absolute value (rad)
         beta    Beta tilting angles in absolute value (rad)
-        com     Position of the geometrical center of props wrt CoM
+        com     Position of the geometrical center of props wrt CoM       
 
     Outputs:
         p_all       list of n positions (in body frame)
         R_all       list of n rotation matrices (in body frame)
     """
     indices = jnp.arange(n)
-    p_all, R_all = jax.vmap(single_prop_geometry, in_axes=(0, None, None, 0, None, None))(
-        indices, n, l, alpha, beta, com
+    p_all, R_all = jax.vmap(single_prop_geometry, in_axes=(0, None, None, None, 0, None, None))(
+        indices, n, l, h, alpha, beta, com
     )
     return p_all, R_all
 
@@ -113,14 +120,14 @@ def GTMRP_matrix(R_all, p_all, c_f, c_t, sign=1):
     return G_f, G_t
 
 @partial(jax.jit, static_argnums=(0,)) 
-def compute_allocation(n, arm_length, alpha_deg, beta_deg, c_f, c_t, com, sign=1):
+def compute_allocation(n, arm_length, h, alpha_deg, beta_deg, c_f, c_t, com, sign=1):
     
     alpha = jnp.deg2rad(alpha_deg)
     beta = jnp.deg2rad(beta_deg)
-
     com_array = jnp.array(com)
-
-    p, R = GTMRP_props(n, arm_length, alpha, beta, com_array)
+    h = jnp.array(h)
+    
+    p, R = GTMRP_props(n, arm_length, h, alpha, beta, com_array)
 
     GF, GT = GTMRP_matrix(R, p, c_f, c_t, sign)
     

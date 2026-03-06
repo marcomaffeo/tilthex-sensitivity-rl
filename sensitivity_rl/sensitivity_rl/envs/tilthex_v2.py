@@ -75,7 +75,7 @@ class EnvParams(environment.EnvParams):
     min_target_pitch: float = struct.field(pytree_node=False, default=-5.0)
     min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
 
-    dt: float = struct.field(pytree_node=False, default=0.02)
+    dt: float = struct.field(pytree_node=False, default=0.01)
     g: float = struct.field(pytree_node=False, default=9.81)
     n: float = struct.field(pytree_node=False, default=6)                   # number of rotors
     arm_length : float = struct.field(pytree_node=False, default=0.39)      # length of single arm
@@ -93,7 +93,7 @@ class EnvParams(environment.EnvParams):
     c_f: float = struct.field(pytree_node=True, default=12.0e-4)                                                   # squared propeller speed to thrust force coefficient [N/hz^2]
     delay: float = struct.field(pytree_node=True, default=0.002)                                                    # actuation delay [s]
 
-    max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
+    max_steps_in_episode: int = struct.field(pytree_node=False, default=400)
     is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
@@ -120,7 +120,7 @@ class TilthexV2(environment.Environment):
             jnp.array([-0.02, -0.02, 0.015]),               # com offset 
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
-            0.002,                                          # delay between
+            0.001,                                          # delay between
         ]
         self.params_max = [
             3.20,                                           # mass +10%
@@ -128,7 +128,7 @@ class TilthexV2(environment.Environment):
             jnp.array([0.02, 0.02, 0.035]),                 # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
-            0.010,                                          # delay
+            0.015,                                          # delay
         ]
         super().__init__()
 
@@ -229,10 +229,16 @@ class TilthexV2(environment.Environment):
 
         e_R_vector, e_R_mag = self.compute_attitude_error_matrix(state_next.attitude, env_state.target_attitude)
 
-        reward_orientation = jnp.exp(-2.0 * e_R_mag)
+        # reward_orientation = 1.0*jnp.exp(-1.0 * e_R_mag)
+
+        reward_orientation = jax.lax.select(
+            e_R_mag < 0.05,
+            1.0,
+            1.0 * (-e_R_mag),
+        )
         
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.01,
+            jnp.linalg.norm(pos_diff) < 0.02,
             10.0,                                # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)),  # distance improvement reward
         )
@@ -244,7 +250,7 @@ class TilthexV2(environment.Environment):
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_orientation
-            - 0.001 * (jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2)
+            - 0.01 * (jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2)
             - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 

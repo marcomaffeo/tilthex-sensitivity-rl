@@ -128,7 +128,7 @@ class TilthexV0(environment.Environment):
             jnp.array([0.02, 0.02, 0.035]),                 # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
-            0.010,                                          # delay
+            0.020,                                          # delay
         ]
         super().__init__()
 
@@ -233,29 +233,29 @@ class TilthexV0(environment.Environment):
         err_pitch = jnp.abs(jnp.arctan2(jnp.sin(current_pitch - target_pitch), jnp.cos(current_pitch - target_pitch)))
         err_yaw = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - target_yaw), jnp.cos(current_yaw - target_yaw)))
 
-        # r_roll = jax.lax.select(
-        #     err_roll < 0.05, 
-        #     1.0, 
-        #     -1.0 * err_roll)
+        r_roll = jax.lax.select(
+            err_roll < 0.05, 
+            1.0, 
+            -1.0 * err_roll)
 
-        # r_pitch = jax.lax.select(
-        #     err_pitch < 0.05,
-        #     1.0,
-        #     -1.0 * err_pitch)
+        r_pitch = jax.lax.select(
+            err_pitch < 0.05,
+            1.0,
+            -1.0 * err_pitch)
 
-        # r_yaw = jax.lax.select(
-        #     err_yaw < 0.05,
-        #     1.0,
-        #     -1.0 * err_yaw)
+        r_yaw = jax.lax.select(
+            err_yaw < 0.05,
+            1.0,
+            -1.0 * err_yaw)
 
-        r_roll = jnp.exp(-5.0 * err_roll)        
-        r_pitch = jnp.exp(-5.0 * err_pitch)        
-        r_yaw = jnp.exp(-5.0 * err_yaw)
+        # r_roll = jnp.exp(-1.0 * err_roll)        
+        # r_pitch = jnp.exp(-1.0 * err_pitch)        
+        # r_yaw = jnp.exp(-1.0 * err_yaw)
 
         reward_orientation = (r_roll + r_pitch + r_yaw) / 3.0
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.02,
+            jnp.linalg.norm(pos_diff) < 0.05,
             10.0, # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
         )

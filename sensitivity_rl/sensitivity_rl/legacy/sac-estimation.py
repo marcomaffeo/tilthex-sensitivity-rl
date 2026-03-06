@@ -74,6 +74,15 @@ def parse_args():
     )
     return parser.parse_args()
 
+def get_inner_field(state, field_name):
+    """Walk the wrapper state chain to find a field by name."""
+    while not hasattr(state, field_name) or field_name == "env_state":
+        if not hasattr(state, "env_state"):
+            raise AttributeError(
+                f"Field '{field_name}' not found in wrapper state chain"
+            )
+        state = state.env_state
+    return getattr(state, field_name)
 
 jax.config.update("jax_compilation_cache_dir", "/tmp/jax_cache")
 jax.config.update("jax_persistent_cache_min_entry_size_bytes", -1)
@@ -534,11 +543,12 @@ def make_train(config, writer: SummaryWriter):
             # STEP ENV
             rng, _rng = jax.random.split(rng)
             rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-            log_norm = env_state.sensitivity.log_norm_old
-            F_sens_x = env_state.sensitivity.F_sens_x
-            df_du = env_state.sensitivity.df_du
-            dobs_dx = env_state.sensitivity.dobs_dx
-            sens = env_state.sensitivity.state
+            prev_sensitivity = get_inner_field(env_state, "sensitivity")
+            log_norm = prev_sensitivity.log_norm_old
+            F_sens_x = prev_sensitivity.F_sens_x
+            df_du = prev_sensitivity.df_du
+            dobs_dx = prev_sensitivity.dobs_dx
+            sens = prev_sensitivity.state
             obsv, env_state, reward, done, info = env.step(
                 rng_step, env_state, action, env_params
             )
@@ -556,21 +566,22 @@ def make_train(config, writer: SummaryWriter):
             rb = add_batch_to_buffer(rb, transition)
             
             # Add sensitivity data to the dedicated sensitivity buffer
+            next_sensitivity = get_inner_field(env_state, "sensitivity")
             sens_transition = ReplaySensOnlyTransition(
                 done,
                 action,
                 last_obs,
                 obsv,
                 sens,
-                env_state.sensitivity.state,
+                next_sensitivity.state,
                 F_sens_x,
-                env_state.sensitivity.F_sens_x,
+                next_sensitivity.F_sens_x,
                 df_du,
-                env_state.sensitivity.df_du,
+                next_sensitivity.df_du,
                 dobs_dx,
-                env_state.sensitivity.dobs_dx,
-                env_state.sensitivity.log_norm_old,
-                env_state.sensitivity.log_norm,
+                next_sensitivity.dobs_dx,
+                next_sensitivity.log_norm_old,
+                next_sensitivity.log_norm,
             )
             rb_sens = add_batch_to_buffer(rb_sens, sens_transition)
 

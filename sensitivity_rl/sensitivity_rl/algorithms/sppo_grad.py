@@ -1,20 +1,34 @@
-"""SPPO with GRU-based ActorCritic (single network with hidden state for critic)."""
+"""SPPO-grad: SPPO with gradient-based sensitivity regularisation.
+
+Extends SPPO by adding a differentiable sensitivity loss to the PPO objective.
+The environment wrapper already computes the sensitivity norm and folds it into
+the reward, but that gradient signal only reaches the policy indirectly through
+advantage estimation.  Here we add a direct loss term that recomputes the
+sensitivity update using the *current* policy Jacobian dμ/dobs (differentiable)
+while keeping the environment Jacobians (df/dx, df/du, df/dp, dobs/dx) as
+stop-gradiented constants collected during rollouts.
+
+Shared infrastructure (GAE, network init, runner state) is reused from
+``sppo``; only ``wrap_env`` (with ``expose_jacobians=True``), the loss
+function, and the collect function are overridden.
+"""
 
 import jax
 import jax.numpy as jnp
-from flax.training.train_state import TrainState
+from flax import nnx
 
 from .base import AlgorithmSpec
-from .ppo import make_update_fn  # Reuse PPO's standard update logic
-from algorithms.common import gae_standard
+from .ppo import make_update_fn
+from .sppo import (
+    calculate_gae,
+    init_networks,
+    init_runner_state,
+)
 from buffers import Transition, RunnerState
-from net_utils import create_optimizer, make_linear_schedule
-from networks import ActorCriticGRU
 from envs.wrappers import (
     GymnaxWrapper,
     ClipAction,
     SensitivityWrapper,
-    AddSensitivityToReward,
     ComputeSensitivityReward,
     DomainRandomizationWrapper,
     MujocoSensitivityWrapper,
@@ -25,21 +39,26 @@ from envs.wrappers import (
 )
 
 
+# ---------------------------------------------------------------------------
+# Environment wrapping  (expose_jacobians=True for the grad loss)
+# ---------------------------------------------------------------------------
+
+_JAC_KEYS = ("sens_bias", "df_du", "dobs_dx_sens")
+
 def wrap_env(env, config):
-    """Apply SPPO-specific environment wrappers."""
+    """Same wrapper stack as SPPO but with Jacobians exposed in info."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
-    
+
     if env.type == "mujoco":
-        env = MujocoSensitivityWrapper(env)
+        env = MujocoSensitivityWrapper(env, expose_jacobians=True)
     else:
-        env = SensitivityWrapper(env)
-    # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
-    env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
+        env = SensitivityWrapper(env, expose_jacobians=True)
+    env = ComputeSensitivityReward(env)
     if config.get("DOMAIN_RANDOMIZATION", False):
         env = DomainRandomizationWrapper(env, env.default_params)
     else:
-        env = ResetEnvWrapper(env)  # Don't remove
+        env = ResetEnvWrapper(env)
     env = LogWrapper(env)
     env = VecEnv(env)
     if config["NORMALIZE_ENV"]:
@@ -48,98 +67,116 @@ def wrap_env(env, config):
     return env
 
 
-def make_loss_fn(config, network):
-    """Create SPPO loss function with GRU-based ActorCritic.
-    
-    Args:
-        network: ActorCriticGRU network instance
-    
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+# ---------------------------------------------------------------------------
+# Differentiable sensitivity loss
+# ---------------------------------------------------------------------------
+
+def _sensitivity_loss(graphdef, params, obs, sens_bias, df_du, dobs_dx_S):
+    """Recompute the sensitivity norm differentiably through the policy.
+
+    All environment Jacobians are treated as constants; only the policy
+    Jacobian dμ/dobs carries gradients.
+
+    The sensitivity update is:
+        M = sens_bias  +  df/du · (dμ/dobs) · (dobs/dx·S)
+    where sens_bias = df/dx·S + df/dp_norm (precomputed, no policy dependence).
+
+    Returns -log(||M||_F + ε) per sample.
     """
+    sens_bias = jax.lax.stop_gradient(sens_bias)
+    df_du = jax.lax.stop_gradient(df_du)
+    dobs_dx_S = jax.lax.stop_gradient(dobs_dx_S)
+
+    # Policy Jacobian per sample: (B, action_dim, obs_dim)
+    def _actor_mean(o):
+        return nnx.merge(graphdef, params).actor(o).loc
+
+    J = jax.jacfwd(_actor_mean)(obs)
+
+    # Full sensitivity matrix: (B, state_dim, param_dim)
+    M = sens_bias + df_du @ J @ dobs_dx_S
+
+    return - jnp.log(jnp.linalg.matrix_norm(M, ord="fro") + 1e-6)
+
+
+sensitivity_loss = jax.vmap(_sensitivity_loss, in_axes=(None, None, 0, 0, 0, 0))
+
+# ---------------------------------------------------------------------------
+# Loss function
+# ---------------------------------------------------------------------------
+
+def make_loss_fn(config, graphdef):
+    """PPO clipped loss + direct sensitivity gradient term."""
+
     def _loss_fn(params, traj_batch, advantages, targets):
-        # Full forward pass (need hidden state for critic value)
-        pi, value, _ = network.apply(params, traj_batch.obs, traj_batch.extras["gru_hidden"])
+        model = nnx.merge(graphdef, params)
+        pi, value, _ = model(traj_batch.obs, traj_batch.extras["gru_hidden"])
         log_prob = pi.log_prob(traj_batch.action)
 
-        # CALCULATE VALUE LOSS
-        value_pred_clipped = traj_batch.value + (
-            value - traj_batch.value
-        ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
-        value_losses = jnp.square(value - targets)
-        value_losses_clipped = jnp.square(value_pred_clipped - targets)
-        value_loss = (
-            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
+        # ---- value loss (clipped) ----
+        value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(
+            -config["CLIP_EPS"], config["CLIP_EPS"]
         )
+        value_loss = 0.5 * jnp.maximum(
+            jnp.square(value - targets),
+            jnp.square(value_pred_clipped - targets),
+        ).mean()
 
-        # CALCULATE ACTOR LOSS
+        # ---- actor loss (clipped PPO) ----
         log_ratio = log_prob - traj_batch.log_prob
         ratio = jnp.exp(log_ratio)
-
-        # calculate approx_kl http://joschu.net/blog/kl-approx.html
-        old_approx_kl = (-log_ratio).mean()
-        approx_kl = ((ratio - 1) - log_ratio).mean()
-        clipfracs = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
-
-        # Normalize advantages
         gae = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
-        
-        loss_actor1 = ratio * gae
-        loss_actor2 = (
-            jnp.clip(
-                ratio,
-                1.0 - config["CLIP_EPS"],
-                1.0 + config["CLIP_EPS"],
-            )
-            * gae
+
+        sens_new = sensitivity_loss(
+            graphdef, params, traj_batch.obs,
+            traj_batch.extras["sens_bias"],
+            traj_batch.extras["df_du"],
+            traj_batch.extras["dobs_dx_S"],
         )
-        loss_actor = -jnp.minimum(loss_actor1, loss_actor2)
-        loss_actor = loss_actor.mean()
+        sens_old = traj_batch.extras["sens_old"]
+        sens_per_sample = sens_new - sens_old
+
+        loss_actor = -jnp.minimum(
+            ratio * (gae + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sens_per_sample),
+            jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae,
+        ).mean()
         entropy = pi.entropy().mean()
 
-        # Sensitivity gradient term: maximize mean sensitivity_reward
-        sensitivity_loss = - traj_batch.extras["sensitivity_reward"].mean()
-
+        # ---- differentiable sensitivity loss ----
+        # ratio is stop-gradiented so only the sensitivity term carries grads
+        
         total_loss = (
             loss_actor
             + config["VF_COEF"] * value_loss
             - config["ENT_COEF"] * entropy
-            + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_loss
         )
+
+        old_approx_kl = (-log_ratio).mean()
+        approx_kl = ((ratio - 1) - log_ratio).mean()
+        clipfracs = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
+
         return total_loss, (
-            value_loss,
-            loss_actor,
-            entropy,
-            old_approx_kl,
-            approx_kl,
-            clipfracs,
+            value_loss, loss_actor, entropy,
+            old_approx_kl, approx_kl, clipfracs,
         )
-    
+
     return _loss_fn
 
 
+# ---------------------------------------------------------------------------
+# Collect function (stores environment Jacobians for the sensitivity loss)
+# ---------------------------------------------------------------------------
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for SPPO.
-    
-    Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', etc.
-    
-    Returns a function for use with jax.lax.scan that collects transitions.
-    """
-    network = networks["network"]
-    
+    """Like SPPO's collect, but stores Jacobians in extras (not in info)."""
+    graphdef = networks["graphdef"]
+
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        
-        # Full forward pass (need hidden state for critic and to update it)
-        pi, value, new_gru_hidden = network.apply(
-            runner_state.train_state.params, 
-            runner_state.last_obs, 
-            runner_state.extras["gru_hidden"]
+
+        model = nnx.merge(graphdef, runner_state.train_state.params)
+        pi, value, new_gru_hidden = model(
+            runner_state.last_obs, runner_state.extras["gru_hidden"],
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -149,22 +186,29 @@ def make_collect_fn(config, env, env_params, networks):
         obsv, env_state, reward, done, info = env.step(
             rng_step, runner_state.env_state, action, env_params
         )
-        
-        # Add sensitivity regularization to reward at the end so that it is normalized
+
         sensitivity_reward = info.get("sensitivity_state_rw", jnp.zeros_like(reward))
         reward += config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_reward
 
-        # Reset GRU hidden on episode end
-        new_gru_hidden = (1 - done.reshape(-1, 1)) * new_gru_hidden + done.reshape(-1, 1) * jnp.zeros_like(new_gru_hidden)
-        
-        # obsv = jax.lax.stop_gradient(obsv)
-        # env_state = jax.lax.stop_gradient(env_state)
-        # new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
+        new_gru_hidden = jnp.where(done[:, None], 0.0, new_gru_hidden)
+
+        obsv = jax.lax.stop_gradient(obsv)
+        env_state = jax.lax.stop_gradient(env_state)
+        new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
+
+        # Move Jacobians to extras (for the loss); strip from info (avoid duplication)
+        info_clean = {k: v for k, v in info.items() if k not in _JAC_KEYS}
 
         transition = Transition(
             done, action, value, reward,
-            log_prob, runner_state.last_obs, info,
-            extras={"gru_hidden": runner_state.extras["gru_hidden"], "sensitivity_reward": sensitivity_reward},
+            log_prob, runner_state.last_obs, info_clean,
+            extras={
+                "gru_hidden": runner_state.extras["gru_hidden"],
+                "sens_bias": info["sens_bias"],  # df/dx@S + df/dp_norm (precomputed in wrapper)
+                "df_du": info["df_du"],            # df/du
+                "dobs_dx_S": info["dobs_dx_sens"], # dobs/dx @ S
+                "sens_old": sensitivity_reward,   # -log(||M_old||_F + eps) from rollout
+            },
         )
         new_runner_state = RunnerState(
             train_state=runner_state.train_state,
@@ -174,86 +218,13 @@ def make_collect_fn(config, env, env_params, networks):
             extras={"gru_hidden": new_gru_hidden},
         )
         return new_runner_state, transition
-    
+
     return _env_step
 
-def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
 
-    last_val, _ = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs, collect_state.extras["gru_hidden"], method=networks["network"].critic)
-    
-    advantages, targets = gae_standard(
-        config, traj_batch, last_val,
-    )
-    return {
-        "advantages": advantages,
-        "targets": targets,
-    }, collect_state
-
-def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize GRU-based ActorCritic network for SPPO.
-    
-    Returns:
-        dict with keys: network, train_state, gru_hidden_size
-    """
-    gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
-    
-    network = ActorCriticGRU(
-        env.action_space(env_params).shape[0],
-        activation=config["ACTIVATION"],
-        actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
-        critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
-        gru_hidden_size=gru_hidden_size,
-    )
-    
-    init_x = jnp.zeros(env.observation_space(env_params).shape)
-    init_gru_hidden = jnp.zeros((1, gru_hidden_size))
-    
-    if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
-        # For GRU network, we need custom loading logic
-        network_params = network.init(rng, init_x, init_gru_hidden)
-    else:
-        network_params = network.init(rng, init_x, init_gru_hidden)
-    
-    linear_schedule = make_linear_schedule(config)
-    tx = create_optimizer(config, linear_schedule)
-    train_state = TrainState.create(
-        apply_fn=network.apply,
-        params=network_params,
-        tx=tx,
-    )
-    
-    return {
-        "network": network,
-        "train_state": train_state,
-        "gru_hidden_size": gru_hidden_size,
-    }
-
-
-def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for SPPO.
-    
-    Returns:
-        RunnerState NamedTuple
-    """
-    rng, _rng = jax.random.split(rng)
-    reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
-    obsv, env_state = env.reset(reset_rng, env_params)
-    
-    gru_hidden_size = networks["gru_hidden_size"]
-    init_gru_hidden = jnp.zeros((config["NUM_ENVS"], gru_hidden_size))
-    
-    # Extra split before scan
-    rng, _rng = jax.random.split(rng)
-    
-    return RunnerState(
-        train_state=networks["train_state"],
-        env_state=env_state,
-        last_obs=obsv,
-        rng=_rng,
-        extras={"gru_hidden": init_gru_hidden},
-    )
-
+# ---------------------------------------------------------------------------
+# Algorithm specification
+# ---------------------------------------------------------------------------
 
 SPEC = AlgorithmSpec(
     algo_name="SPPO_GRAD",

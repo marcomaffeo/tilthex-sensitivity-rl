@@ -153,7 +153,7 @@ class HalfCheetahV5(environment.Environment):
 
         state = env_state.state
 
-        state_next = self.step_dynamics(key, state, u, params)
+        state_next = self.step_dynamics(key, env_state, u, params)
 
         x_velocity = (
             (state_next.qpos[0] - state.qpos[0]) / params.frame_skip / 0.01
@@ -182,6 +182,16 @@ class HalfCheetahV5(environment.Environment):
         )
 
     def step_dynamics(
+        self,
+        key: jax.Array,
+        env_state: EnvState,
+        action: int | float | jax.Array,
+        params: EnvParams,
+    ) -> ModelState:
+        """Step dynamics extracting state from env_state."""
+        return self._step_dynamics(key, env_state.state, action, params)
+
+    def _step_dynamics(
         self,
         key: jax.Array,
         state: ModelState,

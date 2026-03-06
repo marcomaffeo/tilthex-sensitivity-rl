@@ -8,7 +8,7 @@ hydra:
   
 defaults:
   - method: ppo
-  - env: reacher_v5
+  - env: drone_v3
   - override hydra/job_logging: none  # Correct way to disable job logging
   - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_

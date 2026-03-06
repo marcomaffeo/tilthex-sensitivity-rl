@@ -4,18 +4,12 @@
   <model name="propeller">
 
     <link name="blade">
-
-		<gravity>0</gravity>
-
 		<inertial>
-			<mass>0.01355</mass>
+			<mass>0.07</mass>
 			<inertia>
-			  <ixx>7.80691e-07</ixx>
-			  <ixy>-2.7171e-06</ixy>
-			  <ixz>7.33808e-11</ixz>
-			  <iyy>0.000112674</iyy>
-			  <iyz>1.3261e-11</iyz>
-			  <izz>0.000113168</izz>
+          		<ixx>4e-5</ixx><ixy>0</ixy><ixz>0</ixz>
+         		<iyy>4e-5</iyy><iyz>0</iyz>
+          		<izz>8e-5</izz>
 			</inertia>
 		</inertial>
 
@@ -36,12 +30,12 @@
         	</material>
       	</visual>
 
-      	<collision name="blade_collision">
+      	<!-- <collision name="blade_collision">
         	<pose>0 0 0 0 0 0</pose>
 			<geometry>
 				<cylinder><radius>0.163</radius><length>0.012</length></cylinder>
         	</geometry>
-      	</collision>
+      	</collision> -->
 
     </link>
 

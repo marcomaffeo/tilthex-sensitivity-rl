@@ -5,7 +5,7 @@
     <link name="base">
       <inertial>
         <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
-        <mass>2.91118</mass>
+        <mass>2.49118</mass> <!-- 2.91118 is the total mass -->
         <inertia>
           <ixx>0.082529</ixx>
           <ixy>0.00175324</ixy>
@@ -131,8 +131,9 @@
         <noise>0.0</noise>
         <cf>12.0e-4</cf>
         <ct>2.4e-5</ct>
-        <vfxy>0.5</vfxy><vfz>0.5</vfz>
-        <vtxy>0.5</vtxy><vtz>0.5</vtz>
+
+        <vfxy>0.0</vfxy><vfz>0.0</vfz>
+        <vtxy>0.0</vtxy><vtz>0.0</vtz>
 
         <rotor><joint spin="cw">hr-motor-1</joint></rotor>
         <rotor><joint spin="ccw">hr-motor-2</joint></rotor>

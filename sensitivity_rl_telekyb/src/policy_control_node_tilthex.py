@@ -44,13 +44,14 @@ class PolicyControlNode(Node):
         self.land_srv = self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
         self.stop_srv = self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
         
-        self.setpoint_sub = self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group) 
+        self.setpoint_sub = self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
+        # self.telemetry_timer = self.create_timer(0.2, self.telemetry_callback, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO_euler') #PPO/SPPO_euler PPO/SPPO_quat PPO/SPPO_rotmat
-        self.declare_parameter('policy_duration', 5.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/PPO_quat') #PPO/SPPO_euler PPO/SPPO_quat PPO/SPPO_rotmat
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
-        
+
         self.lock = threading.Lock() 
         
         self.target_hold_z = 0.0  
@@ -68,8 +69,22 @@ class PolicyControlNode(Node):
         self.motors_armed = False 
         self.is_flying = False 
         
-        self.get_logger().info('Policy control node initialized') 
-    
+        self.get_logger().info('Policy control node initialized')
+
+    # def telemetry_callback(self):
+    #     # Stampa l'altezza solo se il drone ha iniziato il takeoff o la policy è attiva
+    #     if not self.is_flying:
+    #         return
+            
+    #     try:
+    #         state = read_state_and_rot_w(self.components)
+    #         if state is not None:
+    #             # state[2] corrisponde alla Z nel frame world (optitrack/pom)
+    #             self.get_logger().info(f"POM Altitudine Z: {state[2]:.3f} m")
+    #     except Exception as e:
+    #         # Evita crash del nodo se pom non è momentaneamente disponibile
+    #         pass
+
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
             self.components.setup() 
@@ -326,6 +341,8 @@ class PolicyControlNode(Node):
         pos_ref = np.array(log_data['pos_ref']) 
         yaw_ref = np.array(log_data['yaw_ref']) 
         actions = np.array(log_data['action'])
+        avel_act = np.array(log_data['avel'])
+
         
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
@@ -393,6 +410,40 @@ class PolicyControlNode(Node):
         fig2.savefig(sim_folder / 'inputs.png') 
         plt.close(fig2)
 
+        # --- PLOT 3: VELOCITÀ LINEARI E ANGOLARI (Dati dal POM) ---
+        fig3, axs3 = plt.subplots(3, 2, figsize=(15, 12)) 
+        fig3.suptitle(f'TiltHex Velocities (POM State) ({times[-1]:.1f}s)', fontsize=16) 
+
+        # Colonna Sinistra: Velocità Lineari (vx, vy, vz)
+        axs3[0, 0].plot(times, vel_act[:, 0], color='blue') 
+        axs3[0, 0].set_title('Linear Velocity X [m/s]') 
+        axs3[0, 0].grid(True) 
+
+        axs3[1, 0].plot(times, vel_act[:, 1], color='green') 
+        axs3[1, 0].set_title('Linear Velocity Y [m/s]') 
+        axs3[1, 0].grid(True) 
+
+        axs3[2, 0].plot(times, vel_act[:, 2], color='red') 
+        axs3[2, 0].set_title('Linear Velocity Z [m/s]') 
+        axs3[2, 0].grid(True) 
+
+        # Colonna Destra: Velocità Angolari (wx, wy, wz)
+        axs3[0, 1].plot(times, avel_act[:, 0], color='purple') 
+        axs3[0, 1].set_title('Angular Rate X [rad/s]') 
+        axs3[0, 1].grid(True) 
+
+        axs3[1, 1].plot(times, avel_act[:, 1], color='orange') 
+        axs3[1, 1].set_title('Angular Rate Y [rad/s]') 
+        axs3[1, 1].grid(True) 
+
+        axs3[2, 1].plot(times, avel_act[:, 2], color='cyan') 
+        axs3[2, 1].set_title('Angular Rate Z [rad/s]') 
+        axs3[2, 1].grid(True) 
+
+        fig3.tight_layout() 
+        fig3.savefig(sim_folder / 'velocities.png') 
+        plt.close(fig3)
+
         self.get_logger().info(f"Plots saved in: {sim_folder}") 
     
     def _policy_loop(self): 
@@ -407,7 +458,7 @@ class PolicyControlNode(Node):
 
         log_data = { 
             't': [],  
-            'pos': [], 'vel': [], 'euler': [],  
+            'pos': [], 'vel': [], 'euler': [], 'avel': [],
             'pos_ref': [], 'yaw_ref': [],
             'action': []
         } 
@@ -459,6 +510,7 @@ class PolicyControlNode(Node):
                 log_data['pos'].append(raw_state[0:3]) 
                 log_data['vel'].append(raw_state[3:6]) 
                 log_data['euler'].append(euler) 
+                log_data['avel'].append(raw_state[10:13])
                 log_data['pos_ref'].append(target_pos) 
                 log_data['yaw_ref'].append(target_yaw) 
                 log_data['action'].append(action.copy())

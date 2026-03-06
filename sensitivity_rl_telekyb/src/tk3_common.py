@@ -5,8 +5,6 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-
-
 class TK3Components:
     def __init__(self, log_dir: Path):
 
@@ -226,8 +224,12 @@ class TK3Components_tilthex:
         # }})
 
         self.nhfc.set_gtmrp_geom({
-            'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.39, 'mass': 2.91118,
-            'rx':-20, 'ry': 0, 'rz': -1, 'cf': 12.0e-4, 'ct': 2.4e-5
+            'rotors': 6, 
+            'cx': -0.000122973, 'cy': -0.00013006, 'cz': -0.0248586, 
+            'armlen': 0.39, 
+            'mass': 2.91118,
+            'rx': -20.0, 'ry': 0.0, 'rz': -1, 
+            'cf': 12.0e-4, 'ct': 2.4e-5
         })
 
         # emergency descent parameters
@@ -236,15 +238,17 @@ class TK3Components_tilthex:
         }})
 
         # PID tuning
-        self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
+        self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 1.0}})
         self.nhfc.set_servo_gain({ 'gain': {
-            'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
-            'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
-            'Kixy': 0, 'Kiz': 0
+            'Kpxy': 20.0, 'Kpz': 20.0,
+            'Kqxy': 15, 'Kqz': 15.0,   
+            'Kvxy': 10.0, 'Kvz':10, 
+            'Kwxy': 1.5, 'Kwz': 1.0, 
+            'Kixy': 0.0, 'Kiz': 4.0 
         }})
 
         # use tilt-prioritized controller
-        self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'})
+        self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'}) 
 
         # read measured propeller velocities from rotorcraft
         self.nhfc.connect_port({

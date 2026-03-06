@@ -25,8 +25,14 @@ from datetime import datetime
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=1 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
+    "--xla_gpu_autotune_level=0 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
 )
+# Note that setting xla_gpu_autotune_level=1 greatly improves performance, but causes non-determinism even when seeding the rng.  
+# For reproducibility in experiments, we set it to 0 (no autotuning).  
+# For final training runs where speed is more important than exact reproducibility, setting it to 1 is recommended.
+# os.environ["XLA_FLAGS"] = (
+#     "--xla_gpu_autotune_level=1 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
+# )
 # os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax

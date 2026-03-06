@@ -1,4 +1,4 @@
-"""Drone V2 Environment.
+"""Drone V3 Environment.
 JAX implementation of the Mikrokopter drone environment considering uncertainties on the mass, inertia, 
 position of the center of mass.
 """
@@ -55,10 +55,10 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([25.0, 3.0, 3.0, 1.0])
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0])
+        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 1.0])
     )
     env_min_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, 0.0])
+        pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, -1.0])
     )
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -184,7 +184,7 @@ class DroneV3(environment.Environment):
             + reward_app
             + reward_yaw
             - 2.0 * (jnp.linalg.norm((action_rescaled - self.hovering_input)/params.max_input))
-            - 1.0 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
+            - 0.5 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
         )
 
         reward = reward.squeeze()

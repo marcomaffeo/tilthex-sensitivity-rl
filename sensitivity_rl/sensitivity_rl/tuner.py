@@ -128,7 +128,7 @@ METHOD_SPECIFIC_SWEEPS = {
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_grad": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.025, 0.075, 0.05],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.1],
         "DOMAIN_RANDOMIZATION": [False],
     },
     # "sac": {

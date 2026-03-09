@@ -65,12 +65,12 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
-    max_target_roll: float = struct.field(pytree_node=False, default=5.0)
-    max_target_pitch: float = struct.field(pytree_node=False, default=5.0)
+    max_target_roll: float = struct.field(pytree_node=False, default=10.0)
+    max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
     max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
 
-    min_target_roll: float = struct.field(pytree_node=False, default=-5.0)
-    min_target_pitch: float = struct.field(pytree_node=False, default=-5.0)
+    min_target_roll: float = struct.field(pytree_node=False, default=-10.0)
+    min_target_pitch: float = struct.field(pytree_node=False, default=-10.0)
     min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
 
     dt: float = struct.field(pytree_node=False, default=0.02)
@@ -212,10 +212,10 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        reward_orientation = jnp.exp(-50.0 * attitude_error_rad) #5.0 ppo
+        reward_orientation = 2.0*jnp.exp(-1.0 * attitude_error_rad) #5.0 ppo
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.05,   #0.02 ppo
+            jnp.linalg.norm(pos_diff) < 0.04,   #0.02 ppo
             10.0,                               # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
         )

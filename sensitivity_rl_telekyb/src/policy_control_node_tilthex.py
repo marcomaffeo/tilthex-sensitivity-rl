@@ -5,13 +5,11 @@ Unified ROS2 node for TiltHex RL policy with direct hardware control.
 import os 
 import threading 
 from pathlib import Path 
-from time import time, sleep, strftime 
+from time import perf_counter, sleep, strftime 
 from typing import Optional 
 
 import numpy as np 
-import matplotlib.pyplot as plt 
 import jax.numpy as jnp 
-from scipy.spatial.transform import Rotation 
 
 import rclpy 
 from rclpy.node import Node 
@@ -22,7 +20,7 @@ from geometry_msgs.msg import PoseStamped
 from std_srvs.srv import Trigger 
 
 from policy import Policy 
-from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed, quat_multiply
+from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed, quat_multiply, quat_to_rot_matrix_wxyz, quat_to_euler_xyz
 
 class PolicyControlNode(Node): 
     def __init__(self): 
@@ -36,18 +34,18 @@ class PolicyControlNode(Node):
         
         self.cb_group = ReentrantCallbackGroup() 
         
-        self.setup_srv = self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
-        self.start_srv = self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
-        self.takeoff_srv = self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
-        self.policy_start_srv = self.create_service(Trigger, '/policy/start', self.policy_start_callback, callback_group=self.cb_group) 
-        self.policy_stop_srv = self.create_service(Trigger, '/policy/stop', self.policy_stop_callback, callback_group=self.cb_group)
-        self.land_srv = self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
-        self.stop_srv = self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
+        # Servizi di controllo
+        self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
+        self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
+        self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/policy/start', self.policy_start_callback, callback_group=self.cb_group) 
+        self.create_service(Trigger, '/policy/stop', self.policy_stop_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
+        self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
         
-        self.setpoint_sub = self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
-        # self.telemetry_timer = self.create_timer(0.2, self.telemetry_callback, callback_group=self.cb_group)
+        self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO_quat') #PPO/SPPO_euler PPO/SPPO_quat PPO/SPPO_rotmat
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO_quat') 
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
@@ -68,22 +66,9 @@ class PolicyControlNode(Node):
         self.hardware_initialized = False 
         self.motors_armed = False 
         self.is_flying = False 
-        
-        self.get_logger().info('Policy control node initialized')
+        self.custom_setpoint_active = False
 
-    # def telemetry_callback(self):
-    #     # Stampa l'altezza solo se il drone ha iniziato il takeoff o la policy è attiva
-    #     if not self.is_flying:
-    #         return
-            
-    #     try:
-    #         state = read_state_and_rot_w(self.components)
-    #         if state is not None:
-    #             # state[2] corrisponde alla Z nel frame world (optitrack/pom)
-    #             self.get_logger().info(f"POM Altitudine Z: {state[2]:.3f} m")
-    #     except Exception as e:
-    #         # Evita crash del nodo se pom non è momentaneamente disponibile
-    #         pass
+        self.get_logger().info('Policy control node initialized')
 
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
@@ -102,7 +87,6 @@ class PolicyControlNode(Node):
         try: 
             if not self.hardware_initialized: 
                 raise RuntimeError('Call /control/setup first.') 
-            
             if self.motors_armed: 
                 raise RuntimeError('Motors already armed.') 
 
@@ -116,7 +100,7 @@ class PolicyControlNode(Node):
             self.get_logger().info("Hardware ON. Waiting for sensors (2s)...") 
             
             initial_state = None 
-            for i in range(20): 
+            for _ in range(20): 
                 initial_state = read_state_and_rot_w(self.components) 
                 if initial_state is not None and abs(initial_state[6]) > 0.001:  
                     break 
@@ -146,7 +130,6 @@ class PolicyControlNode(Node):
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Call /control/start first.') 
-            
             if self.is_flying: 
                 raise RuntimeError('Already flying.') 
 
@@ -164,11 +147,8 @@ class PolicyControlNode(Node):
             with self.lock: 
                 self.setpoint = np.array([start_x, start_y, self.target_hold_z, 0.0]) 
 
-            self.get_logger().info(f"Target Z: {self.target_hold_z:.3f}m") 
-
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.rotorcraft.servo(ack=True) 
-
             self.components.nhfc.servo(ack=True) 
             self.components.nhfc.set_position(start_x, start_y, self.target_hold_z, 0.0) 
             
@@ -214,13 +194,13 @@ class PolicyControlNode(Node):
                 msg.pose.position.y, 
                 msg.pose.position.z, 
                 yaw 
-            ], dtype=np.float64) 
-    
+            ], dtype=np.float64)
+            self.custom_setpoint_active = True
+
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed before starting policy.') 
-            
             if self.policy_thread is not None and self.policy_thread.is_alive(): 
                 response.success = False 
                 response.message = 'Policy already running' 
@@ -228,10 +208,15 @@ class PolicyControlNode(Node):
             
             policy_dir = self.get_parameter('policy_dir').value 
             self.policy = Policy(Path(policy_dir)) 
+
+            self.get_logger().info("JAX Warm-up: Compiling policy...")
+            dummy_obs = jnp.zeros((17,), dtype=jnp.float32)
+            for _ in range(5):
+                _ = self.policy.get_action(dummy_obs) 
+            self.get_logger().info("JAX Compilation complete. Ready for real-time.")
             
             self.policy_stop_event.clear() 
             self.policy_land_event.clear() 
-            
             self.is_flying = True 
 
             self.policy_thread = threading.Thread(target=self._policy_loop, daemon=True) 
@@ -239,7 +224,6 @@ class PolicyControlNode(Node):
             
             response.success = True 
             response.message = f'Policy loop started ({self.frequency_hz} Hz)' 
-            self.get_logger().info(response.message) 
             
         except Exception as e: 
             response.success = False 
@@ -286,7 +270,6 @@ class PolicyControlNode(Node):
             response.message = f'Land failed: {str(e)}' 
         return response 
 
-    
     def _build_observation(self, state: np.ndarray) -> Optional[jnp.ndarray]: 
         if state is None: return None 
         
@@ -300,17 +283,15 @@ class PolicyControlNode(Node):
             target_yaw = self.setpoint[3]
         
         to_target_world = target_pos - pos 
-        
-        r_current = Rotation.from_quat([quat_wxyz[1], quat_wxyz[2], quat_wxyz[3], quat_wxyz[0]]) 
-        rot_mat = r_current.as_matrix()
+        rot_mat = quat_to_rot_matrix_wxyz(quat_wxyz)
         
         to_target_body = rot_mat.T @ to_target_world
         vel_body = rot_mat.T @ vel_world
         
-        r_target = Rotation.from_euler('z', target_yaw, degrees=False) 
-        t_xyzw = r_target.as_quat()  
-        target_quat_wxyz = np.array([t_xyzw[3], t_xyzw[0], t_xyzw[1], t_xyzw[2]])
+        if quat_wxyz[0] < 0.0:
+            quat_wxyz = -quat_wxyz
 
+        target_quat_wxyz = np.array([np.cos(target_yaw / 2.0), 0.0, 0.0, np.sin(target_yaw / 2.0)])
         q_state_inv = np.array([quat_wxyz[0], -quat_wxyz[1], -quat_wxyz[2], -quat_wxyz[3]])
         
         q_error_body = quat_multiply(q_state_inv, target_quat_wxyz)
@@ -321,17 +302,16 @@ class PolicyControlNode(Node):
         obs = np.concatenate([ 
             to_target_body, 
             vel_body, 
-            quat_wxyz, 
+            quat_wxyz,
             avel, 
             q_error_body  
         ]).astype(np.float32) 
         
-        return jnp.array(obs) 
-    
-    def _apply_rotor_speed(self, rotor_speed: list): 
-        self.components.rotorcraft.set_velocity(rotor_speed, ack=True) 
+        return jnp.array(obs)
 
     def plot_results(self, log_data, policy_name): 
+        import matplotlib.pyplot as plt
+
         self.get_logger().info("Generating plots...") 
         
         times = np.array(log_data['t']) 
@@ -343,16 +323,14 @@ class PolicyControlNode(Node):
         actions = np.array(log_data['action'])
         avel_act = np.array(log_data['avel'])
 
-        
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
 
-        # Create specific folder for this simulation run
         timestamp = strftime("%Y%m%d_%H%M%S") 
         sim_folder = self.log_path / f'{policy_name}_{timestamp}'
         sim_folder.mkdir(parents=True, exist_ok=True)
 
-        # --- PLOT 1: OUTPUTS ---
+        # Plot 1: Outputs
         fig1, axs1 = plt.subplots(3, 2, figsize=(15, 12)) 
         fig1.suptitle(f'TiltHex Policy Outputs ({times[-1]:.1f}s)', fontsize=16) 
 
@@ -394,7 +372,7 @@ class PolicyControlNode(Node):
         fig1.savefig(sim_folder / 'outputs.png') 
         plt.close(fig1)
 
-        # --- PLOT 2: INPUTS ---
+        # Plot 2: Inputs
         fig2, axs2 = plt.subplots(3, 2, figsize=(15, 12)) 
         fig2.suptitle(f'TiltHex Policy Inputs (Rotor Forces) ({times[-1]:.1f}s)', fontsize=16) 
 
@@ -410,11 +388,10 @@ class PolicyControlNode(Node):
         fig2.savefig(sim_folder / 'inputs.png') 
         plt.close(fig2)
 
-        # --- PLOT 3: VELOCITÀ LINEARI E ANGOLARI (Dati dal POM) ---
+        # Plot 3: Velocities
         fig3, axs3 = plt.subplots(3, 2, figsize=(15, 12)) 
         fig3.suptitle(f'TiltHex Velocities (POM State) ({times[-1]:.1f}s)', fontsize=16) 
 
-        # Colonna Sinistra: Velocità Lineari (vx, vy, vz)
         axs3[0, 0].plot(times, vel_act[:, 0], color='blue') 
         axs3[0, 0].set_title('Linear Velocity X [m/s]') 
         axs3[0, 0].grid(True) 
@@ -427,7 +404,6 @@ class PolicyControlNode(Node):
         axs3[2, 0].set_title('Linear Velocity Z [m/s]') 
         axs3[2, 0].grid(True) 
 
-        # Colonna Destra: Velocità Angolari (wx, wy, wz)
         axs3[0, 1].plot(times, avel_act[:, 0], color='purple') 
         axs3[0, 1].set_title('Angular Rate X [rad/s]') 
         axs3[0, 1].grid(True) 
@@ -454,30 +430,39 @@ class PolicyControlNode(Node):
         period = 1.0 / frequency if frequency > 0 else 0.0 
 
         self.get_logger().info(f'--- POLICY ACTIVE ({duration}s) ---') 
-        self.get_logger().info(f'Logged data will be saved in {self.log_path}') 
 
         log_data = { 
-            't': [],  
-            'pos': [], 'vel': [], 'euler': [], 'avel': [],
-            'pos_ref': [], 'yaw_ref': [],
-            'action': []
+            't': [], 'pos': [], 'vel': [], 'euler': [], 'avel': [],
+            'pos_ref': [], 'yaw_ref': [], 'action': []
         } 
 
         try: 
-            self.components.nhfc.stop() 
+            self.components.nhfc.stop()
+            
+            if not self.custom_setpoint_active:
+                switch_state = read_state_and_rot_w(self.components)
+                if switch_state is not None:
+                    with self.lock:
+                        self.setpoint[0:3] = switch_state[0:3]
+                        q_sw = switch_state[6:10]
+                        self.setpoint[3] = np.arctan2(2.0*(q_sw[0]*q_sw[3] + q_sw[1]*q_sw[2]), 1.0 - 2.0*(q_sw[2]**2 + q_sw[3]**2))
+                    self.get_logger().info(f"Setpoint snapped to actual POM state: Z={self.setpoint[2]:.3f}m")
+            else:
+                self.get_logger().info(f"Using custom CLI setpoint: Z={self.setpoint[2]:.3f}m")
+                self.custom_setpoint_active = False 
+                
         except Exception: 
             pass 
 
-        start_time = time() 
+        start_time = perf_counter() 
 
         while not self.policy_stop_event.is_set(): 
-            loop_start = time() 
+            loop_start = perf_counter() 
             current_time = loop_start - start_time 
             
             if current_time > duration: 
                 self.get_logger().info("Duration exceeded.") 
                 break 
-
             if self.policy_land_event.is_set(): 
                 break 
 
@@ -493,17 +478,14 @@ class PolicyControlNode(Node):
                 if np.any(np.isnan(action)): continue 
 
                 rotor_speed = action_to_rotor_speed(self.components, action) 
-                
                 if any(np.isnan(rotor_speed)): continue 
 
-                self._apply_rotor_speed(rotor_speed) 
-                
-                q = raw_state[6:10]  
-                r = Rotation.from_quat([q[1], q[2], q[3], q[0]]) 
-                euler = r.as_euler('xyz', degrees=False)  
+                self.components.rotorcraft.set_velocity(rotor_speed, ack=False)
+            
+                euler = quat_to_euler_xyz(raw_state[6:10])
 
                 with self.lock: 
-                    target_pos = self.setpoint[0:3] 
+                    target_pos = self.setpoint[0:3].copy()
                     target_yaw = self.setpoint[3] 
 
                 log_data['t'].append(current_time) 
@@ -520,8 +502,12 @@ class PolicyControlNode(Node):
                 break 
 
             if period > 0.0: 
-                elapsed = time() - loop_start 
-                sleep(max(0.0, period - elapsed)) 
+                elapsed = perf_counter() - loop_start 
+                sleep_time = period - elapsed
+                if sleep_time > 0:
+                    sleep(sleep_time)
+                else:
+                    self.get_logger().warn("Loop missed deadline!", throttle_duration_sec=1.0)
 
         self.get_logger().warn("Switching back to PID control") 
 
@@ -529,13 +515,11 @@ class PolicyControlNode(Node):
             self.components.rotorcraft.servo(ack=True) 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.nhfc.servo(ack=True) 
-            self.components.nhfc.set_position( 
-                self.hold_x, self.hold_y, self.target_hold_z, 0.0 
-            ) 
-            self.get_logger().info(f"PID engaged at {self.target_hold_z:.2f}m") 
+            self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, 0.0) 
+            self.get_logger().info(f"PID engaged. Returning to original takeoff target Z:{self.target_hold_z:.2f}m") 
 
         except Exception as e: 
-            self.get_logger().error(f"RECOVERY FAILED: {e}") 
+            self.get_logger().error(f"RECOVERY FAILED: {e}")
 
         if len(log_data['t']) > 10: 
             try: 
@@ -567,13 +551,11 @@ def publish_setpoint_cli(args):
     msg.pose.position.y = y
     msg.pose.position.z = z
     
-    # Conversione da gradi (Eulero Yaw) a Quaternione
     msg.pose.orientation.w = math.cos(yaw_rad / 2.0)
     msg.pose.orientation.x = 0.0
     msg.pose.orientation.y = 0.0
     msg.pose.orientation.z = math.sin(yaw_rad / 2.0)
 
-    # Leggero ritardo per permettere la discovery del publisher sulla rete ROS 2
     sleep(0.2) 
     pub.publish(msg)
     node.get_logger().info(f"Setpoint inviato con successo: X={x}, Y={y}, Z={z}, Yaw={yaw_deg}°")
@@ -583,6 +565,11 @@ def publish_setpoint_cli(args):
     rclpy.shutdown()
 
 def main(args=None): 
+    try:
+        os.nice(-10)
+    except Exception:
+        pass
+        
     rclpy.init(args=args) 
     node = PolicyControlNode() 
     executor = MultiThreadedExecutor() 
@@ -596,7 +583,6 @@ def main(args=None):
 
 if __name__ == '__main__': 
     import sys
-    # Se il file viene lanciato con l'argomento --setpoint, esegue solo il publisher istantaneo
     if len(sys.argv) > 1 and sys.argv[1] == '--setpoint':
         publish_setpoint_cli(sys.argv[2:])
     else:

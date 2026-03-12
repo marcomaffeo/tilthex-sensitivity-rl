@@ -225,9 +225,9 @@ class TK3Components_tilthex:
 
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
-            'cx': -0.000122973, 'cy': -0.00013006, 'cz': -0.0248586, 
+            'cx': 0.000123, 'cy': 0.000130, 'cz': 0.024859,
             'armlen': 0.39, 
-            'mass': 2.91118,
+            'mass': 2.99248,
             'rx': -20.0, 'ry': 0.0, 'rz': -1, 
             'cf': 12.0e-4, 'ct': 2.4e-5
         })
@@ -238,13 +238,13 @@ class TK3Components_tilthex:
         }})
 
         # PID tuning
-        self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 1.0}})
+        self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 0.15}})
         self.nhfc.set_servo_gain({ 'gain': {
-            'Kpxy': 20.0, 'Kpz': 20.0,
-            'Kqxy': 15, 'Kqz': 15.0,   
-            'Kvxy': 10.0, 'Kvz':10, 
+            'Kpxy': 8.0, 'Kpz': 12.0,
+            'Kqxy': 10.0, 'Kqz': 10.0,   
+            'Kvxy': 8.0, 'Kvz': 8.0, 
             'Kwxy': 1.5, 'Kwz': 1.0, 
-            'Kixy': 0.0, 'Kiz': 4.0 
+            'Kixy': 0.0, 'Kiz': 0.3
         }})
 
         # use tilt-prioritized controller
@@ -381,3 +381,24 @@ def quat_multiply(q1, q2):
         w1*y2 - x1*z2 + y1*w2 + z1*x2,
         w1*z2 + x1*y2 - y1*x2 + z1*w2
     ], dtype=np.float64)
+
+def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q[0], q[1], q[2], q[3]
+    return np.array([
+        [1.0 - 2.0*(y**2 + z**2), 2.0*(x*y - z*w),       2.0*(x*z + y*w)],
+        [2.0*(x*y + z*w),       1.0 - 2.0*(x**2 + z**2), 2.0*(y*z - x*w)],
+        [2.0*(x*z - y*w),       2.0*(y*z + x*w),       1.0 - 2.0*(x**2 + y**2)]
+    ], dtype=np.float64)
+
+
+def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
+    w, x, y, z = q[0], q[1], q[2], q[3]
+    sinr_cosp = 2.0 * (w * x + y * z)
+    cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+    roll = np.arctan2(sinr_cosp, cosr_cosp)
+    sinp = 2.0 * (w * y - z * x)
+    pitch = np.arcsin(np.clip(sinp, -1.0, 1.0))
+    siny_cosp = 2.0 * (w * z + x * y)
+    cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+    yaw = np.arctan2(siny_cosp, cosy_cosp)
+    return np.array([roll, pitch, yaw], dtype=np.float64)

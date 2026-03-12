@@ -1,0 +1,11 @@
+{
+    "url": "https://cad.onshape.com/documents/1ec8d2cd902b8e61882ef63c/w/f95c186669643e2c6d1a3171/e/d754230cf634517f82e75c92",
+    "assemblyName": "TiltHex_LAAS",
+    "outputFormat": "sdf",
+    "output_filename": "tilthex_laas",
+    "robotName": "tilthex_laas",
+    "addDummyBaseLink": false,
+    "merge_stls": "true",
+    "simplify_stls": true,
+    "max_stl_size": 1
+}

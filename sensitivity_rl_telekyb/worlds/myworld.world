@@ -9,7 +9,7 @@
       <magnetic_field>23.816e-6 -0.41e-6 -39.829e-6</magnetic_field>
     </physics>
 
-    <light type="directional" name="sun">
+    <light type="directional" name="sun_global">
       <cast_shadows>true</cast_shadows>
       <pose>0 0 10 0 0 0</pose>
       <diffuse>0.8 0.8 0.8 1</diffuse>
@@ -64,7 +64,7 @@
       <hz>100</hz>
       <port>1509</port>
       <publish>
-        <link>hr6::base</link>
+        <link>hr6::tilthex_laas</link>
         <name>HR_6</name>
       </publish>
     </plugin>

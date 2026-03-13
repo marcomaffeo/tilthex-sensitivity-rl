@@ -8,6 +8,7 @@ from pathlib import Path
 from time import perf_counter, sleep, strftime 
 from typing import Optional 
 
+from geometry_msgs import msg
 import numpy as np 
 import jax.numpy as jnp 
 
@@ -34,7 +35,6 @@ class PolicyControlNode(Node):
         
         self.cb_group = ReentrantCallbackGroup() 
         
-        # Servizi di controllo
         self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
@@ -55,7 +55,7 @@ class PolicyControlNode(Node):
         self.target_hold_z = 0.0  
         self.hold_x = 0.0 
         self.hold_y = 0.0 
-        self.setpoint = np.array([0.0, 0.0, 0.0, 0.0], dtype=np.float64) 
+        self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)  
 
         self.policy: Optional[Policy] = None 
         self.policy_thread: Optional[threading.Thread] = None 
@@ -113,7 +113,7 @@ class PolicyControlNode(Node):
                 self.hold_x = initial_state[0]
                 self.hold_y = initial_state[1]
                 self.target_hold_z = initial_state[2]
-                self.setpoint = np.array([self.hold_x, self.hold_y, self.target_hold_z, 0.0])
+                self.setpoint = np.array([self.hold_x, self.hold_y, self.target_hold_z, 1.0, 0.0, 0.0, 0.0])
 
             self.motors_armed = True 
             response.success = True 
@@ -145,7 +145,7 @@ class PolicyControlNode(Node):
             self.hold_y = start_y 
             
             with self.lock: 
-                self.setpoint = np.array([start_x, start_y, self.target_hold_z, 0.0]) 
+                self.setpoint = np.array([start_x, start_y, self.target_hold_z, 1.0, 0.0, 0.0, 0.0])
 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.rotorcraft.servo(ack=True) 
@@ -183,17 +183,14 @@ class PolicyControlNode(Node):
     
     def setpoint_callback(self, msg: PoseStamped): 
         with self.lock: 
-            qw = msg.pose.orientation.w 
-            qx = msg.pose.orientation.x 
-            qy = msg.pose.orientation.y 
-            qz = msg.pose.orientation.z 
-            yaw = np.arctan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy**2 + qz**2)) 
-            
             self.setpoint = np.array([ 
                 msg.pose.position.x, 
                 msg.pose.position.y, 
                 msg.pose.position.z, 
-                yaw 
+                msg.pose.orientation.w,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
@@ -280,7 +277,7 @@ class PolicyControlNode(Node):
         
         with self.lock: 
             target_pos = self.setpoint[0:3].copy()
-            target_yaw = self.setpoint[3]
+            target_quat_wxyz = self.setpoint[3:7].copy()
         
         to_target_world = target_pos - pos 
         rot_mat = quat_to_rot_matrix_wxyz(quat_wxyz)
@@ -291,7 +288,6 @@ class PolicyControlNode(Node):
         if quat_wxyz[0] < 0.0:
             quat_wxyz = -quat_wxyz
 
-        target_quat_wxyz = np.array([np.cos(target_yaw / 2.0), 0.0, 0.0, np.sin(target_yaw / 2.0)])
         q_state_inv = np.array([quat_wxyz[0], -quat_wxyz[1], -quat_wxyz[2], -quat_wxyz[3]])
         
         q_error_body = quat_multiply(q_state_inv, target_quat_wxyz)
@@ -319,7 +315,7 @@ class PolicyControlNode(Node):
         vel_act = np.array(log_data['vel']) 
         euler_act = np.array(log_data['euler']) 
         pos_ref = np.array(log_data['pos_ref']) 
-        yaw_ref = np.array(log_data['yaw_ref']) 
+        euler_ref = np.array(log_data['euler_ref']) 
         actions = np.array(log_data['action'])
         avel_act = np.array(log_data['avel'])
 
@@ -335,22 +331,22 @@ class PolicyControlNode(Node):
         fig1.suptitle(f'TiltHex Policy Outputs ({times[-1]:.1f}s)', fontsize=16) 
 
         axs1[0, 0].plot(times, np.degrees(euler_act[:, 0]), label='Actual', color='blue') 
-        axs1[0, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
+        axs1[0, 0].plot(times, np.degrees(euler_ref[:, 0]), '--', label='Desired', color='black', alpha=0.7) 
         axs1[0, 0].set_title('Roll [deg]') 
         axs1[0, 0].grid(True) 
         axs1[0, 0].legend() 
 
         axs1[1, 0].plot(times, np.degrees(euler_act[:, 1]), label='Actual', color='green') 
-        axs1[1, 0].plot(times, np.zeros_like(times), '--', label='Desired (0)', color='black', alpha=0.7) 
+        axs1[1, 0].plot(times, np.degrees(euler_ref[:, 1]), '--', label='Desired', color='black', alpha=0.7) 
         axs1[1, 0].set_title('Pitch [deg]') 
         axs1[1, 0].grid(True) 
         axs1[1, 0].legend() 
 
         axs1[2, 0].plot(times, np.degrees(euler_act[:, 2]), label='Actual', color='red') 
-        axs1[2, 0].plot(times, np.degrees(yaw_ref), '--', label='Desired', color='black') 
+        axs1[2, 0].plot(times, np.degrees(euler_ref[:, 2]), '--', label='Desired', color='black') 
         axs1[2, 0].set_title('Yaw [deg]') 
         axs1[2, 0].grid(True) 
-        axs1[2, 0].legend() 
+        axs1[2, 0].legend()
 
         axs1[0, 1].plot(times, pos_err, color='purple') 
         axs1[0, 1].set_title('Position Error (Euclidean) [m]') 
@@ -433,7 +429,7 @@ class PolicyControlNode(Node):
 
         log_data = { 
             't': [], 'pos': [], 'vel': [], 'euler': [], 'avel': [],
-            'pos_ref': [], 'yaw_ref': [], 'action': []
+            'pos_ref': [], 'euler_ref': [], 'action': []
         } 
 
         try: 
@@ -444,8 +440,7 @@ class PolicyControlNode(Node):
                 if switch_state is not None:
                     with self.lock:
                         self.setpoint[0:3] = switch_state[0:3]
-                        q_sw = switch_state[6:10]
-                        self.setpoint[3] = np.arctan2(2.0*(q_sw[0]*q_sw[3] + q_sw[1]*q_sw[2]), 1.0 - 2.0*(q_sw[2]**2 + q_sw[3]**2))
+                        self.setpoint[3:7] = switch_state[6:10]
                     self.get_logger().info(f"Setpoint snapped to actual POM state: Z={self.setpoint[2]:.3f}m")
             else:
                 self.get_logger().info(f"Using custom CLI setpoint: Z={self.setpoint[2]:.3f}m")
@@ -486,7 +481,7 @@ class PolicyControlNode(Node):
 
                 with self.lock: 
                     target_pos = self.setpoint[0:3].copy()
-                    target_yaw = self.setpoint[3] 
+                    target_quat = self.setpoint[3:7].copy()
 
                 log_data['t'].append(current_time) 
                 log_data['pos'].append(raw_state[0:3]) 
@@ -494,7 +489,7 @@ class PolicyControlNode(Node):
                 log_data['euler'].append(euler) 
                 log_data['avel'].append(raw_state[10:13])
                 log_data['pos_ref'].append(target_pos) 
-                log_data['yaw_ref'].append(target_yaw) 
+                log_data['euler_ref'].append(quat_to_euler_xyz(target_quat)) 
                 log_data['action'].append(action.copy())
 
             except Exception as exc: 
@@ -533,12 +528,13 @@ class PolicyControlNode(Node):
 def publish_setpoint_cli(args):
     import math
     import sys
-    if len(args) < 4:
-        print("Errore: argomenti mancanti. Uso: --setpoint x y z yaw_deg")
+    from scipy.spatial.transform import Rotation
+    if len(args) < 6:
+        print("Error: missing arguments. Usage: --setpoint x y z roll_deg pitch_deg yaw_deg")
         return
 
-    x, y, z, yaw_deg = map(float, args[:4])
-    yaw_rad = math.radians(yaw_deg)
+    x, y, z, r_deg, p_deg, y_deg = map(float, args[:6])
+    quat_xyzw = Rotation.from_euler('xyz', [r_deg, p_deg, y_deg], degrees=True).as_quat()
 
     rclpy.init()
     node = rclpy.create_node('cli_setpoint_publisher')
@@ -551,14 +547,14 @@ def publish_setpoint_cli(args):
     msg.pose.position.y = y
     msg.pose.position.z = z
     
-    msg.pose.orientation.w = math.cos(yaw_rad / 2.0)
-    msg.pose.orientation.x = 0.0
-    msg.pose.orientation.y = 0.0
-    msg.pose.orientation.z = math.sin(yaw_rad / 2.0)
+    msg.pose.orientation.x = quat_xyzw[0]
+    msg.pose.orientation.y = quat_xyzw[1]
+    msg.pose.orientation.z = quat_xyzw[2]
+    msg.pose.orientation.w = quat_xyzw[3]
 
     sleep(0.2) 
     pub.publish(msg)
-    node.get_logger().info(f"Setpoint inviato con successo: X={x}, Y={y}, Z={z}, Yaw={yaw_deg}°")
+    node.get_logger().info(f"Setpoint sended: X={x}, Y={y}, Z={z}, RPY=[{r_deg}°, {p_deg}°, {y_deg}°]")
     sleep(0.1)
     
     node.destroy_node()

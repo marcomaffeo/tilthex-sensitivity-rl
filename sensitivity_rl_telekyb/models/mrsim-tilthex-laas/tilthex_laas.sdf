@@ -174,7 +174,7 @@
 		<plugin name="mrsim" filename="mrsim-gazebo.so">
 			<link>tilthex_laas</link>
 			<rotors>
-				<noise>0.0</noise>
+				<noise>0.03</noise>
 				<cf>12.0e-4</cf>
 				<ct>2.4e-5</ct>
 				<rotor><joint spin="cw">propeller-1-joint</joint></rotor>

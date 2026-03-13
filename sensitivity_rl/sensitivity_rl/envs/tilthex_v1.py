@@ -75,16 +75,18 @@ class EnvParams(environment.EnvParams):
 
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    n: float = struct.field(pytree_node=False, default=6)                   # number of rotors
-    arm_length : float = struct.field(pytree_node=False, default=0.39)      # length of single arm
-    c_tau: float = struct.field(pytree_node=False, default=2.4e-5)          # squared propeller speed to drag torque coefficient [Nm/Hz^2]
-    beta: float = struct.field(pytree_node=False, default=0.0)              # beta tilting angle
-    wmin: float = struct.field(pytree_node=False, default=16)               # min prop rotation speed in Hz
-    wmax: float = struct.field(pytree_node=False, default=100)              # max prop rotation speed in Hz
-    h : float = struct.field(pytree_node=False, default=0.01334)            # height of the propellers above the body frame
+    n: float = struct.field(pytree_node=False, default=6)                                                                               # number of rotors
+    arm_length : float = struct.field(pytree_node=False, default=0.39)                                                                  # length of single arm
+    c_tau: float = struct.field(pytree_node=False, default=2.4e-5)                                                                      # squared propeller speed to drag torque coefficient [Nm/Hz^2]
+    beta: float = struct.field(pytree_node=False, default=0.0)                                                                          # beta tilting angle
+    wmin: float = struct.field(pytree_node=False, default=16)                                                                           # min prop rotation speed in Hz
+    wmax: float = struct.field(pytree_node=False, default=100)                                                                          # max prop rotation speed in Hz
+    h : float = struct.field(pytree_node=False, default=0.0603436)                                                                      # height of the propellers above the body frame (Motor Pose Z: 0.0133436 + Propeller Pose Z (relative to motor):0.047)
+    I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))   # inertia off-diagonal terms [kg*m^2]
+    action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                           # action noise scale for exploration
     
     # Uncertain parameters
-    m: float = 2.91118
+    m: float = 2.99248                                                                                                                          # mass [kg] (2.91118 + (0.01355 x 6))
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors
@@ -113,17 +115,17 @@ class TilthexV1(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.62,                                           # mass -10%
+            2.69,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([-0.02, -0.02, -0.04]),               # com offset 
+            jnp.array([-0.02, -0.02, 0.005]),               # com offset 
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
             0.002,                                          # delay between
         ]
         self.params_max = [
-            3.20,                                           # mass +10%
+            3.29,                                           # mass +10%
             jnp.array([0.090, 0.093, 0.170]),               # inertia +10%
-            jnp.array([0.02, 0.02, 0.04]),                  # com offset 
+            jnp.array([0.02, 0.02, 0.045]),                  # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
             0.010,                                          # delay
@@ -195,12 +197,17 @@ class TilthexV1(environment.Environment):
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
         """Integrate pendulum ODE and return transition."""
 
+        key_step, key_noise = jax.random.split(key)
+
         action_clipped = jnp.clip(action, params.min_action, params.max_action)
         action_rescaled = self.rescale_action(action_clipped, params)
 
+        noise = jax.random.normal(key_noise, shape=action_rescaled.shape) * params.action_noise_scale
+        action_noisy = jnp.clip(action_rescaled + noise, params.min_input, params.max_input)
+
         state = env_state.state
 
-        state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
+        state_next = self.step_dynamics_delay(key, state, action_noisy, env_state.last_u, params)
 
         pos_diff = state_next.pos - env_state.target_pos
 
@@ -212,10 +219,11 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        reward_orientation = 2.0*jnp.exp(-1.0 * attitude_error_rad) #5.0 ppo
-
+        reward_orientation = 2.0*jnp.exp(-1.0 * attitude_error_rad)   #sppo
+        # reward_orientation = jnp.exp(-10.0 * attitude_error_rad)         #ppo
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.04,   #0.02 ppo
+            jnp.linalg.norm(pos_diff) < 0.04,      #sppo
+            #jnp.linalg.norm(pos_diff) < 0.02,       #ppo
             10.0,                               # reward when close to target
             1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
         )
@@ -295,11 +303,13 @@ class TilthexV1(environment.Environment):
         tau_body = GT @ u     # [Tx, Ty, Tz] 
 
         lin_acc_body = F_body / params.m
-        J_vec = params.I
-        gyro_term = jnp.cross(ang_vel, J_vec * ang_vel)
-        ang_acc_body = (1.0 / J_vec) * (tau_body - gyro_term)
-        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
 
+        ixy, ixz, iyz = params.I_off_diag
+        J_mat = jnp.array([[params.I[0], ixy, ixz],[ixy, params.I[1], iyz],[ixz, iyz, params.I[2]]])
+
+        gyro_term = jnp.cross(ang_vel, J_mat @ ang_vel)
+        ang_acc_body = jnp.linalg.solve(J_mat, tau_body - gyro_term)
+        acc = jnp.hstack([lin_acc_body, ang_acc_body]) 
 
         gravity_vec = jnp.array([0.0, 0.0, params.g]) 
         ang_vel_quat = jnp.array([0.0, ang_vel[0], ang_vel[1], ang_vel[2]])
@@ -326,6 +336,8 @@ class TilthexV1(environment.Environment):
         """Reset environment state by sampling theta, theta_dot.
             key_pos: drone initial position
             key_att: drone initial attitude
+            key_vel: drone initial velocity
+            key_omega: drone initial angular velocity
             key_target_pos: target position
             key_target_att: target attitude
         """
@@ -350,7 +362,7 @@ class TilthexV1(environment.Environment):
         attitude = euler_to_quat(att_rad)
 
         vel = jax.random.uniform(key_vel, (3,), minval=-0.1, maxval=0.1)
-        omega = jax.random.uniform(key_omega, (3,), minval=-0.02, maxval=0.02)
+        omega = jax.random.uniform(key_omega, (3,), minval=-0.2, maxval=0.2)
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 
         target_pos = jax.lax.select(

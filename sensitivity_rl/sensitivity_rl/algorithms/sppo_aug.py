@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 from flax.training.train_state import TrainState
 
 from .base import AlgorithmSpec
@@ -46,7 +47,7 @@ def wrap_env(env, config):
     return env
 
 
-def make_loss_fn(config, network):
+def make_loss_fn(config, graphdef):
     """Create SPPO-aug loss function for the main policy network.
 
     Returns a function with signature:
@@ -55,7 +56,8 @@ def make_loss_fn(config, network):
 
     def _loss_fn(params, traj_batch, advantages, advantages_s, targets):
         # RERUN NETWORK
-        pi, value = network.apply(params, traj_batch.obs)
+        model = nnx.merge(graphdef, params)
+        pi, value = model(traj_batch.obs)
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
@@ -124,7 +126,7 @@ def make_loss_fn(config, network):
     return _loss_fn
 
 
-def make_loss_fn_vs(config, network_vs):
+def make_loss_fn_vs(config, graphdef_vs):
     """Create loss function for the sensitivity value network (GRU-based).
 
     Returns a function with signature:
@@ -133,8 +135,8 @@ def make_loss_fn_vs(config, network_vs):
 
     def _loss_fn_vs(params_vs, traj_batch, targets_s):
         # Process batch through GRU
-        value_s, _ = network_vs.apply(
-            params_vs,
+        model_vs = nnx.merge(graphdef_vs, params_vs)
+        value_s, _ = model_vs(
             traj_batch.obs,
             traj_batch.extras["gru_hidden"],
         )
@@ -164,18 +166,16 @@ def make_collect_fn(config, env, env_params, networks):
 
     Returns a function for use with jax.lax.scan that collects transitions.
     """
-    network = networks["network"]
-    network_vs = networks["network_vs"]
+    graphdef = networks["graphdef"]
+    graphdef_vs = networks["graphdef_vs"]
 
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        pi, value = network.apply(
-            runner_state.train_state.params, runner_state.last_obs
-        )
-        value_s, new_gru_hidden = network_vs.apply(
-            runner_state.extras["train_state_vs"].params,
-            runner_state.last_obs,
-            runner_state.extras["gru_hidden"],
+        model = nnx.merge(graphdef, runner_state.train_state.params)
+        pi, value = model(runner_state.last_obs)
+        model_vs = nnx.merge(graphdef_vs, runner_state.extras["train_state_vs"].params)
+        value_s, new_gru_hidden = model_vs(
+            runner_state.last_obs, runner_state.extras["gru_hidden"]
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -289,12 +289,12 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
 
-    _, last_val = networks["network"].apply(
-        collect_state.train_state.params, collect_state.last_obs
+    model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
+    _, last_val = model(collect_state.last_obs)
+    model_vs = nnx.merge(
+        networks["graphdef_vs"], collect_state.extras["train_state_vs"].params
     )
-    network_vs = networks["network_vs"]
-    last_val_s, _ = network_vs.apply(
-        collect_state.extras["train_state_vs"].params,
+    last_val_s, _ = model_vs(
         collect_state.last_obs,
         collect_state.extras["gru_hidden"],
     )
@@ -340,55 +340,57 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize networks and train states for SPPO-aug.
 
     Returns:
-        dict with keys: network, train_state, network_vs, train_state_vs, loss_fn_vs, gru_hidden_size
+        dict with keys: graphdef, train_state, graphdef_vs, train_state_vs, loss_fn_vs, gru_hidden_size
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
+    obs_dim = env.observation_space(env_params).shape[0]
+    action_dim = env.action_space(env_params).shape[0]
 
     # Main policy network
     network = ActorCritic(
-        env.action_space(env_params).shape[0],
+        obs_dim,
+        action_dim,
         activation=config["ACTIVATION"],
         actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
+        rngs=nnx.Rngs(int(rng[0])),
     )
 
-    init_x = jnp.zeros(env.observation_space(env_params).shape)
-
-    if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
-        network_params = load_params_fn(rng, network, init_x, config)
-    else:
-        network_params = network.init(rng, init_x)
+    graphdef, state = nnx.split(network)
 
     linear_schedule = make_linear_schedule(config)
     tx = create_optimizer(config, linear_schedule)
     train_state = TrainState.create(
-        apply_fn=network.apply,
-        params=network_params,
+        apply_fn=None,
+        params=state,
         tx=tx,
     )
 
     # Secondary sensitivity value network (GRU-based)
+    rng, vs_rng = jax.random.split(rng)
     network_vs = CriticGRU(
+        obs_dim,
         activation=config["ACTIVATION"],
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         gru_hidden_size=gru_hidden_size,
+        rngs=nnx.Rngs(int(vs_rng[0])),
     )
-    init_gru_hidden = jnp.zeros((1, gru_hidden_size))
-    network_vs_params = network_vs.init(rng, init_x, init_gru_hidden)
+
+    graphdef_vs, state_vs = nnx.split(network_vs)
 
     tvx = create_optimizer(config, linear_schedule)
     train_state_vs = TrainState.create(
-        apply_fn=network_vs.apply,
-        params=network_vs_params,
+        apply_fn=None,
+        params=state_vs,
         tx=tvx,
     )
 
-    loss_fn_vs = make_loss_fn_vs(config, network_vs)
+    loss_fn_vs = make_loss_fn_vs(config, graphdef_vs)
 
     return {
-        "network": network,
+        "graphdef": graphdef,
         "train_state": train_state,
-        "network_vs": network_vs,
+        "graphdef_vs": graphdef_vs,
         "train_state_vs": train_state_vs,
         "loss_fn_vs": loss_fn_vs,
         "gru_hidden_size": gru_hidden_size,

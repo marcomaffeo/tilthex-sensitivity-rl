@@ -1,6 +1,5 @@
-# @package _global_
-# Drone V1 environment configuration
 
+# Environment settings
 ENV_NAME: drone_v2
 
 # Environment-specific parameters
@@ -19,10 +18,10 @@ GAMMA: 0.98
 CLIP_EPS: 0.2
 ENT_COEF: 0.001
 
-ACTOR_LAYER_SIZES: [128, 128]
-CRITIC_LAYER_SIZES: [128, 128]
+ACTOR_LAYER_SIZES: [128, 128, 128]
+CRITIC_LAYER_SIZES: [128, 128, 128]
 
-SENSITIVITY_REGULARIZATION_WEIGHT: 0.08
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
+DOMAIN_RANDOMIZATION: false
 
-# SAC-specific overrides for drone_v1
-BUFFER_SIZE: 4e5
+ALGORITHM: ppo

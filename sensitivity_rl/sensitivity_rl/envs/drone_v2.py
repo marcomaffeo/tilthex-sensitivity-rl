@@ -70,7 +70,7 @@ class EnvParams(environment.EnvParams):
     com_pos: jax.Array = struct.field(
         pytree_node=True, default_factory=lambda: jnp.array([0.0, 0.0, 0.0])
     )
-    delay: float = struct.field(pytree_node=True, default=0.002)
+    delay: float = 0.002
 
     max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
@@ -86,8 +86,8 @@ class DroneV2(environment.Environment):
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
-        self.hovering_action = jnp.array(
-            [self.default_params.m * self.default_params.g / self.default_params.max_input[0], 0.0, 0.0, 0.0]
+        self.hovering_input = jnp.array(
+            [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]
         )
 
         self.params_min = [
@@ -148,9 +148,7 @@ class DroneV2(environment.Environment):
         action_clipped = jnp.clip(action, params.min_action, params.max_action)
         action_rescaled = self.rescale_action(action_clipped, params)
 
-        state = env_state.state
-
-        state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
+        state_next = self.step_dynamics(key, env_state, action_rescaled, params)
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
 
@@ -180,8 +178,8 @@ class DroneV2(environment.Environment):
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_yaw
-            - 0.02 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)))
-            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last))
+            - 0.02 * (jnp.linalg.norm(thrust_normalized_input - self.hovering_input/params.max_input[0] ))
+            - 0.1 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last))
         )
 
         reward = reward.squeeze()
@@ -203,27 +201,30 @@ class DroneV2(environment.Environment):
             {"discount": self.discount(env_state, params)},
         )
 
-    def step_dynamics_delay(
+
+    def step_dynamics(
         self,
         key: jax.Array,
-        state: ModelState,
+        env_state: ModelState,
         action: int | float | jax.Array,
-        last_action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
         """Step dynamics with input delay."""
+
+        state = env_state.state
+        last_action = env_state.last_u
         
         dt1 = jnp.clip(params.delay, 0.0, params.dt)
         dt2 = params.dt - dt1
 
         params = params.replace(dt=dt1)
-        state_intermediate = self.step_dynamics(key, state, last_action, params)
+        state_intermediate = self._step_dynamics(key, state, last_action, params)
         params = params.replace(dt=dt2)
-        state_final = self.step_dynamics(key, state_intermediate, action, params)
+        state_final = self._step_dynamics(key, state_intermediate, action, params)
 
         return state_final
 
-    def step_dynamics(
+    def _step_dynamics(
         self,
         key: jax.Array,
         state: ModelState,
@@ -320,7 +321,7 @@ class DroneV2(environment.Environment):
             state=state,
             target_pos=target_pos,
             target_yaw=target_yaw,
-            last_u=self.hovering_action,
+            last_u=self.hovering_input,
             time=0,
         )
         return self.get_obs(env_state), env_state
@@ -474,8 +475,9 @@ class DroneV2(environment.Environment):
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
 
         # Collect distance_to_target and yaw_error from all rollouts
-        all_distances = []
-        all_yaw_errors = []
+        distance_series = []
+        yaw_series = []
+        default_dt = 0.02
 
         for series in series_list:
             state = series.get("state", None)
@@ -510,12 +512,13 @@ class DroneV2(environment.Environment):
 
             # Collect distance_to_target and yaw_error if available
             eval_metrics = series.get("eval_metrics", {})
+            series_dt = float(series.get("dt", default_dt))
             if "distance_to_target" in eval_metrics:
                 dist = np.asarray(eval_metrics["distance_to_target"]).flatten()
-                all_distances.append(dist)
+                distance_series.append({"values": dist, "dt": series_dt})
             if "yaw_error" in eval_metrics:
                 yaw = np.asarray(eval_metrics["yaw_error"]).flatten()
-                all_yaw_errors.append(yaw)
+                yaw_series.append({"values": yaw, "dt": series_dt})
 
         ax_path.set_title("Quadrotor position trajectories")
         ax_path.set_xlabel("x [m]")
@@ -524,22 +527,40 @@ class DroneV2(environment.Environment):
         ax_path.grid(True, alpha=0.3)
 
         # Plot mean distance to target and yaw error with std shading
-        if all_distances or all_yaw_errors:
+        if distance_series or yaw_series:
             # Create twin axis for yaw error
             ax_yaw = ax_dist.twinx()
             
             # Plot distance to target
-            if all_distances:
-                max_len = max(d.shape[0] for d in all_distances)
+            if distance_series:
+                max_len = max(d["values"].shape[0] for d in distance_series)
                 padded = np.array([
-                    np.pad(d, (0, max_len - d.shape[0]), mode='edge') 
-                    for d in all_distances
+                    np.pad(d["values"], (0, max_len - d["values"].shape[0]), mode='edge') 
+                    for d in distance_series
                 ])
                 mean_dist = np.mean(padded, axis=0)
                 std_dist = np.std(padded, axis=0)
-                timesteps = np.arange(max_len)
+                reference_dt = distance_series[0]["dt"] if distance_series else default_dt
+                timesteps = np.arange(max_len) * reference_dt
 
-                ax_dist.plot(timesteps, mean_dist, color="blue", label="Distance", linewidth=2)
+                for dist_entry in distance_series:
+                    ax_dist.plot(
+                        np.arange(dist_entry["values"].shape[0]) * dist_entry["dt"],
+                        dist_entry["values"],
+                        color="blue",
+                        alpha=0.2,
+                        linewidth=0.8,
+                        zorder=1,
+                    )
+
+                ax_dist.plot(
+                    timesteps,
+                    mean_dist,
+                    color="blue",
+                    label="Distance",
+                    linewidth=2,
+                    zorder=2,
+                )
                 ax_dist.fill_between(
                     timesteps,
                     mean_dist - std_dist,
@@ -547,7 +568,6 @@ class DroneV2(environment.Environment):
                     alpha=0.3,
                     color="blue"
                 )
-                ax_dist.set_xlabel("Timestep")
                 ax_dist.set_ylabel("Distance to target [m]", color="blue")
                 ax_dist.tick_params(axis='y', labelcolor='blue')
                 
@@ -563,15 +583,26 @@ class DroneV2(environment.Environment):
                 )
             
             # Plot yaw error
-            if all_yaw_errors:
-                max_len_yaw = max(y.shape[0] for y in all_yaw_errors)
+            if yaw_series:
+                max_len_yaw = max(y["values"].shape[0] for y in yaw_series)
                 padded_yaw = np.array([
-                    np.pad(y, (0, max_len_yaw - y.shape[0]), mode='edge') 
-                    for y in all_yaw_errors
+                    np.pad(y["values"], (0, max_len_yaw - y["values"].shape[0]), mode='edge') 
+                    for y in yaw_series
                 ])
                 mean_yaw = np.mean(padded_yaw, axis=0)
                 std_yaw = np.std(padded_yaw, axis=0)
-                timesteps_yaw = np.arange(max_len_yaw)
+                reference_dt = distance_series[0]["dt"] if distance_series else yaw_series[0]["dt"]
+                timesteps_yaw = np.arange(max_len_yaw) * reference_dt
+
+                for yaw_entry in yaw_series:
+                    ax_yaw.plot(
+                        np.arange(yaw_entry["values"].shape[0]) * yaw_entry["dt"],
+                        yaw_entry["values"],
+                        color="red",
+                        alpha=0.2,
+                        linewidth=0.8,
+                        zorder=1,
+                    )
 
                 ax_yaw.plot(timesteps_yaw, mean_yaw, color="red", label="Yaw error", linewidth=2)
                 ax_yaw.fill_between(
@@ -596,7 +627,12 @@ class DroneV2(environment.Environment):
                 )
             
             ax_dist.set_title("Distance and Yaw Error over time")
+            ax_dist.set_xlabel("Time [s]")
             ax_dist.grid(True, alpha=0.3)
+            dist_top = max(ax_dist.get_ylim()[1], 0)
+            ax_dist.set_ylim(0, dist_top)
+            yaw_top = max(ax_yaw.get_ylim()[1], 0)
+            ax_yaw.set_ylim(0, yaw_top)
             
             # Add legend
             lines1, labels1 = ax_dist.get_legend_handles_labels()

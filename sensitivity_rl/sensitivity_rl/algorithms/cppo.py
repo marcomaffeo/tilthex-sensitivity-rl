@@ -2,6 +2,7 @@
 
 import jax
 import jax.numpy as jnp
+from flax import nnx
 
 from .base import AlgorithmSpec
 from algorithms.common import gae_standard
@@ -42,7 +43,7 @@ def wrap_env(env, config):
     return env
 
 
-def make_loss_fn(config, network):
+def make_loss_fn(config, graphdef):
     """Create PPO loss function.
 
     Returns a function with signature:
@@ -51,7 +52,8 @@ def make_loss_fn(config, network):
 
     def _loss_fn(params, traj_batch, advantages, targets):
         # RERUN NETWORK
-        pi, value = network.apply(params, traj_batch.obs)
+        model = nnx.merge(graphdef, params)
+        pi, value = model(traj_batch.obs)
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
@@ -179,13 +181,12 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 def make_collect_fn(config, env, env_params, networks):
     """Create trajectory collection function for CPPO."""
-    network = networks["network"]
+    graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        pi, value = network.apply(
-            runner_state.train_state.params, runner_state.last_obs
-        )
+        model = nnx.merge(graphdef, runner_state.train_state.params)
+        pi, value = model(runner_state.last_obs)
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
 
@@ -223,9 +224,8 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     This implements the CPPO Logic: Maximize (Advantage - Penalty)
     Penalty = lambda / (1 - alpha) * (nu - Return)+
     """
-    _, last_val = networks["network"].apply(
-        collect_state.train_state.params, collect_state.last_obs
-    )
+    model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
+    _, last_val = model(collect_state.last_obs)
 
     # 1. Standard GAE Calculation
     advantages, targets = gae_standard(config, traj_batch, last_val)

@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 from pathlib import Path
 from typing import Any, Mapping, Tuple
-from flax import serialization
+from flax import nnx, serialization
 
 
 
@@ -17,72 +17,56 @@ def normalize(a, a_min, a_max):
     return 2 * (a - a_min) / (a_max - a_min) - 1
 
 def load_actor_params_from_file(params_path: str):
-    """Load actor parameters from a msgpack file and merge with fresh critic params.
-    
-    Args:
-        params_path: Path to the params.msgpack file
-        
-    Returns:
-        Loaded parameters dictionary containing only actor parameters
-        
-    Raises:
-        FileNotFoundError: If the params file doesn't exist
-        ValueError: If the params file is corrupted or invalid
+    """Load actor parameters from a msgpack file saved by the NNX training loop.
+
+    The saved file contains the pure-dict representation of the full NNX
+    ``State`` produced by ``state.to_pure_dict()``.
+
+    Returns
+    -------
+    dict
+        The full restored pure-dict (caller should extract actor keys
+        if only the actor is needed).
     """
     params_file = Path(params_path)
     if not params_file.exists():
         raise FileNotFoundError(f"Parameters file not found: {params_path}")
-    
+
     try:
         params_bytes = params_file.read_bytes()
-        full_params = serialization.from_bytes(None, params_bytes)
-        
-        if not (isinstance(full_params, dict) and 'params' in full_params):
-            raise ValueError("Invalid parameter structure: expected dict with 'params' key")
-        
-        # Extract only actor parameters
-        all_params = full_params['params']
-        actor_params = {}
-        
-        actor_layer_names = ['actor_dense1', 'actor_dense2', 'actor_output', 'actor_log_std']
-        
-        for layer_name in actor_layer_names:
-            if layer_name in all_params:
-                actor_params[layer_name] = all_params[layer_name]
-                print(f"Loaded actor layer: {layer_name}")
-            else:
-                print(f"Warning: Actor layer {layer_name} not found in saved parameters")
-        
-        return {'params': actor_params}
-        
+        return serialization.msgpack_restore(params_bytes)
     except Exception as e:
         raise ValueError(f"Failed to load parameters from {params_path}: {e}")
 
 
-def merge_actor_params_with_fresh_critic(actor_params, fresh_params):
-    """Merge loaded actor parameters with freshly initialized critic parameters.
-    
-    Args:
-        actor_params: Dictionary containing only actor parameters
-        fresh_params: Freshly initialized full network parameters
-        
-    Returns:
-        Merged parameters dictionary
+def merge_actor_params_with_fresh_critic(loaded_pure_dict, fresh_state):
+    """Merge loaded actor parameters into a freshly initialised NNX State.
+
+    Parameters
+    ----------
+    loaded_pure_dict : dict
+        Pure-dict restored from a previous training run (full model).
+    fresh_state : nnx.State
+        State obtained from ``nnx.split(model)`` on a freshly
+        initialised model of the *same* architecture.
+
+    Returns
+    -------
+    nnx.State
+        State whose actor leaves come from ``loaded_pure_dict`` and
+        whose critic leaves are from ``fresh_state``.
     """
-    merged_params = fresh_params.copy()
-    
-    if 'params' in actor_params and 'params' in fresh_params:
-        # Start with fresh parameters
-        merged_layer_params = fresh_params['params'].copy()
-        
-        # Override with loaded actor parameters
-        for layer_name, layer_params in actor_params['params'].items():
-            if layer_name.startswith('actor_'):
-                merged_layer_params[layer_name] = layer_params
-        
-        merged_params['params'] = merged_layer_params
-    
-    return merged_params
+    treedef = jax.tree.structure(fresh_state)
+    fresh_pure = fresh_state.to_pure_dict()
+
+    # Overlay loaded actor values onto fresh dict
+    merged = dict(fresh_pure)
+    for key, value in loaded_pure_dict.items():
+        if key.startswith("actor_"):
+            merged[key] = value
+
+    flat_leaves = jax.tree.leaves(merged)
+    return jax.tree.unflatten(treedef, flat_leaves)
 
 
 def sample_env_params(
@@ -179,19 +163,39 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
     return latest_dir
 
 
-def init_network_params(rng, network, init_x, config):
-    """Initialize or load network parameters."""
-    if config.get("LOAD_ACTOR_PARAMS_PATH"):
-        print(f"Loading actor parameters from: {config['LOAD_ACTOR_PARAMS_PATH']}")
-        try:
-            fresh_params = network.init(rng, init_x)
-            actor_params = load_actor_params_from_file(config["LOAD_ACTOR_PARAMS_PATH"])
-            network_params = merge_actor_params_with_fresh_critic(actor_params, fresh_params)
-            print("Successfully loaded actor parameters")
-            return network_params
-        except (FileNotFoundError, ValueError) as e:
-            print(f"Warning: {e}. Using random initialization.")
-    return network.init(rng, init_x)
+def init_network_params(model, config):
+    """Optionally load actor weights from a previous run into *model*.
+
+    If ``config["LOAD_ACTOR_PARAMS_PATH"]`` is set, the saved pure-dict
+    is loaded and actor leaves are merged into the model's current state
+    (keeping the freshly-initialised critic).
+
+    Parameters
+    ----------
+    model : nnx.Module
+        Already-initialised NNX model.
+    config : dict
+        Training configuration.
+
+    Returns
+    -------
+    nnx.Module
+        The same model, potentially with actor weights replaced.
+    """
+    load_path = config.get("LOAD_ACTOR_PARAMS_PATH")
+    if not load_path:
+        return model
+
+    print(f"Loading actor parameters from: {load_path}")
+    try:
+        loaded_dict = load_actor_params_from_file(load_path)
+        graphdef, fresh_state = nnx.split(model)
+        merged_state = merge_actor_params_with_fresh_critic(loaded_dict, fresh_state)
+        model = nnx.merge(graphdef, merged_state)
+        print("Successfully loaded actor parameters")
+    except (FileNotFoundError, ValueError) as e:
+        print(f"Warning: {e}. Using random initialisation.")
+    return model
 
 
 def shuffle_batch(rng, batch, config):

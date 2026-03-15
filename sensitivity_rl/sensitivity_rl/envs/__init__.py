@@ -24,6 +24,7 @@ __all__ = [
     "DroneV1",
     "DroneV2",
     "DroneFlipV0",
+    "DroneV3",
     "HalfCheetahV5",
     "ReacherV5",
 ]

@@ -1,8 +1,18 @@
-# Base configuration
+# Default configuration for SPPO-VS-Estimation-Aug
+hydra:
+  job:
+    chdir: False       # Keeps the fix for JAX cache
+  run:
+    dir: .             # Runs in current directory
+  output_subdir: null  # Disables .hydra folder creation     
+  
 defaults:
   - method: ppo
-  - env: drone_v1
+  - env: drone_v3
+  - override hydra/job_logging: none  # Correct way to disable job logging
+  - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_
 
+# Override any method/env settings below if needed
 # Random seed
-SEED: 0
+SEED: 1

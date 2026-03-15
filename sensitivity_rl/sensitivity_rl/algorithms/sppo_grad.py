@@ -79,6 +79,8 @@ def make_loss_fn(config, network):
         log_ratio = log_prob - traj_batch.log_prob
         ratio = jnp.exp(log_ratio)
 
+        ratio_stopped = jax.lax.stop_gradient(ratio)
+
         # calculate approx_kl http://joschu.net/blog/kl-approx.html
         old_approx_kl = (-log_ratio).mean()
         approx_kl = ((ratio - 1) - log_ratio).mean()
@@ -126,19 +128,19 @@ def make_loss_fn(config, network):
             # (grad of sqrt(x) at x=0 is undefined; grad of x is always 1)
             return jnp.log(jnp.sum(M**2) + 1e-6)
 
-        sensitivity_loss = jax.vmap(_single_sensitivity_loss)(
+        sensitivity_loss = (ratio_stopped * jax.vmap(_single_sensitivity_loss)(
             traj_batch.obs,
             traj_batch.extras["df_dx"],
             traj_batch.extras["df_dp"],
             traj_batch.extras["df_du"],
             traj_batch.extras["dobs_dx_sens"],
-        ).mean()
+        ) ).mean()
 
         total_loss = (
             loss_actor
             + config["VF_COEF"] * value_loss
             - config["ENT_COEF"] * entropy
-            + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * 0.1 * sensitivity_loss
+            + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_loss
         )
         return total_loss, (
             value_loss,
@@ -192,9 +194,9 @@ def make_collect_fn(config, env, env_params, networks):
             -1, 1
         ) * jnp.zeros_like(new_gru_hidden)
 
-        # obsv = jax.lax.stop_gradient(obsv)
-        # env_state = jax.lax.stop_gradient(env_state)
-        # new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
+        obsv = jax.lax.stop_gradient(obsv)
+        env_state = jax.lax.stop_gradient(env_state)
+        new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
 
         transition = Transition(
             done,

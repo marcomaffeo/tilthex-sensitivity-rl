@@ -97,10 +97,10 @@ class DroneV2(environment.Environment):
             0.002,  # delay
         ]
         self.params_max = [
-            1.8,  # mas
+            1.8,  # mass
             jnp.array([0.05, 0.05, 0.05]),  # inertia
             jnp.array([0.02, 0.02, 0.02]),  # com_pos
-            0.015,  # delay
+            0.01,  # delay
         ]
         super().__init__()
 
@@ -152,12 +152,12 @@ class DroneV2(environment.Environment):
 
         state_next = self.step_dynamics_delay(key, state, action_rescaled, env_state.last_u, params)
 
-        pos_diff = state_next.pos - env_state.target_pos
+        pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
 
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.02,
+            pos_diff_norm < 0.02,
             10.0,  # reward when close to target
-            - 2.0 * jnp.linalg.norm(pos_diff),  # distance improvement reward
+            - 0.5 * pos_diff_norm,  # distance improvement reward
         )
 
         # Compute yaw error from quaternion
@@ -180,8 +180,8 @@ class DroneV2(environment.Environment):
             -0.1 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_yaw
-            - 0.01 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
-            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
+            - 0.02 * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)))
+            - 0.05 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last))
         )
 
         reward = reward.squeeze()

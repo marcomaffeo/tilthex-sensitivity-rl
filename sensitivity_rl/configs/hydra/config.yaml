@@ -8,7 +8,7 @@ hydra:
   
 defaults:
   - method: ppo
-  - env: drone_v2
+  - env: drone_flip_v0
   - override hydra/job_logging: none  # Correct way to disable job logging
   - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_

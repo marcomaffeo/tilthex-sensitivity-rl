@@ -1,0 +1,28 @@
+# @package _global_
+# Drone V1 environment configuration
+
+ENV_NAME: drone_v3
+
+# Environment-specific parameters
+NUM_ENVS: 2048
+NUM_STEPS: 300
+TOTAL_TIMESTEPS: 5e7
+NUM_MINIBATCHES: 128
+
+# Override network architecture for drone
+ACTIVATION: tanh
+ANNEAL_LR: true
+GRU_HIDDEN_SIZE: 64
+
+# Override some RL parameters for drone
+GAMMA: 0.99
+CLIP_EPS: 0.2
+ENT_COEF: 0.001
+
+ACTOR_LAYER_SIZES: [128, 128, 128]
+CRITIC_LAYER_SIZES: [128, 128, 128]
+
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.08
+
+# SAC-specific overrides for drone_v1
+BUFFER_SIZE: 4e5

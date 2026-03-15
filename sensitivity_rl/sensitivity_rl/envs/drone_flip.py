@@ -32,6 +32,7 @@ class EnvState(environment.EnvState):
     target_yaw: jax.Array  # Desired yaw angle (rotation around z-axis)
     last_u: jax.Array  # Only needed for rendering
     time: int
+    accumulated_flip_angle: jax.Array
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
@@ -61,6 +62,7 @@ class EnvParams(environment.EnvParams):
     env_min_limits: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, 0.0])
     )
+    target_flips: int = struct.field(pytree_node=False, default=1)
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
     m: float = 1.4
@@ -73,17 +75,17 @@ class EnvParams(environment.EnvParams):
     )
     delay: float = struct.field(pytree_node=True, default=0.002)
 
-    max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
+    max_steps_in_episode: int = struct.field(pytree_node=False, default=300)
     is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
-class DroneV3(environment.Environment):
+class DroneFlipV0(environment.Environment):
     """JAX Compatible version of drone to make flips."""
 
     def __init__(self):
         self.type = ""
         self.state_dim = 13
-        self.obs_dim = 14  # Added yaw_error to observations
+        self.obs_dim = 15  # CHANGED: Was 14 in drone_v2, added accumulated_flip_angle
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
@@ -162,17 +164,42 @@ class DroneV3(environment.Environment):
             key, state, action_rescaled, env_state.last_u, params
         )
 
-        pos_diff = state_next.pos - env_state.target_pos
+        target_angle = params.target_flips * 2.0 * jnp.pi
+        delta_angle = state_next.omega[1] * params.dt
+        new_accumulated_angle = env_state.accumulated_flip_angle + delta_angle
 
-        reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.02,
-            10.0,  # reward when close to target
-            -2.0 * jnp.linalg.norm(pos_diff),  # distance improvement reward
+        # 1. FLIP PROGRESS [0.0 to 1.0]
+        flip_ratio = jnp.clip(
+            new_accumulated_angle / jnp.maximum(target_angle, 1e-5), 0.0, 1.0
         )
 
-        # Compute yaw error from quaternion
-        # Yaw can be extracted from quaternion as: yaw = atan2(2*(q0*q3 + q1*q2), 1 - 2*(q2^2 + q3^2))
+        # THE PHASE SHIFT MULTIPLIER (Maintains the exploit fix to prevent tumbling)
+        angle_shortfall = jnp.maximum(0.0, target_angle - new_accumulated_angle)
+        phase_stabilize = jnp.exp(-0.5 * jnp.square(angle_shortfall))
+        stabilize = jnp.exp(-2.0 * jnp.square(angle_shortfall))
+
+        # 2. DENSE FLIP STATE REWARD
+        reward_flip = 15.0 * flip_ratio
+
+        # 3. STRICTLY BOUNDED TRACKING REWARD
+        pos_diff = state_next.pos - env_state.target_pos
+        pos_error = jnp.linalg.norm(pos_diff)
+
+        # A wide, strictly positive exponential.
+        # It never drops below zero, providing a safe, guiding gradient from any distance.
+        reward_pos = 50.0 * jnp.exp(-0.5 * pos_error) * stabilize
+
+        # Dynamic velocity damping. Only acts as a heavy brake when approaching the center.
+        vel_error = jnp.linalg.norm(state_next.vel)
+        braking_zone = jnp.exp(-1.0 * pos_error)
+        reward_vel = -2.0 * braking_zone * vel_error * stabilize
+
+        # 4. EXPLICIT ATTITUDE STABILIZATION
         q = state_next.attitude
+        upright_projection = 1.0 - 2.0 * (q[1] ** 2 + q[2] ** 2)
+        reward_upright = 3.0 * jnp.exp(-0.5 * (1.0 - upright_projection)) * stabilize
+
+        # 5. SMOOTHED YAW ALIGNMENT AND SPIN PENALTY
         current_yaw = jnp.arctan2(
             2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2)
         )
@@ -182,31 +209,39 @@ class DroneV3(environment.Environment):
                 jnp.cos(current_yaw - env_state.target_yaw),
             )
         )
+        reward_yaw = 2.0 * jnp.exp(-0.5 * yaw_error) * stabilize
 
-        reward_yaw = jax.lax.select(
-            yaw_error < 0.05,
-            1.0,  # reward when close to target
-            -1.0 * yaw_error,
-        )
+        # A unified spin penalty to calm the noisy thrashing
+        omega_sq = jnp.square(state_next.omega)
+        spin_penalty = -0.05 * jnp.sum(omega_sq) * stabilize
 
+        # 6. SMOOTH CONTROL EFFORT
         thrust_normalized_input = action_rescaled.at[0].set(
             action_rescaled[0] / (params.max_input[0])
         )
         thrust_normalized_input_last = env_state.last_u.at[0].set(
             env_state.last_u[0] / (params.max_input[0])
         )
+        ctrl_penalty = (
+            -0.15
+            * jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last)
+            ** 2
+        )
 
+        # 7. CRASH PENALTY
+        crash_penalty = jax.lax.select(state_next.pos[2] < 0.35, -50.0, 0.0)
+
+        # COMBINE REWARDS
         reward = (
-            -0.1 * jnp.linalg.norm(state_next.omega)
-            + reward_app
+            reward_flip
+            + reward_pos
+            + reward_vel
+            + reward_upright
             + reward_yaw
-            - 0.01
-            * (jnp.linalg.norm((thrust_normalized_input - self.hovering_action)) ** 2)
-            - 0.05
-            * (
-                jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last)
-                ** 2
-            )
+            + spin_penalty
+            + ctrl_penalty
+            + crash_penalty
+            + phase_stabilize * 5.0
         )
 
         reward = reward.squeeze()
@@ -217,6 +252,7 @@ class DroneV3(environment.Environment):
             target_yaw=env_state.target_yaw,
             last_u=action_rescaled.reshape(-1),
             time=env_state.time + 1,
+            accumulated_flip_angle=new_accumulated_angle,
         )
 
         done = self.is_terminal(env_state, params)
@@ -315,32 +351,20 @@ class DroneV3(environment.Environment):
         pos = jax.random.uniform(
             key,
             shape=(3,),
-            minval=params.env_min_limits,
-            maxval=params.env_max_limits,
+            minval=-0.1,
+            maxval=0.1,
         )
         attitude = jnp.array([1.0, 0.0, 0.0, 0.0])
         vel = jnp.array([0.0, 0.0, 0.0])
         omega = jnp.array([0.0, 0.0, 0.0])
-        state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
-
-        key, key_target, key_yaw = jax.random.split(key, 3)
-        target_pos = jax.lax.select(
-            params.is_testing,
-            self.target_pos,
-            jax.random.uniform(
-                key_target,
-                shape=(3,),
-                minval=params.env_min_limits,
-                maxval=params.env_max_limits,
-            ),
+        state = ModelState(
+            pos=self.target_pos + pos, attitude=attitude, vel=vel, omega=omega
         )
+
+        target_pos = self.target_pos
 
         # Sample target yaw uniformly between -pi and pi
-        target_yaw = jax.lax.select(
-            params.is_testing,
-            jnp.array(0.0),  # Point forward when testing
-            jax.random.uniform(key_yaw, minval=-jnp.pi, maxval=jnp.pi),
-        )
+        target_yaw = jnp.array(0.0)
 
         env_state = EnvState(
             state=state,
@@ -348,6 +372,7 @@ class DroneV3(environment.Environment):
             target_yaw=target_yaw,
             last_u=self.hovering_action,
             time=0,
+            accumulated_flip_angle=jnp.array(0.0),
         )
         return self.get_obs(env_state), env_state
 
@@ -377,6 +402,7 @@ class DroneV3(environment.Environment):
                 q.reshape(-1),
                 ang_vel.reshape(-1),
                 jnp.array([yaw_error]),
+                jnp.array([env_state.accumulated_flip_angle]),
             ]
         ).squeeze()
 
@@ -434,12 +460,13 @@ class DroneV3(environment.Environment):
             "yaw_error": yaw_error,
             "current_yaw": current_yaw,
             "target_yaw": env_state.target_yaw,
+            "accumulated_flip_angle": env_state.accumulated_flip_angle,
         }
 
     @property
     def name(self) -> str:
         """Environment name."""
-        return "Drone-v2"
+        return "Drone-v3"
 
     @property
     def num_actions(self) -> int:
@@ -506,14 +533,16 @@ class DroneV3(environment.Environment):
         gs = fig.add_gridspec(2, 4, height_ratios=[2, 1], width_ratios=[1, 1, 1, 1])
 
         ax_path = fig.add_subplot(gs[0, :2], projection="3d")
-        ax_dist = fig.add_subplot(gs[0, 2:])
+        ax_dist = fig.add_subplot(gs[0, 2])
         axes_act = [fig.add_subplot(gs[1, i]) for i in range(4)]
+        ax_pitch = fig.add_subplot(gs[0, 3])
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
 
         # Collect distance_to_target and yaw_error from all rollouts
         all_distances = []
         all_yaw_errors = []
+        all_pitch_angles = []
 
         for series in series_list:
             state = series.get("state", None)
@@ -554,6 +583,9 @@ class DroneV3(environment.Environment):
             if "yaw_error" in eval_metrics:
                 yaw = np.asarray(eval_metrics["yaw_error"]).flatten()
                 all_yaw_errors.append(yaw)
+            if "accumulated_flip_angle" in eval_metrics:
+                pitch = np.asarray(eval_metrics["accumulated_flip_angle"]).flatten()
+                all_pitch_angles.append(pitch)
 
         ax_path.set_title("Quadrotor position trajectories")
         ax_path.set_xlabel("x [m]")
@@ -660,6 +692,48 @@ class DroneV3(environment.Environment):
                 transform=ax_dist.transAxes,
             )
             ax_dist.set_title("Distance and Yaw Error over time")
+
+        if all_pitch_angles:
+            max_len_pitch = max(p.shape[0] for p in all_pitch_angles)
+            padded_pitch = np.array(
+                [
+                    np.pad(p, (0, max_len_pitch - p.shape[0]), mode="edge")
+                    for p in all_pitch_angles
+                ]
+            )
+            mean_pitch = np.mean(padded_pitch, axis=0)
+            std_pitch = np.std(padded_pitch, axis=0)
+            timesteps_pitch = np.arange(max_len_pitch)
+
+            ax_pitch.plot(
+                timesteps_pitch,
+                mean_pitch,
+                color="purple",
+                label="Accumulated Pitch",
+                linewidth=2,
+            )
+            ax_pitch.fill_between(
+                timesteps_pitch,
+                mean_pitch - std_pitch,
+                mean_pitch + std_pitch,
+                alpha=0.3,
+                color="purple",
+            )
+
+            # Add a dashed line at 2*pi (one full flip) to easily visualize completion
+            ax_pitch.axhline(
+                y=2 * np.pi,
+                color="green",
+                linestyle="--",
+                alpha=0.7,
+                label="1 Full Flip (2π rad)",
+            )
+
+            ax_pitch.set_title("Accumulated Pitch Angle (Flip Progress)")
+            ax_pitch.set_xlabel("Timestep")
+            ax_pitch.set_ylabel("Angle [rad]")
+            ax_pitch.grid(True, alpha=0.3)
+            ax_pitch.legend(loc="lower right")
 
         plt.tight_layout()
 

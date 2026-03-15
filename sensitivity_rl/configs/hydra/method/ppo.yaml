@@ -1,7 +1,7 @@
 # @package _global_
 # PPO/SPPO method configuration
 
-ALGORITHM: ppo
+ALGORITHM: sppo_grad_param
 # Learning parameters
 LR: 0.001
 UPDATE_EPOCHS: 4
@@ -26,6 +26,7 @@ CRITIC_LAYER_SIZES: [256, 256]
 ANNEAL_LR: false
 NORMALIZE_ENV: true
 DEBUG: true
+TAU: 0.05
 
 # Sensitivity settings
 SENSITIVITY: true

@@ -28,7 +28,7 @@ def wrap_env(env, config):
     """Apply SPPO-aug specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
-    
+
     if env.type == "mujoco":
         env = MujocoSensitivityWrapper(env)
     else:
@@ -48,24 +48,23 @@ def wrap_env(env, config):
 
 def make_loss_fn(config, network):
     """Create SPPO-aug loss function for the main policy network.
-    
+
     Returns a function with signature:
         loss_fn(params, traj_batch, advantages, advantages_s, targets) -> (total_loss, aux_metrics)
     """
+
     def _loss_fn(params, traj_batch, advantages, advantages_s, targets):
         # RERUN NETWORK
         pi, value = network.apply(params, traj_batch.obs)
         log_prob = pi.log_prob(traj_batch.action)
 
         # CALCULATE VALUE LOSS
-        value_pred_clipped = traj_batch.value + (
-            value - traj_batch.value
-        ).clip(-config["CLIP_EPS"], config["CLIP_EPS"])
+        value_pred_clipped = traj_batch.value + (value - traj_batch.value).clip(
+            -config["CLIP_EPS"], config["CLIP_EPS"]
+        )
         value_losses = jnp.square(value - targets)
         value_losses_clipped = jnp.square(value_pred_clipped - targets)
-        value_loss = (
-            0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
-        )
+        value_loss = 0.5 * jnp.maximum(value_losses, value_losses_clipped).mean()
 
         # CALCULATE ACTOR LOSS
         log_ratio = log_prob - traj_batch.log_prob
@@ -76,7 +75,6 @@ def make_loss_fn(config, network):
         approx_kl = ((ratio - 1) - log_ratio).mean()
         clipfracs = jnp.mean(jnp.abs(ratio - 1.0) > config["CLIP_EPS"])
 
-        
         # Normalize and combine advantages
         gae_r = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         gae_s = (advantages_s - advantages_s.mean()) / (advantages_s.std() + 1e-8)
@@ -84,7 +82,11 @@ def make_loss_fn(config, network):
         # conflict_mask = (advantages < 0) & (advantages_s > 0)
         conflict_mask = (gae_r < 0) & (gae_s > 0)
 
-        weights_s = jnp.where(conflict_mask, - 2.0*config["SENSITIVITY_REGULARIZATION_WEIGHT"], config["SENSITIVITY_REGULARIZATION_WEIGHT"])
+        weights_s = jnp.where(
+            conflict_mask,
+            -2.0 * config["SENSITIVITY_REGULARIZATION_WEIGHT"],
+            config["SENSITIVITY_REGULARIZATION_WEIGHT"],
+        )
         # weights_s = config["SENSITIVITY_REGULARIZATION_WEIGHT"]  # Penalize positive and negative sensitivity, but stronger for negative (less sensitive than expected)
 
         # gae = jnp.where(gae_r > 0, gae_r + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s, gae_r + 2.0 * config["SENSITIVITY_REGULARIZATION_WEIGHT"] * gae_s)
@@ -94,7 +96,7 @@ def make_loss_fn(config, network):
         gae = gae_r + (weights_s * gae_s)
         # re-normalize combined advantage
         gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-        
+
         loss_actor1 = ratio * gae
         loss_actor2 = (
             jnp.clip(
@@ -108,9 +110,7 @@ def make_loss_fn(config, network):
         loss_actor = loss_actor.mean()
         entropy = pi.entropy().mean()
         total_loss = (
-            loss_actor
-            + config["VF_COEF"] * value_loss
-            - config["ENT_COEF"] * entropy
+            loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
         )
         return total_loss, (
             value_loss,
@@ -120,16 +120,17 @@ def make_loss_fn(config, network):
             approx_kl,
             clipfracs,
         )
-    
+
     return _loss_fn
 
 
 def make_loss_fn_vs(config, network_vs):
     """Create loss function for the sensitivity value network (GRU-based).
-    
+
     Returns a function with signature:
         loss_fn_vs(params_vs, traj_batch, targets_s) -> value_loss_s
     """
+
     def _loss_fn_vs(params_vs, traj_batch, targets_s):
         # Process batch through GRU
         value_s, _ = network_vs.apply(
@@ -148,29 +149,33 @@ def make_loss_fn_vs(config, network_vs):
             0.5 * jnp.maximum(value_s_losses, value_s_losses_clipped).mean()
         )
         return value_loss_s
-    
+
     return _loss_fn_vs
 
 
 def make_collect_fn(config, env, env_params, networks):
     """Create trajectory collection function for SPPO-aug.
-    
+
     Args:
         config: Training configuration
         env: Wrapped environment
         env_params: Environment parameters
         networks: Dict returned by init_networks containing 'network', 'network_vs', etc.
-    
+
     Returns a function for use with jax.lax.scan that collects transitions.
     """
     network = networks["network"]
     network_vs = networks["network_vs"]
-    
+
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
-        pi, value = network.apply(runner_state.train_state.params, runner_state.last_obs)
+        pi, value = network.apply(
+            runner_state.train_state.params, runner_state.last_obs
+        )
         value_s, new_gru_hidden = network_vs.apply(
-            runner_state.extras["train_state_vs"].params, runner_state.last_obs, runner_state.extras["gru_hidden"]
+            runner_state.extras["train_state_vs"].params,
+            runner_state.last_obs,
+            runner_state.extras["gru_hidden"],
         )
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
@@ -181,18 +186,29 @@ def make_collect_fn(config, env, env_params, networks):
             rng_step, runner_state.env_state, action, env_params
         )
         reward_s = info.get("sensitivity_state_rw", jnp.zeros_like(reward))
-        
+
         # Reset GRU hidden on episode end
-        new_gru_hidden = (1 - done.reshape(-1, 1)) * new_gru_hidden + done.reshape(-1, 1) * jnp.zeros_like(new_gru_hidden)
-        
+        new_gru_hidden = (1 - done.reshape(-1, 1)) * new_gru_hidden + done.reshape(
+            -1, 1
+        ) * jnp.zeros_like(new_gru_hidden)
+
         obsv = jax.lax.stop_gradient(obsv)
         env_state = jax.lax.stop_gradient(env_state)
         new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
 
         transition = Transition(
-            done, action, value, reward,
-            log_prob, runner_state.last_obs, info,
-            extras={"value_s": value_s, "reward_s": reward_s, "gru_hidden": runner_state.extras["gru_hidden"]},
+            done,
+            action,
+            value,
+            reward,
+            log_prob,
+            runner_state.last_obs,
+            info,
+            extras={
+                "value_s": value_s,
+                "reward_s": reward_s,
+                "gru_hidden": runner_state.extras["gru_hidden"],
+            },
         )
         new_runner_state = RunnerState(
             train_state=runner_state.train_state,
@@ -202,22 +218,23 @@ def make_collect_fn(config, env, env_params, networks):
             extras={**runner_state.extras, "gru_hidden": new_gru_hidden},
         )
         return new_runner_state, transition
-    
+
     return _env_step
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
     """Create update epoch function for SPPO-aug.
-    
+
     Args:
         config: Training configuration
         loss_fn: Loss function created by make_loss_fn
         shuffle_batch_fn: Function to shuffle and batch trajectories
         networks: Dict returned by init_networks containing 'loss_fn_vs', etc.
-    
+
     Returns a function for use with jax.lax.scan that performs one epoch of updates.
     """
     loss_fn_vs = networks["loss_fn_vs"]
+
     def _update_epoch(update_state: UpdateState, unused):
         def _update_minbatch(ts, batch_info):
             train_state, train_state_vs = ts
@@ -242,11 +259,19 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
         rng, _rng = jax.random.split(update_state.rng)
         minibatches = shuffle_batch_fn(
             _rng,
-            (update_state.traj_batch, update_state.advantages, update_state.extras["advantages_s"], update_state.targets, update_state.extras["targets_s"]),
+            (
+                update_state.traj_batch,
+                update_state.advantages,
+                update_state.extras["advantages_s"],
+                update_state.targets,
+                update_state.extras["targets_s"],
+            ),
             config,
         )
         (train_state, train_state_vs), total_loss = jax.lax.scan(
-            _update_minbatch, (update_state.train_state, update_state.extras["train_state_vs"]), minibatches
+            _update_minbatch,
+            (update_state.train_state, update_state.extras["train_state_vs"]),
+            minibatches,
         )
         new_update_state = UpdateState(
             train_state=train_state,
@@ -257,14 +282,16 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             extras={**update_state.extras, "train_state_vs": train_state_vs},
         )
         return new_update_state, total_loss
-    
+
     return _update_epoch
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
 
-    _, last_val = networks["network"].apply(collect_state.train_state.params, collect_state.last_obs)
+    _, last_val = networks["network"].apply(
+        collect_state.train_state.params, collect_state.last_obs
+    )
     network_vs = networks["network_vs"]
     last_val_s, _ = network_vs.apply(
         collect_state.extras["train_state_vs"].params,
@@ -284,10 +311,18 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 def extract_losses(loss_info):
     """Extract loss metrics from loss_info."""
-    total_losses, (
-        value_losses, actor_losses, entropies,
-        old_approx_kl, approx_kl, clipfracs,
-    ), vs_losses = loss_info
+    (
+        total_losses,
+        (
+            value_losses,
+            actor_losses,
+            entropies,
+            old_approx_kl,
+            approx_kl,
+            clipfracs,
+        ),
+        vs_losses,
+    ) = loss_info
     losses = {
         "total": total_losses.mean(),
         "value": value_losses.mean(),
@@ -303,12 +338,12 @@ def extract_losses(loss_info):
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
     """Initialize networks and train states for SPPO-aug.
-    
+
     Returns:
         dict with keys: network, train_state, network_vs, train_state_vs, loss_fn_vs, gru_hidden_size
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
-    
+
     # Main policy network
     network = ActorCritic(
         env.action_space(env_params).shape[0],
@@ -316,14 +351,14 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         actor_layer_sizes=tuple(config.get("ACTOR_LAYER_SIZES", (256, 256))),
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
     )
-    
+
     init_x = jnp.zeros(env.observation_space(env_params).shape)
-    
+
     if load_params_fn and config.get("LOAD_ACTOR_PARAMS_PATH"):
         network_params = load_params_fn(rng, network, init_x, config)
     else:
         network_params = network.init(rng, init_x)
-    
+
     linear_schedule = make_linear_schedule(config)
     tx = create_optimizer(config, linear_schedule)
     train_state = TrainState.create(
@@ -331,7 +366,7 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         params=network_params,
         tx=tx,
     )
-    
+
     # Secondary sensitivity value network (GRU-based)
     network_vs = CriticGRU(
         activation=config["ACTIVATION"],
@@ -340,16 +375,16 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     )
     init_gru_hidden = jnp.zeros((1, gru_hidden_size))
     network_vs_params = network_vs.init(rng, init_x, init_gru_hidden)
-    
+
     tvx = create_optimizer(config, linear_schedule)
     train_state_vs = TrainState.create(
         apply_fn=network_vs.apply,
         params=network_vs_params,
         tx=tvx,
     )
-    
+
     loss_fn_vs = make_loss_fn_vs(config, network_vs)
-    
+
     return {
         "network": network,
         "train_state": train_state,
@@ -362,20 +397,20 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 def init_runner_state(config, env, env_params, networks, rng):
     """Create initial runner state for SPPO-aug.
-    
+
     Returns:
         RunnerState NamedTuple
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
     obsv, env_state = env.reset(reset_rng, env_params)
-    
+
     gru_hidden_size = networks["gru_hidden_size"]
     init_gru_hidden = jnp.zeros((config["NUM_ENVS"], gru_hidden_size))
-    
+
     # Extra split before scan (matching original sppo_aug.py)
     rng, _rng = jax.random.split(rng)
-    
+
     # Dummy GAE extras for pytree consistency (overwritten each iteration)
     dummy_gae = jnp.zeros((config["NUM_STEPS"], config["NUM_ENVS"]))
 

@@ -65,13 +65,13 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
     )
 
-    max_target_roll: float = struct.field(pytree_node=False, default=10.0)
-    max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
-    max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
-
     min_target_roll: float = struct.field(pytree_node=False, default=-10.0)
     min_target_pitch: float = struct.field(pytree_node=False, default=-10.0)
     min_target_yaw: float = struct.field(pytree_node=False, default=-180.0)
+
+    max_target_roll: float = struct.field(pytree_node=False, default=10.0)
+    max_target_pitch: float = struct.field(pytree_node=False, default=10.0)
+    max_target_yaw: float = struct.field(pytree_node=False, default=180.0)
 
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -219,7 +219,7 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        reward_orientation = 2.0*jnp.exp(-1.0 * attitude_error_rad)   #sppo
+        reward_orientation = 3.0*jnp.exp(-1.0 * attitude_error_rad)   #sppo
         # reward_orientation = jnp.exp(-10.0 * attitude_error_rad)         #ppo
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < 0.04,      #sppo
@@ -361,7 +361,7 @@ class TilthexV1(environment.Environment):
         )
         attitude = euler_to_quat(att_rad)
 
-        vel = jax.random.uniform(key_vel, (3,), minval=-0.1, maxval=0.1)
+        vel = jax.random.uniform(key_vel, (3,), minval=-0.1, maxval=0.1) 
         omega = jax.random.uniform(key_omega, (3,), minval=-0.2, maxval=0.2)
         state = ModelState(pos=pos, attitude=attitude, vel=vel, omega=omega)
 

@@ -17,7 +17,7 @@ from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor 
 from rclpy.callback_groups import ReentrantCallbackGroup 
 
-from geometry_msgs.msg import PoseStamped 
+from geometry_msgs.msg import PoseStamped, Quaternion
 from std_srvs.srv import Trigger 
 
 from policy import Policy 
@@ -44,8 +44,9 @@ class PolicyControlNode(Node):
         self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
         
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
+        self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO_quat') 
+        self.declare_parameter('policy_dir', 'configs/policy/PPO_quat') 
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
@@ -194,6 +195,23 @@ class PolicyControlNode(Node):
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
+    def attitude_callback(self, msg: Quaternion): 
+        state = read_state_and_rot_w(self.components)
+        if state is None:
+            self.get_logger().error("Cannot read state to snap position.")
+            return
+            
+        with self.lock:
+            self.setpoint[0:3] = state[0:3]
+            self.setpoint[3] = msg.w
+            self.setpoint[4] = msg.x
+            self.setpoint[5] = msg.y
+            self.setpoint[6] = msg.z
+            
+            self.custom_setpoint_active = True
+            
+        self.get_logger().info(f"Hover+Attitude target set. Position snapped to: X={state[0]:.2f}, Y={state[1]:.2f}, Z={state[2]:.2f}m")
+
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
             if not self.motors_armed: 
@@ -318,6 +336,9 @@ class PolicyControlNode(Node):
         euler_ref = np.array(log_data['euler_ref']) 
         actions = np.array(log_data['action'])
         avel_act = np.array(log_data['avel'])
+        
+        quats_act = np.array(log_data['quat'])
+        quats_ref = np.array(log_data['quat_ref'])
 
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
@@ -326,25 +347,25 @@ class PolicyControlNode(Node):
         sim_folder = self.log_path / f'{policy_name}_{timestamp}'
         sim_folder.mkdir(parents=True, exist_ok=True)
 
-        # Plot 1: Outputs
+        # Plot 1: Outputs (in radianti)
         fig1, axs1 = plt.subplots(3, 2, figsize=(15, 12)) 
         fig1.suptitle(f'TiltHex Policy Outputs ({times[-1]:.1f}s)', fontsize=16) 
 
-        axs1[0, 0].plot(times, np.degrees(euler_act[:, 0]), label='Actual', color='blue') 
-        axs1[0, 0].plot(times, np.degrees(euler_ref[:, 0]), '--', label='Desired', color='black', alpha=0.7) 
-        axs1[0, 0].set_title('Roll [deg]') 
+        axs1[0, 0].plot(times, euler_act[:, 0], label='Actual', color='blue') 
+        axs1[0, 0].plot(times, euler_ref[:, 0], '--', label='Desired', color='black', alpha=0.7) 
+        axs1[0, 0].set_title('Roll [rad]') 
         axs1[0, 0].grid(True) 
         axs1[0, 0].legend() 
 
-        axs1[1, 0].plot(times, np.degrees(euler_act[:, 1]), label='Actual', color='green') 
-        axs1[1, 0].plot(times, np.degrees(euler_ref[:, 1]), '--', label='Desired', color='black', alpha=0.7) 
-        axs1[1, 0].set_title('Pitch [deg]') 
+        axs1[1, 0].plot(times, euler_act[:, 1], label='Actual', color='green') 
+        axs1[1, 0].plot(times, euler_ref[:, 1], '--', label='Desired', color='black', alpha=0.7) 
+        axs1[1, 0].set_title('Pitch [rad]') 
         axs1[1, 0].grid(True) 
         axs1[1, 0].legend() 
 
-        axs1[2, 0].plot(times, np.degrees(euler_act[:, 2]), label='Actual', color='red') 
-        axs1[2, 0].plot(times, np.degrees(euler_ref[:, 2]), '--', label='Desired', color='black') 
-        axs1[2, 0].set_title('Yaw [deg]') 
+        axs1[2, 0].plot(times, euler_act[:, 2], label='Actual', color='red') 
+        axs1[2, 0].plot(times, euler_ref[:, 2], '--', label='Desired', color='black') 
+        axs1[2, 0].set_title('Yaw [rad]') 
         axs1[2, 0].grid(True) 
         axs1[2, 0].legend()
 
@@ -416,7 +437,44 @@ class PolicyControlNode(Node):
         fig3.savefig(sim_folder / 'velocities.png') 
         plt.close(fig3)
 
-        self.get_logger().info(f"Plots saved in: {sim_folder}") 
+        # Plot 4: Tracking Errors (Metrica esatta da Quaternioni come in tilthex_v1.py)
+        fig4 = plt.figure(figsize=(15, 5))
+        gs = fig4.add_gridspec(1, 2)
+        ax_dist_err = fig4.add_subplot(gs[0, 0])
+        ax_att_err = fig4.add_subplot(gs[0, 1])
+
+        # --- Position Error ---
+        ax_dist_err.plot(times, pos_err, color="blue", linewidth=2, label="Error")
+        final_err = pos_err[-1]
+        ax_dist_err.text(0.5, 0.9, f"Final: {final_err:.3f} m", 
+                         transform=ax_dist_err.transAxes, ha="right", 
+                         bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
+        
+        ax_dist_err.set_title("Position Error [m]")
+        ax_dist_err.set_ylabel("Error [m]")
+        ax_dist_err.set_xlabel("Time [s]")
+        ax_dist_err.grid(True, alpha=0.3)
+
+        dot_prod = np.sum(quats_act * quats_ref, axis=1)
+        dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
+        total_error_rad = 2.0 * np.arccos(dot_prod)
+
+        ax_att_err.plot(times, total_error_rad, color="red", linewidth=2, label="Error")
+        final_att_err = total_error_rad[-1]
+        ax_att_err.text(0.5, 0.9, f"Final: {final_att_err:.3f} rad", 
+                        transform=ax_att_err.transAxes, ha="right", 
+                        bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
+        
+        ax_att_err.set_title("Attitude Error [rad]")
+        ax_att_err.set_ylabel("Error [rad]")
+        ax_att_err.set_xlabel("Time [s]")
+        ax_att_err.grid(True, alpha=0.3)
+
+        fig4.tight_layout()
+        fig4.savefig(sim_folder / 'tracking_errors.png')
+        plt.close(fig4)
+
+        self.get_logger().info(f"Plots saved in: {sim_folder}")
     
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 
@@ -429,7 +487,8 @@ class PolicyControlNode(Node):
 
         log_data = { 
             't': [], 'pos': [], 'vel': [], 'euler': [], 'avel': [],
-            'pos_ref': [], 'euler_ref': [], 'action': []
+            'pos_ref': [], 'euler_ref': [], 'action': [],
+            'quat': [], 'quat_ref': []
         } 
 
         try: 
@@ -491,6 +550,8 @@ class PolicyControlNode(Node):
                 log_data['pos_ref'].append(target_pos) 
                 log_data['euler_ref'].append(quat_to_euler_xyz(target_quat)) 
                 log_data['action'].append(action.copy())
+                log_data['quat'].append(raw_state[6:10])      
+                log_data['quat_ref'].append(target_quat)      
 
             except Exception as exc: 
                 self.get_logger().error(f'Policy loop error: {exc}') 
@@ -560,6 +621,37 @@ def publish_setpoint_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 
+def publish_attitude_cli(args):
+    import sys
+    from scipy.spatial.transform import Rotation
+    from geometry_msgs.msg import Quaternion
+    
+    if len(args) < 3:
+        print("Error: missing arguments. Usage: --attitude roll_deg pitch_deg yaw_deg")
+        return
+
+    r_deg, p_deg, y_deg = map(float, args[:3])
+    quat_xyzw = Rotation.from_euler('xyz', [r_deg, p_deg, y_deg], degrees=True).as_quat()
+
+    rclpy.init()
+    node = rclpy.create_node('cli_attitude_publisher')
+    pub = node.create_publisher(Quaternion, '/policy/attitude_target', 10)
+    
+    msg = Quaternion()
+    msg.x = quat_xyzw[0]
+    msg.y = quat_xyzw[1]
+    msg.z = quat_xyzw[2]
+    msg.w = quat_xyzw[3]
+
+    import time
+    time.sleep(0.2) 
+    pub.publish(msg)
+    node.get_logger().info(f"Attitude target sent: RPY=[{r_deg}°, {p_deg}°, {y_deg}°]")
+    time.sleep(0.1)
+    
+    node.destroy_node()
+    rclpy.shutdown()
+
 def main(args=None): 
     try:
         os.nice(-10)
@@ -581,5 +673,7 @@ if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == '--setpoint':
         publish_setpoint_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--attitude':
+        publish_attitude_cli(sys.argv[2:])
     else:
         main()

@@ -5,8 +5,6 @@
 
     <link name="blade">
 
-		<gravity>0</gravity>
-
 		<inertial>
 			<mass>0.01355</mass>
 			<inertia>

@@ -38,6 +38,14 @@ args = [
 ]
 cmd = "python src/policy_control_node_tilthex.py --setpoint {{ x }} {{ y }} {{ z }} {{ roll }} {{ pitch }} {{ yaw }}"
 
+[tasks.policy-attitude]
+args = [
+  { "arg" = "roll", "default" = "0.0" },
+  { "arg" = "pitch", "default" = "0.0" },
+  { "arg" = "yaw", "default" = "0.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --attitude {{ roll }} {{ pitch }} {{ yaw }}"
+
 [tasks.sim]
 args = [
   { "arg" = "world_file", "default" = "worlds/myworld.world" },
@@ -87,9 +95,7 @@ loop-rate-limiters = "*"
 pyyaml = ">=6.0.2"
 matplotlib = ">=3.10.5"
 bokeh = "*"
-jax = ">=0.7.2,<0.8"
-flax = ">=0.10.4,<0.11"
-distrax = ">=0.1.7,<0.2"
+
 # ROS2 Jazzy dependencies
 ros-jazzy-ros-core = "*"
 ros-jazzy-geometry-msgs = "*"
@@ -97,3 +103,8 @@ ros-jazzy-sensor-msgs = "*"
 ros-jazzy-nav-msgs = "*"
 ros-jazzy-std-srvs = "*"
 colcon-common-extensions = "*"
+
+[pypi-dependencies]
+jax = "*"
+flax = ">=0.12.6"
+distrax = "*"

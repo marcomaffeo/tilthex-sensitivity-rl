@@ -91,7 +91,7 @@ METHODS = ["sppo_aug_grad_param", "sppo_grad", "ppo"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["halfcheetah_v5"]
+ENVIRONMENTS = ["tilthex_v1"]
 
 # Parameter sweeps - can be method-specific or shared across all methods
 # Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
@@ -101,8 +101,8 @@ ENVIRONMENTS = ["halfcheetah_v5"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0],
-    # "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
+    "SEED": [0, 2, 10],
+    "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
     # "GAMMA": [0.98],

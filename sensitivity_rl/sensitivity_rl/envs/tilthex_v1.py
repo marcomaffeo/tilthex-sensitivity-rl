@@ -16,7 +16,6 @@ from gymnax.environments.environment import TEnvParams, TEnvState
 from utils import angle_normalize
 
 from math import pi
-import numpy as np
 from numpy import matrix as mat
 
 from .utils_allocation import *
@@ -117,18 +116,18 @@ class TilthexV1(environment.Environment):
         self.params_min = [
             2.69,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([-0.02, -0.02, 0.005]),               # com offset 
+            jnp.array([0.001, 0.001, 0.02]),                # com offset 
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
-            0.002,                                          # delay between
+            0.001,                                          # delay 
         ]
         self.params_max = [
             3.29,                                           # mass +10%
-            jnp.array([0.090, 0.093, 0.170]),               # inertia +10%
-            jnp.array([0.02, 0.02, 0.045]),                  # com offset 
+            jnp.array([0.090, 0.093, 0.17]),                # inertia +10%
+            jnp.array([0.002, 0.002, 0.03]),                # com offset 
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
-            0.010,                                          # delay
+            0.01,                                           # delay
         ]
 
         super().__init__()
@@ -206,8 +205,7 @@ class TilthexV1(environment.Environment):
         action_noisy = jnp.clip(action_rescaled + noise, params.min_input, params.max_input)
 
         state = env_state.state
-
-        state_next = self.step_dynamics_delay(key, state, action_noisy, env_state.last_u, params)
+        state_next = self.step_dynamics(key, env_state, action_noisy, params)
 
         pos_diff = state_next.pos - env_state.target_pos
 
@@ -259,36 +257,36 @@ class TilthexV1(environment.Environment):
             {"discount": self.discount(env_state, params)},
         )
 
-    def step_dynamics_delay(
+    def step_dynamics(
         self,
         key: jax.Array,
-        state: ModelState,
+        env_state: EnvState,
         action: int | float | jax.Array,
-        last_action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Step dynamics with input delay."""
+        """Step dynamics handling input delay via intermediate integration."""
+        
+        state = env_state.state
+        last_action = env_state.last_u
         
         dt1 = jnp.clip(params.delay, 0.0, params.dt)
         dt2 = params.dt - dt1
 
         params = params.replace(dt=dt1)
-        state_intermediate = self.step_dynamics(key, state, last_action, params)
+        state_intermediate = self._step_dynamics(key, state, last_action, params)
         params = params.replace(dt=dt2)
-        state_final = self.step_dynamics(key, state_intermediate, action, params)
+        state_final = self._step_dynamics(key, state_intermediate, action, params)
 
         return state_final
 
-    def step_dynamics(
+    def _step_dynamics(
         self,
         key: jax.Array,
         state: ModelState,
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """
-        Tilthex dynamics model with CoM placed at the geometric center
-        """
+        """Core tilthex dynamics model with CoM placed at the geometric center."""
 
         u = jnp.clip(action, params.min_input, params.max_input)
    
@@ -299,8 +297,8 @@ class TilthexV1(environment.Environment):
         
         GF, GT = compute_allocation(6, params.arm_length, params.h, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
         
-        F_body = GF @ u       # [Fx, Fy, Fz] 
-        tau_body = GT @ u     # [Tx, Ty, Tz] 
+        F_body = GF @ u       
+        tau_body = GT @ u     
 
         lin_acc_body = F_body / params.m
 

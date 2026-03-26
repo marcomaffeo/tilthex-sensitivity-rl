@@ -46,7 +46,7 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO_quat') 
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO_quat') 
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
@@ -213,6 +213,9 @@ class PolicyControlNode(Node):
         self.get_logger().info(f"Hover+Attitude target set. Position snapped to: X={state[0]:.2f}, Y={state[1]:.2f}, Z={state[2]:.2f}m")
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
+
+        activation_start_time = perf_counter()
+        
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed before starting policy.') 
@@ -235,10 +238,13 @@ class PolicyControlNode(Node):
             self.is_flying = True 
 
             self.policy_thread = threading.Thread(target=self._policy_loop, daemon=True) 
-            self.policy_thread.start() 
+            self.policy_thread.start()
+
+            activation_time = perf_counter() - activation_start_time 
             
             response.success = True 
-            response.message = f'Policy loop started ({self.frequency_hz} Hz)' 
+            response.message = f'Policy loop started ({self.frequency_hz} Hz). Activation took {activation_time:.3f}s.' 
+            self.get_logger().info(response.message)
             
         except Exception as e: 
             response.success = False 
@@ -324,6 +330,8 @@ class PolicyControlNode(Node):
         return jnp.array(obs)
 
     def plot_results(self, log_data, policy_name): 
+        import matplotlib
+        matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
         self.get_logger().info("Generating plots...") 

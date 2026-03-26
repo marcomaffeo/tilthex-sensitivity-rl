@@ -105,6 +105,6 @@ ros-jazzy-std-srvs = "*"
 colcon-common-extensions = "*"
 
 [pypi-dependencies]
-jax = "*"
+jax = { version = "*", extras = ["cuda12"] }
 flax = ">=0.12.6"
 distrax = "*"

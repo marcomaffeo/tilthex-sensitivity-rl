@@ -14,6 +14,7 @@ class Policy:
         config, params_bytes = self.load(path)
         
         self.ACTION_DIM = config["env"]["action_dim"]
+        self.OBS_DIM = config["env"]["obs_dim"]
         self.MIN_INPUT = jnp.array(config["env"].get("MIN_INPUT"))
         self.MAX_INPUT = jnp.array(config["env"].get("MAX_INPUT"))
         self.MIN_ACTION = jnp.array(config["env"].get("MIN_ACTION"))
@@ -35,11 +36,19 @@ class Policy:
         return self.rescale_action(action_mean)
 
     def get_action(self, observation: np.ndarray) -> np.ndarray:
+        # Cast to fixed dtype to prevent JAX from recompiling due to ROS 2 float64 default messages
+        observation = np.asarray(observation, dtype=np.float32)
+        
         if observation.ndim == 1:
             observation = jnp.expand_dims(observation, axis=0)
             
         action_jax = self._get_action_jit(observation, self.restored_state)
         return np.asarray(action_jax[0], dtype=np.float64)
+
+    def warmup(self):
+        # Force JIT compilation before real-time control loop starts
+        dummy_obs = np.zeros(self.OBS_DIM, dtype=np.float32)
+        self.get_action(dummy_obs)
 
     def load(self, run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
         cfg_path = run_dir / "config.json"

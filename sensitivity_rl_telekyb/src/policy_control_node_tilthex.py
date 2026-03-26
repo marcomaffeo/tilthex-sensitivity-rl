@@ -46,7 +46,7 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO_quat') 
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO') 
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8)  
@@ -68,6 +68,25 @@ class PolicyControlNode(Node):
         self.motors_armed = False 
         self.is_flying = False 
         self.custom_setpoint_active = False
+
+        # --- PRE-LOAD AND WARM-UP POLICY ---
+        policy_dir = self.get_parameter('policy_dir').value
+        self.get_logger().info(f"Loading policy from {policy_dir}...")
+        try:
+            activation_start_time = perf_counter()
+            self.policy = Policy(Path(policy_dir))
+            
+            self.get_logger().info("JAX Warm-up: Compiling policy...")
+            dummy_obs = jnp.zeros((17,), dtype=jnp.float32)
+            for _ in range(5):
+                _ = self.policy.get_action(dummy_obs)
+            
+            activation_time = perf_counter() - activation_start_time
+            self.get_logger().info(f"JAX Compilation complete in {activation_time:.3f}s. Ready for real-time.")
+        except Exception as e:
+            self.get_logger().error(f"Failed to load policy during initialization: {e}")
+            self.policy = None
+        # -----------------------------------
 
         self.get_logger().info('Policy control node initialized')
 
@@ -224,14 +243,8 @@ class PolicyControlNode(Node):
                 response.message = 'Policy already running' 
                 return response 
             
-            policy_dir = self.get_parameter('policy_dir').value 
-            self.policy = Policy(Path(policy_dir)) 
-
-            self.get_logger().info("JAX Warm-up: Compiling policy...")
-            dummy_obs = jnp.zeros((17,), dtype=jnp.float32)
-            for _ in range(5):
-                _ = self.policy.get_action(dummy_obs) 
-            self.get_logger().info("JAX Compilation complete. Ready for real-time.")
+            if self.policy is None:
+                raise RuntimeError('Policy failed to load during node initialization.')
             
             self.policy_stop_event.clear() 
             self.policy_land_event.clear() 
@@ -489,15 +502,23 @@ class PolicyControlNode(Node):
         duration = self.get_parameter('policy_duration').value 
         policy_dir = self.get_parameter('policy_dir').value
         policy_name = Path(policy_dir).name
-        period = 1.0 / frequency if frequency > 0 else 0.0 
+        
+        rate = self.create_rate(frequency)
 
         self.get_logger().info(f'--- POLICY ACTIVE ({duration}s) ---') 
 
-        log_data = { 
-            't': [], 'pos': [], 'vel': [], 'euler': [], 'avel': [],
-            'pos_ref': [], 'euler_ref': [], 'action': [],
-            'quat': [], 'quat_ref': []
-        } 
+        max_steps = int(duration * frequency * 1.1) + 10 
+        
+        log_t = np.zeros(max_steps)
+        log_pos = np.zeros((max_steps, 3))
+        log_vel = np.zeros((max_steps, 3))
+        log_euler = np.zeros((max_steps, 3))
+        log_avel = np.zeros((max_steps, 3))
+        log_pos_ref = np.zeros((max_steps, 3))
+        log_euler_ref = np.zeros((max_steps, 3))
+        log_action = np.zeros((max_steps, self.policy.ACTION_DIM))
+        log_quat = np.zeros((max_steps, 4))
+        log_quat_ref = np.zeros((max_steps, 4))
 
         try: 
             self.components.nhfc.stop()
@@ -517,10 +538,10 @@ class PolicyControlNode(Node):
             pass 
 
         start_time = perf_counter() 
+        step_idx = 0
 
-        while not self.policy_stop_event.is_set(): 
-            loop_start = perf_counter() 
-            current_time = loop_start - start_time 
+        while not self.policy_stop_event.is_set() and step_idx < max_steps: 
+            current_time = perf_counter() - start_time 
             
             if current_time > duration: 
                 self.get_logger().info("Duration exceeded.") 
@@ -550,28 +571,35 @@ class PolicyControlNode(Node):
                     target_pos = self.setpoint[0:3].copy()
                     target_quat = self.setpoint[3:7].copy()
 
-                log_data['t'].append(current_time) 
-                log_data['pos'].append(raw_state[0:3]) 
-                log_data['vel'].append(raw_state[3:6]) 
-                log_data['euler'].append(euler) 
-                log_data['avel'].append(raw_state[10:13])
-                log_data['pos_ref'].append(target_pos) 
-                log_data['euler_ref'].append(quat_to_euler_xyz(target_quat)) 
-                log_data['action'].append(action.copy())
-                log_data['quat'].append(raw_state[6:10])      
-                log_data['quat_ref'].append(target_quat)      
+                log_t[step_idx] = current_time
+                log_pos[step_idx] = raw_state[0:3]
+                log_vel[step_idx] = raw_state[3:6]
+                log_euler[step_idx] = euler
+                log_avel[step_idx] = raw_state[10:13]
+                log_pos_ref[step_idx] = target_pos
+                log_euler_ref[step_idx] = quat_to_euler_xyz(target_quat)
+                log_action[step_idx] = action
+                log_quat[step_idx] = raw_state[6:10]
+                log_quat_ref[step_idx] = target_quat
+
+                step_idx += 1
+
+                if step_idx % 50 == 0:
+                    min_act = np.min(action)
+                    max_act = np.max(action)
+                    
+                    self.get_logger().info(
+                        f"T: {current_time:.1f}s | "
+                        f"Z: {raw_state[2]:.2f}m | "
+                        f"RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad | "
+                        f"Act[min,max]: [{min_act:+.2f}, {max_act:+.2f}]"
+                    )
 
             except Exception as exc: 
                 self.get_logger().error(f'Policy loop error: {exc}') 
                 break 
 
-            if period > 0.0: 
-                elapsed = perf_counter() - loop_start 
-                sleep_time = period - elapsed
-                if sleep_time > 0:
-                    sleep(sleep_time)
-                else:
-                    self.get_logger().warn("Loop missed deadline!", throttle_duration_sec=1.0)
+            rate.sleep()
 
         self.get_logger().warn("Switching back to PID control") 
 
@@ -585,14 +613,27 @@ class PolicyControlNode(Node):
         except Exception as e: 
             self.get_logger().error(f"RECOVERY FAILED: {e}")
 
-        if len(log_data['t']) > 10: 
+        log_data = {
+            't': log_t[:step_idx],
+            'pos': log_pos[:step_idx],
+            'vel': log_vel[:step_idx],
+            'euler': log_euler[:step_idx],
+            'avel': log_avel[:step_idx],
+            'pos_ref': log_pos_ref[:step_idx],
+            'euler_ref': log_euler_ref[:step_idx],
+            'action': log_action[:step_idx],
+            'quat': log_quat[:step_idx],
+            'quat_ref': log_quat_ref[:step_idx]
+        }
+
+        if step_idx > 10: 
             try: 
                 plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name)) 
                 plot_thread.start() 
             except Exception as e: 
                 self.get_logger().error(f"Plotting thread failed to start: {e}") 
         else: 
-            self.get_logger().warn("Not enough data to plot.") 
+            self.get_logger().warn("Not enough data to plot.")
 
 def publish_setpoint_cli(args):
     import math

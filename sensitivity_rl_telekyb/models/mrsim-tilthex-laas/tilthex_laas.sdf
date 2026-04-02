@@ -9,12 +9,12 @@
         <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
         <mass>2.91118</mass>
         <inertia>
-          <ixx>0.082529</ixx>
+          <ixx>0.09078190000000001</ixx>
           <ixy>0.00175324</ixy>
           <ixz>1.3135e-06</ixz>
-          <iyy>0.0846092</iyy>
+          <iyy>0.09307012</iyy>
           <iyz>-5.1512e-05</iyz>
-          <izz>0.154814</izz>
+          <izz>0.1702954</izz>
         </inertia>
       </inertial>
       <pose>0 0 0 0 -0 0</pose>
@@ -175,7 +175,7 @@
 			<link>tilthex_laas</link>
 			<rotors>
 				<noise>0.03</noise>
-				<cf>12.0e-4</cf>
+				<cf>0.0012</cf>
 				<ct>2.4e-5</ct>
 				<rotor><joint spin="cw">propeller-1-joint</joint></rotor>
 				<rotor><joint spin="ccw">propeller-2-joint</joint></rotor>

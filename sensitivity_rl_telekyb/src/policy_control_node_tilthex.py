@@ -27,8 +27,11 @@ class PolicyControlNode(Node):
     def __init__(self): 
         super().__init__('policy_controller') 
         
-        self.log_path = Path("logs") 
-        self.log_path.mkdir(parents=True, exist_ok=True)  
+        self.declare_parameter('custom_log_dir', '')
+        self.custom_log_dir = self.get_parameter('custom_log_dir').value
+
+        self.log_path = Path("logs")
+        self.log_path.mkdir(parents=True, exist_ok=True)
         
         self.components = TK3Components_tilthex(self.log_path) 
         self.get_logger().info('Genomix components loaded') 
@@ -364,8 +367,12 @@ class PolicyControlNode(Node):
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
 
-        timestamp = strftime("%Y%m%d_%H%M%S") 
-        sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+        if self.custom_log_dir:
+            sim_folder = Path(self.custom_log_dir)
+        else:
+            timestamp = strftime("%Y%m%d_%H%M%S") 
+            sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+            
         sim_folder.mkdir(parents=True, exist_ok=True)
 
         # Plot 1: Outputs (in radianti)
@@ -495,7 +502,15 @@ class PolicyControlNode(Node):
         fig4.savefig(sim_folder / 'tracking_errors.png')
         plt.close(fig4)
 
-        self.get_logger().info(f"Plots saved in: {sim_folder}")
+        np.savez(
+            sim_folder / 'error_data.npz',
+            t=times,
+            pos_err=pos_err,
+            att_err=total_error_rad,
+            policy_name=policy_name
+        )
+
+        self.get_logger().info(f"Plots and data saved in: {sim_folder}")
     
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 

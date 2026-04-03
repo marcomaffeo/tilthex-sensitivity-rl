@@ -74,16 +74,18 @@ class EnvParams(environment.EnvParams):
 
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
-    n: float = struct.field(pytree_node=False, default=6)                                                                               # number of rotors
-    arm_length : float = struct.field(pytree_node=False, default=0.39)                                                                  # length of single arm
-    c_tau: float = struct.field(pytree_node=False, default=2.4e-5)                                                                      # squared propeller speed to drag torque coefficient [Nm/Hz^2]
-    beta: float = struct.field(pytree_node=False, default=0.0)                                                                          # beta tilting angle
-    wmin: float = struct.field(pytree_node=False, default=16)                                                                           # min prop rotation speed in Hz
-    wmax: float = struct.field(pytree_node=False, default=100)                                                                          # max prop rotation speed in Hz
-    h : float = struct.field(pytree_node=False, default=0.0603436)                                                                      # height of the propellers above the body frame (Motor Pose Z: 0.0133436 + Propeller Pose Z (relative to motor):0.047)
-    I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))   # inertia off-diagonal terms [kg*m^2]
-    action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                           # action noise scale for exploration
+    n: float = struct.field(pytree_node=False, default=6)                                                                                       # number of rotors
+    arm_length : float = struct.field(pytree_node=False, default=0.39)                                                                          # length of single arm
+    c_tau: float = struct.field(pytree_node=False, default=2.4e-5)                                                                              # squared propeller speed to drag torque coefficient [Nm/Hz^2]
+    beta: float = struct.field(pytree_node=False, default=0.0)                                                                                  # beta tilting angle
+    wmin: float = struct.field(pytree_node=False, default=16)                                                                                   # min prop rotation speed in Hz
+    wmax: float = struct.field(pytree_node=False, default=100)                                                                                  # max prop rotation speed in Hz
+    I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))           # inertia off-diagonal terms [kg*m^2]
+    action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                                   # action noise scale for exploration
     
+    reward_att_gain: float = struct.field(pytree_node=False, default=2.0)
+    reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
+
     # Uncertain parameters
     m: float = 2.99248                                                                                                                          # mass [kg] (2.91118 + (0.01355 x 6))
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
@@ -159,7 +161,7 @@ class TilthexV1(environment.Environment):
         W_des = jnp.hstack([F_body_req, jnp.array([0.0, 0.0, 0.0])])
         
         GF, GT = compute_allocation(
-            params.n, params.arm_length, params.h, params.alpha, 
+            params.n, params.arm_length, params.alpha, 
             params.beta, params.c_f, params.c_tau, params.com_default
         )
         M = jnp.vstack([GF, GT])
@@ -217,13 +219,11 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        reward_orientation = 3.0*jnp.exp(-1.0 * attitude_error_rad)   #sppo
-        # reward_orientation = jnp.exp(-10.0 * attitude_error_rad)         #ppo
+        reward_orientation = params.reward_att_gain * jnp.exp(-1.0 * attitude_error_rad)   
         reward_app = jax.lax.select(
-            jnp.linalg.norm(pos_diff) < 0.04,      #sppo
-            #jnp.linalg.norm(pos_diff) < 0.02,       #ppo
-            10.0,                               # reward when close to target
-            1.0 * (-jnp.linalg.norm(pos_diff)), # distance improvement reward
+            jnp.linalg.norm(pos_diff) < params.reward_pos_tolerance,
+            10.0,                                                       # reward when close to target
+            1.0 * (-jnp.linalg.norm(pos_diff)),                         # distance improvement reward
         )
 
         thrust_normalized_input = action_rescaled / params.max_input
@@ -295,7 +295,7 @@ class TilthexV1(environment.Environment):
         
         orientation_mat = quat2rotm(quat)
         
-        GF, GT = compute_allocation(6, params.arm_length, params.h, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
+        GF, GT = compute_allocation(6, params.arm_length, params.alpha, params.beta, params.c_f, params.c_tau, params.com_default)
         
         F_body = GF @ u       
         tau_body = GT @ u     

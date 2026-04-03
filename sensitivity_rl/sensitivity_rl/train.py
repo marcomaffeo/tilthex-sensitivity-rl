@@ -285,6 +285,16 @@ def make_train(
 
     env = ENV_REGISTRY[config["ENV_NAME"]]()
     env_params = env.default_params
+
+    override_kwargs = {}
+    if "REWARD_ATT_GAIN" in config:
+        override_kwargs["reward_att_gain"] = float(config["REWARD_ATT_GAIN"])
+    if "REWARD_POS_TOLERANCE" in config:
+        override_kwargs["reward_pos_tolerance"] = float(config["REWARD_POS_TOLERANCE"])
+
+    if override_kwargs:
+        env_params = env_params.replace(**override_kwargs)
+
     env = spec.wrap_env(env, config)
 
     eval_config = config.copy()

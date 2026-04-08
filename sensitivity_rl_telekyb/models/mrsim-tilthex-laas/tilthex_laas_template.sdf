@@ -6,7 +6,7 @@
     <!-- Link tilthex_laas -->
     <link name="tilthex_laas">
       <inertial>
-        <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
+        <pose>{COM_X} {COM_Y} {COM_Z} 0 0 0</pose>
         <mass>{{MASS}}</mass>
         <inertia>
           <ixx>{{IXX}}</ixx>
@@ -42,32 +42,24 @@
         </geometry>
       </collision>
     </link>
-    <!-- Frame motor1 -->
     <frame name="motor1">
-      <pose relative_to="tilthex_laas">0.39 0.00485669 0.0133436 -0.349066 3.96782e-15 1.25044e-14</pose>
+      <pose relative_to="tilthex_laas">0.39 0.00485669 0.0133436 {ALPHA_NEG} 3.96782e-15 1.25044e-14</pose>
     </frame>
-    <!-- Frame motor2 -->
     <frame name="motor2">
-      <pose relative_to="tilthex_laas">0.199206 0.335322 0.0133436 0.349066 -3.72628e-15 1.0472</pose>
+      <pose relative_to="tilthex_laas">0.199206 0.335322 0.0133436 {ALPHA_POS} -3.72628e-15 1.0472</pose>
     </frame>
-    <!-- Frame motor3 -->
     <frame name="motor3">
-      <pose relative_to="tilthex_laas">-0.199206 0.335322 0.0133436 -0.349066 3.96782e-15 2.0944</pose>
+      <pose relative_to="tilthex_laas">-0.199206 0.335322 0.0133436 {ALPHA_NEG} 3.96782e-15 2.0944</pose>
     </frame>
-    <!-- Frame motor4 -->
     <frame name="motor4">
-      <pose relative_to="tilthex_laas">-0.39 0.00485669 0.0133436 0.349066 -3.73367e-15 -3.14159</pose>
+      <pose relative_to="tilthex_laas">-0.39 0.00485669 0.0133436 {ALPHA_POS} -3.73367e-15 -3.14159</pose>
     </frame>
-    <!-- Frame motor5 -->
     <frame name="motor5">
-      <pose relative_to="tilthex_laas">-0.190794 -0.340178 0.0133436 -0.349066 3.75163e-15 -2.0944</pose>
+      <pose relative_to="tilthex_laas">-0.190794 -0.340178 0.0133436 {ALPHA_NEG} 3.75163e-15 -2.0944</pose>
     </frame>
-    <!-- Frame motor6 -->
     <frame name="motor6">
-      <pose relative_to="tilthex_laas">0.190794 -0.340178 0.0133436 0.349066 -3.63648e-15 -1.0472</pose>
+      <pose relative_to="tilthex_laas">0.190794 -0.340178 0.0133436 {ALPHA_POS} -3.63648e-15 -1.0472</pose>
     </frame>
-
-
 
     <!-- VISUAL ELEMENT + FIXED JOINT TO DISTINGUISH X BODY AXIS -->
     <link name="x_axis_visualizer">

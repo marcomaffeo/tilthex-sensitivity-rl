@@ -49,10 +49,13 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO') 
-        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/PPO') 
+        self.declare_parameter('policy_duration', 4.0)  
         self.declare_parameter('frequency_hz', 100.0) 
-        self.declare_parameter('takeoff_height', 0.8)  
+        self.declare_parameter('takeoff_height', 0.8) 
+
+        self.declare_parameter('skip_plots', False)
+        self.declare_parameter('npz_filename', 'error_data.npz') 
 
         self.lock = threading.Lock() 
         
@@ -350,8 +353,12 @@ class PolicyControlNode(Node):
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
-        self.get_logger().info("Generating plots...") 
+        self.get_logger().info("Processing log data...") 
         
+        # 1. Retrieve command-line flags
+        skip_plots = self.get_parameter('skip_plots').value
+        npz_filename = self.get_parameter('npz_filename').value
+
         times = np.array(log_data['t']) 
         pos_act = np.array(log_data['pos']) 
         vel_act = np.array(log_data['vel']) 
@@ -364,9 +371,17 @@ class PolicyControlNode(Node):
         quats_act = np.array(log_data['quat'])
         quats_ref = np.array(log_data['quat_ref'])
 
+        # Error calculations
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
+        # Assuming desired velocities are zero for hovering/point-to-point
         vel_err = np.linalg.norm(vel_act, axis=1)  
+        avel_err = np.linalg.norm(avel_act, axis=1) 
 
+        dot_prod = np.sum(quats_act * quats_ref, axis=1)
+        dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
+        total_error_rad = 2.0 * np.arccos(dot_prod)
+
+        # Folder management
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
@@ -375,142 +390,123 @@ class PolicyControlNode(Node):
             
         sim_folder.mkdir(parents=True, exist_ok=True)
 
-        # Plot 1: Outputs (in radianti)
-        fig1, axs1 = plt.subplots(3, 2, figsize=(15, 12)) 
-        fig1.suptitle(f'TiltHex Policy Outputs ({times[-1]:.1f}s)', fontsize=16) 
-
-        axs1[0, 0].plot(times, euler_act[:, 0], label='Actual', color='blue') 
-        axs1[0, 0].plot(times, euler_ref[:, 0], '--', label='Desired', color='black', alpha=0.7) 
-        axs1[0, 0].set_title('Roll [rad]') 
-        axs1[0, 0].grid(True) 
-        axs1[0, 0].legend() 
-
-        axs1[1, 0].plot(times, euler_act[:, 1], label='Actual', color='green') 
-        axs1[1, 0].plot(times, euler_ref[:, 1], '--', label='Desired', color='black', alpha=0.7) 
-        axs1[1, 0].set_title('Pitch [rad]') 
-        axs1[1, 0].grid(True) 
-        axs1[1, 0].legend() 
-
-        axs1[2, 0].plot(times, euler_act[:, 2], label='Actual', color='red') 
-        axs1[2, 0].plot(times, euler_ref[:, 2], '--', label='Desired', color='black') 
-        axs1[2, 0].set_title('Yaw [rad]') 
-        axs1[2, 0].grid(True) 
-        axs1[2, 0].legend()
-
-        axs1[0, 1].plot(times, pos_err, color='purple') 
-        axs1[0, 1].set_title('Position Error (Euclidean) [m]') 
-        axs1[0, 1].set_ylim(bottom=0) 
-        axs1[0, 1].grid(True) 
-
-        axs1[1, 1].plot(times, vel_err, color='orange') 
-        axs1[1, 1].set_title('Velocity Error (Magnitude) [m/s]') 
-        axs1[1, 1].set_ylim(bottom=0) 
-        axs1[1, 1].grid(True) 
-
-        axs1[2, 1].plot(times, pos_act[:, 2], label='Actual Z', color='cyan') 
-        axs1[2, 1].plot(times, pos_ref[:, 2], '--', label='Desired Z', color='black') 
-        axs1[2, 1].set_title('Height (Z) [m]') 
-        axs1[2, 1].grid(True) 
-        axs1[2, 1].legend() 
-
-        fig1.tight_layout() 
-        fig1.savefig(sim_folder / 'outputs.png') 
-        plt.close(fig1)
-
-        # Plot 2: Inputs
-        fig2, axs2 = plt.subplots(3, 2, figsize=(15, 12)) 
-        fig2.suptitle(f'TiltHex Policy Inputs (Rotor Forces) ({times[-1]:.1f}s)', fontsize=16) 
-
-        for i in range(6):
-            row = i // 2
-            col = i % 2
-            if actions.shape[1] > i:
-                axs2[row, col].plot(times, actions[:, i], color='darkorange') 
-                axs2[row, col].set_title(f'Rotor {i+1} Command') 
-                axs2[row, col].grid(True) 
-
-        fig2.tight_layout() 
-        fig2.savefig(sim_folder / 'inputs.png') 
-        plt.close(fig2)
-
-        # Plot 3: Velocities
-        fig3, axs3 = plt.subplots(3, 2, figsize=(15, 12)) 
-        fig3.suptitle(f'TiltHex Velocities (POM State) ({times[-1]:.1f}s)', fontsize=16) 
-
-        axs3[0, 0].plot(times, vel_act[:, 0], color='blue') 
-        axs3[0, 0].set_title('Linear Velocity X [m/s]') 
-        axs3[0, 0].grid(True) 
-
-        axs3[1, 0].plot(times, vel_act[:, 1], color='green') 
-        axs3[1, 0].set_title('Linear Velocity Y [m/s]') 
-        axs3[1, 0].grid(True) 
-
-        axs3[2, 0].plot(times, vel_act[:, 2], color='red') 
-        axs3[2, 0].set_title('Linear Velocity Z [m/s]') 
-        axs3[2, 0].grid(True) 
-
-        axs3[0, 1].plot(times, avel_act[:, 0], color='purple') 
-        axs3[0, 1].set_title('Angular Rate X [rad/s]') 
-        axs3[0, 1].grid(True) 
-
-        axs3[1, 1].plot(times, avel_act[:, 1], color='orange') 
-        axs3[1, 1].set_title('Angular Rate Y [rad/s]') 
-        axs3[1, 1].grid(True) 
-
-        axs3[2, 1].plot(times, avel_act[:, 2], color='cyan') 
-        axs3[2, 1].set_title('Angular Rate Z [rad/s]') 
-        axs3[2, 1].grid(True) 
-
-        fig3.tight_layout() 
-        fig3.savefig(sim_folder / 'velocities.png') 
-        plt.close(fig3)
-
-        # Plot 4: Tracking Errors (Metrica esatta da Quaternioni come in tilthex_v1.py)
-        fig4 = plt.figure(figsize=(15, 5))
-        gs = fig4.add_gridspec(1, 2)
-        ax_dist_err = fig4.add_subplot(gs[0, 0])
-        ax_att_err = fig4.add_subplot(gs[0, 1])
-
-        # --- Position Error ---
-        ax_dist_err.plot(times, pos_err, color="blue", linewidth=2, label="Error")
-        final_err = pos_err[-1]
-        ax_dist_err.text(0.5, 0.9, f"Final: {final_err:.3f} m", 
-                         transform=ax_dist_err.transAxes, ha="right", 
-                         bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
-        
-        ax_dist_err.set_title("Position Error [m]")
-        ax_dist_err.set_ylabel("Error [m]")
-        ax_dist_err.set_xlabel("Time [s]")
-        ax_dist_err.grid(True, alpha=0.3)
-
-        dot_prod = np.sum(quats_act * quats_ref, axis=1)
-        dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
-        total_error_rad = 2.0 * np.arccos(dot_prod)
-
-        ax_att_err.plot(times, total_error_rad, color="red", linewidth=2, label="Error")
-        final_att_err = total_error_rad[-1]
-        ax_att_err.text(0.5, 0.9, f"Final: {final_att_err:.3f} rad", 
-                        transform=ax_att_err.transAxes, ha="right", 
-                        bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
-        
-        ax_att_err.set_title("Attitude Error [rad]")
-        ax_att_err.set_ylabel("Error [rad]")
-        ax_att_err.set_xlabel("Time [s]")
-        ax_att_err.grid(True, alpha=0.3)
-
-        fig4.tight_layout()
-        fig4.savefig(sim_folder / 'tracking_errors.png')
-        plt.close(fig4)
-
         np.savez(
-            sim_folder / 'error_data.npz',
+            sim_folder / npz_filename,
             t=times,
             pos_err=pos_err,
             att_err=total_error_rad,
+            vel_err=vel_err,          
+            avel_err=avel_err,       
             policy_name=policy_name
         )
+        self.get_logger().info(f"RAW data saved in: {sim_folder / npz_filename}")
 
-        self.get_logger().info(f"Plots and data saved in: {sim_folder}")
+        if skip_plots:
+            self.get_logger().info("skip_plots=True: Skipping PNG generation.")
+            return  
+
+        self.get_logger().info("Generating professional PNG plots...")
+        plt.style.use("seaborn-v0_8")
+
+        fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
+        fig1.suptitle(f'TiltHex Positions & Attitude ({times[-1]:.1f}s)', fontsize=16) 
+
+        # Row 1: X, Y, Z
+        titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
+        colors_pos = ['blue', 'green', 'cyan']
+        for i in range(3):
+            axs1[0, i].plot(times, pos_act[:, i], label='Actual', color=colors_pos[i], linewidth=2)
+            axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
+            axs1[0, i].set_title(titles_pos[i])
+            axs1[0, i].grid(True, alpha=0.3)
+            axs1[0, i].legend()
+
+        # Row 2: Roll, Pitch, Yaw
+        titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
+        colors_euler = ['blue', 'green', 'red']
+        for i in range(3):
+            axs1[1, i].plot(times, euler_act[:, i], label='Actual', color=colors_euler[i], linewidth=2)
+            axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
+            axs1[1, i].set_title(titles_euler[i])
+            axs1[1, i].set_xlabel("Time [s]")
+            axs1[1, i].grid(True, alpha=0.3)
+            axs1[1, i].legend()
+
+        fig1.tight_layout() 
+        fig1.savefig(sim_folder / 'positions.png', dpi=100) 
+        plt.close(fig1)
+
+        fig2, axs2 = plt.subplots(2, 3, figsize=(18, 8)) 
+        fig2.suptitle(f'TiltHex Inputs - Rotor Commands ({times[-1]:.1f}s)', fontsize=16) 
+
+        for i in range(6):
+            row = i // 3  # 0 or 1
+            col = i % 3   # 0, 1, or 2
+            if actions.shape[1] > i:
+                axs2[row, col].plot(times, actions[:, i], color='goldenrod', linewidth=2) 
+                axs2[row, col].set_title(f'Rotor {i+1} [N]') 
+                if row == 1: axs2[row, col].set_xlabel("Time [s]")
+                axs2[row, col].grid(True, alpha=0.3) 
+
+        fig2.tight_layout() 
+        fig2.savefig(sim_folder / 'inputs.png', dpi=100) 
+        plt.close(fig2)
+
+        fig3, axs3 = plt.subplots(2, 3, figsize=(18, 10)) 
+        fig3.suptitle(f'TiltHex Velocities (POM State) ({times[-1]:.1f}s)', fontsize=16) 
+
+        # Row 1: Linear Velocities
+        titles_vel = ['Linear Vel X [m/s]', 'Linear Vel Y [m/s]', 'Linear Vel Z [m/s]']
+        for i in range(3):
+            axs3[0, i].plot(times, vel_act[:, i], color=colors_pos[i], linewidth=2) 
+            axs3[0, i].set_title(titles_vel[i]) 
+            axs3[0, i].grid(True, alpha=0.3) 
+
+        titles_avel = ['Angular Rate X [rad/s]', 'Angular Rate Y [rad/s]', 'Angular Rate Z [rad/s]']
+        for i in range(3):
+            axs3[1, i].plot(times, avel_act[:, i], color=colors_euler[i], linewidth=2) 
+            axs3[1, i].set_title(titles_avel[i]) 
+            axs3[1, i].set_xlabel("Time [s]")
+            axs3[1, i].grid(True, alpha=0.3) 
+
+        fig3.tight_layout() 
+        fig3.savefig(sim_folder / 'velocities.png', dpi=100) 
+        plt.close(fig3)
+
+        fig4, axs4 = plt.subplots(2, 2, figsize=(16, 10))
+        fig4.suptitle(f'TiltHex Tracking Errors ({times[-1]:.1f}s)', fontsize=16)
+
+        # Column 1 Top: Position Error
+        axs4[0, 0].plot(times, pos_err, color="blue", linewidth=2, label="Pos Error")
+        axs4[0, 0].text(0.5, 0.9, f"Final: {pos_err[-1]:.3f} m", transform=axs4[0, 0].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
+        axs4[0, 0].set_title("Position Error [m]")
+        axs4[0, 0].grid(True, alpha=0.3)
+
+        # Column 1 Bottom: Attitude Error
+        axs4[1, 0].plot(times, total_error_rad, color="red", linewidth=2, label="Att Error")
+        axs4[1, 0].text(0.5, 0.9, f"Final: {total_error_rad[-1]:.3f} rad", transform=axs4[1, 0].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
+        axs4[1, 0].set_title("Attitude Error [rad]")
+        axs4[1, 0].set_xlabel("Time [s]")
+        axs4[1, 0].grid(True, alpha=0.3)
+
+        # Column 2 Top: Velocity Error
+        axs4[0, 1].plot(times, vel_err, color="green", linewidth=2, label="Vel Error")
+        axs4[0, 1].text(0.5, 0.9, f"Final: {vel_err[-1]:.3f} m/s", transform=axs4[0, 1].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightgreen", alpha=0.5))
+        axs4[0, 1].set_title("Velocity Error [m/s]")
+        axs4[0, 1].grid(True, alpha=0.3)
+
+        # Column 2 Bottom: Angular Velocity Error
+        axs4[1, 1].plot(times, avel_err, color="purple", linewidth=2, label="Ang Vel Error")
+        axs4[1, 1].text(0.5, 0.9, f"Final: {avel_err[-1]:.3f} rad/s", transform=axs4[1, 1].transAxes, ha="right", bbox=dict(boxstyle="round", fc="thistle", alpha=0.5))
+        axs4[1, 1].set_title("Angular Velocity Error [rad/s]")
+        axs4[1, 1].set_xlabel("Time [s]")
+        axs4[1, 1].grid(True, alpha=0.3)
+
+        fig4.tight_layout()
+        fig4.savefig(sim_folder / 'tracking_errors.png', dpi=100)
+        plt.close(fig4)
+
+        self.get_logger().info(f"Plots successfully saved in: {sim_folder}")
     
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 

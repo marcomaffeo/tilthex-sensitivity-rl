@@ -101,16 +101,16 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [1, 14, 30, 60, 80, 100, 140, 200, 300, 440, 500],
-    "REWARD_ATT_GAIN": [1.0, 2.0, 4.0],
-    "REWARD_POS_TOLERANCE": [0.01, 0.02, 0.04, 0.05, 0.1],
+    "SEED": [14, 60, 140, 200, 440],
+    "REWARD_ATT_GAIN": [1.0, 2.0],
+    "REWARD_POS_TOLERANCE": [0.02, 0.04],
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     "LR": [0.001, 0.0005, 0.0001],
     "NUM_ENVS": [2048],
     # "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2, 0.3],
-    "UPDATE_EPOCHS": [1, 2, 4, 6],
+    "CLIP_EPS": [0.1, 0.2],
+    "UPDATE_EPOCHS": [1, 2, 4],
     # "ENT_COEF": [0.001],
     # "DOMAIN_RANDOMIZATION": [True, False],
     # "TOTAL_TIMESTEPS": [5_000_000],

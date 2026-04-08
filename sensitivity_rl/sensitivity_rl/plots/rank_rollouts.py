@@ -20,21 +20,17 @@ def get_final_errors(traj_data):
     state = np.asarray(traj_data["state"])
     target_pos = np.asarray(traj_data["target_pos"])
     target_att = np.asarray(traj_data["target_attitude"])
-    
-    # Prendi l'ultimo step
+
     final_pos = state[-1, :3]
     final_quat = state[-1, 3:7]
     
-    # Gestisci le shape (potrebbero essere (T+1, X) o (X,))
     if target_pos.ndim > 1: 
         target_pos = target_pos[-1]
     if target_att.ndim > 1: 
         target_att = target_att[-1]
         
-    # Errore Posizione (Distanza Euclidea)
     pos_err = np.linalg.norm(final_pos - target_pos)
     
-    # Errore Attitude (Differenza angolare tra quaternioni)
     dot = np.sum(final_quat * target_att)
     dot = np.clip(np.abs(dot), -1.0, 1.0)
     att_err = 2.0 * np.arccos(dot)
@@ -61,7 +57,6 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
         nom_pos_errs, nom_att_errs = [], []
         pert_pos_errs, pert_att_errs = [], []
 
-        # Leggi tutti i file msgpack generati dai rollout
         for msgpack_file in rollouts_dir.glob("*.msgpack"):
             try:
                 with open(msgpack_file, "rb") as f:
@@ -82,7 +77,6 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
         if not nom_pos_errs and not pert_pos_errs:
             continue
 
-        # Calcola le medie. Usa inf (infinito) se mancano i dati per evitare falsi zeri nel sorting
         nom_pos_mean = np.mean(nom_pos_errs) if nom_pos_errs else float('inf')
         nom_att_mean = np.mean(nom_att_errs) if nom_att_errs else float('inf')
         
@@ -92,7 +86,6 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
         score_nom = nom_pos_mean + nom_att_mean
         score_pert = pert_pos_mean + pert_att_mean
 
-        # Estrai il seed
         seed = "N/A"
         for part in exp_dir.name.split("_"):
             if part.startswith("seed"):
@@ -113,13 +106,12 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
         print("\nNessun dato di rollout trovato. Assicurati che 'tuner.py' abbia completato la fase di valutazione.")
         return
 
-    # --- CLASSIFICA 1: NOMINALE ---
     valid_nom = [r for r in results if r["score_nom"] != float('inf') and not np.isnan(r["score_nom"])]
     valid_nom.sort(key=lambda x: x["score_nom"])
     top_nom = valid_nom[:top_n]
 
     print("\n" + "=" * 110)
-    print(f"🎯 TOP {len(top_nom)} RUNS: AMBIENTE NOMINALE (Ideale)")
+    print(f"TOP {len(top_nom)} RUNS: AMBIENTE NOMINALE (Ideale)")
     print("=" * 110)
     print(f"{'Experiment Name':<55} | {'Seed':<5} | {'Pos [m]':<10} | {'Att [rad]':<10} | {'SCORE':<10}")
     print("-" * 110)
@@ -131,13 +123,12 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
               f"{res['nom_pos']:<10.4f} | {res['nom_att']:<10.4f} | "
               f"{res['score_nom']:<10.4f}")
 
-    # --- CLASSIFICA 2: PERTURBATO ---
     valid_pert = [r for r in results if r["score_pert"] != float('inf') and not np.isnan(r["score_pert"])]
     valid_pert.sort(key=lambda x: x["score_pert"])
     top_pert = valid_pert[:top_n]
 
     print("\n" + "=" * 110)
-    print(f"🌪️ TOP {len(top_pert)} RUNS: AMBIENTE PERTURBATO (Robustezza)")
+    print(f"TOP {len(top_pert)} RUNS: AMBIENTE PERTURBATO (Robustezza)")
     print("=" * 110)
     print(f"{'Experiment Name':<55} | {'Seed':<5} | {'Pos [m]':<10} | {'Att [rad]':<10} | {'SCORE':<10}")
     print("-" * 110)
@@ -151,8 +142,6 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
 
     print("=" * 110 + "\n")
 
-    # --- SALVATAGGIO JSON ORDINATO ---
-    # Ordiniamo l'intera lista 'results' per score nominale prima di salvare
     def sort_key(x):
         val = x["score_nom"]
         return val if (val != float('inf') and not np.isnan(val)) else 1e9
@@ -161,7 +150,6 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
 
     output_file = sweep_dir / "best_rollout_rankings.json"
     
-    # Pulizia finale per compatibilità JSON (converte inf/nan in null)
     clean_results = []
     for r in results:
         clean_r = r.copy()

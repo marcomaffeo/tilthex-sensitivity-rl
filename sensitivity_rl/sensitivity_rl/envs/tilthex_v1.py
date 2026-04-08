@@ -118,7 +118,7 @@ class TilthexV1(environment.Environment):
         self.params_min = [
             2.69,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([0.001, 0.001, 0.02]),                # com offset 
+            jnp.array([0.001, 0.001, 0.02]),                # com offset [-110%, -110%, -10%]
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
             0.001,                                          # delay 
@@ -126,7 +126,7 @@ class TilthexV1(environment.Environment):
         self.params_max = [
             3.29,                                           # mass +10%
             jnp.array([0.090, 0.093, 0.17]),                # inertia +10%
-            jnp.array([0.002, 0.002, 0.03]),                # com offset 
+            jnp.array([0.002, 0.002, 0.03]),                # com offset [+110%, +110%, +10%]
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
             0.01,                                           # delay

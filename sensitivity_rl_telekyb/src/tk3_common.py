@@ -206,26 +206,26 @@ class TK3Components_tilthex:
         #
         # configure hexarotor geometry: 6 rotors, 20 degrees tilted, 39cm arms
         # self.nhfc.set_gtmrp_geom({
-        #     'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.42, 'mass': 3.119,
-        #     'rx':-20, 'ry': -20, 'rz': -1, 'cf': 11.25e-4, 'ct': 2.4e-5
+        #     'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.39, 'mass': 2.99248,
+        #     'rx':-20, 'ry': 0.0, 'rz': -1, 'cf': 12.0e-4, 'ct': 2.4e-5
         # })
 
         #  # emergency descent parameters
         # self.nhfc.set_emerg({'emerg': {
-        #     'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
+        #     'descent': 0.5, 'dx': 10.5, 'dq': 9.5, 'dv': 10.5, 'dw': 19.5
         # }})
 
         #  # PID tuning
-        # self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 0}})
+        # self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 1.0}})
         # self.nhfc.set_servo_gain({ 'gain': {
-        #     'Kpxy': 5, 'Kpz': 5, 'Kqxy': 4, 'Kqz': 0.1,
-        #     'Kvxy': 6, 'Kvz': 6, 'Kwxy': 1, 'Kwz': 0.1,
-        #     'Kixy': 0, 'Kiz': 0
+        #     'Kpxy': 20, 'Kpz': 20, 'Kqxy': 15, 'Kqz': 15,
+        #     'Kvxy': 10, 'Kvz': 10, 'Kwxy': 1.5, 'Kwz': 1,
+        #     'Kixy': 5, 'Kiz': 5
         # }})
 
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
-            'cx': 0.000123, 'cy': 0.000130, 'cz': 0.024859,
+            'cx': 0, 'cy': 0, 'cz': 0,
             'armlen': 0.39, 
             'mass': 2.99248,
             'rx': -20.0, 'ry': 0.0, 'rz': -1, 

@@ -17,6 +17,7 @@ quadrotor-control = {cmd = "python -i src/tk3-quadrotor-control.py"}
 tilthex-control = {cmd = "python -i src/tk3-tilthex-control.py"}
 policy-control = {cmd = "python src/policy_control_node.py"}
 policy-control-tilthex = {cmd = "python src/policy_control_node_tilthex.py"}
+policy-control-tilthex-pytorch = {cmd = "python src/policy_control_node_tilthex_pytorch.py"}
 
 # Policy management tasks
 policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
@@ -108,3 +109,4 @@ colcon-common-extensions = "*"
 jax = { version = "*", extras = ["cuda12"] }
 flax = ">=0.12.6"
 distrax = "*"
+torch = "*"

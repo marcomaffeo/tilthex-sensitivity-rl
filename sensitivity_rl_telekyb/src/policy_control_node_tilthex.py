@@ -49,7 +49,7 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO') 
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO') 
         self.declare_parameter('policy_duration', 4.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8) 
@@ -445,6 +445,8 @@ class PolicyControlNode(Node):
             if actions.shape[1] > i:
                 axs2[row, col].plot(times, actions[:, i], color='goldenrod', linewidth=2) 
                 axs2[row, col].set_title(f'Rotor {i+1} [N]') 
+                axs2[row, col].set_ylim(0, 12)
+                
                 if row == 1: axs2[row, col].set_xlabel("Time [s]")
                 axs2[row, col].grid(True, alpha=0.3) 
 

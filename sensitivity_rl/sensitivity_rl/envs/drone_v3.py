@@ -489,6 +489,7 @@ class DroneV3(environment.Environment):
                 - 'target_pos': optional target position array
                 - 'eval_metrics': optional dict with 'distance_to_target' array
             output: Optional path to save the figure. If None, displays interactively.
+                When provided, an additional state-trajectory figure is saved to str(output) + "1".
         """
         import matplotlib.pyplot as plt
 
@@ -505,6 +506,7 @@ class DroneV3(environment.Environment):
         # Collect distance_to_target and yaw_error from all rollouts
         distance_series = []
         yaw_series = []
+        state_series = []
         default_dt = 0.02
 
         for series in series_list:
@@ -512,8 +514,12 @@ class DroneV3(environment.Environment):
             if state is None:
                 continue
             state = np.asarray(state)
+            series_dt = float(series.get("dt", default_dt))
             # state format: [pos(3), attitude(4), vel(3), omega(3)]
             pos = state[:, :3]
+
+            if state.ndim == 2 and state.shape[1] >= 13:
+                state_series.append({"values": state[:, :13], "dt": series_dt})
 
             ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
 
@@ -540,7 +546,6 @@ class DroneV3(environment.Environment):
 
             # Collect distance_to_target and yaw_error if available
             eval_metrics = series.get("eval_metrics", {})
-            series_dt = float(series.get("dt", default_dt))
             if "distance_to_target" in eval_metrics:
                 dist = np.asarray(eval_metrics["distance_to_target"]).flatten()
                 distance_series.append({"values": dist, "dt": series_dt})
@@ -705,3 +710,86 @@ class DroneV3(environment.Environment):
             output.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(output, dpi=150)
             plt.close(fig)
+
+        # Extra figure: each state component trajectory with mean/std shading
+        if state_series:
+            state_labels = [
+                "pos_x",
+                "pos_y",
+                "pos_z",
+                "q_w",
+                "q_x",
+                "q_y",
+                "q_z",
+                "vel_x",
+                "vel_y",
+                "vel_z",
+                "omega_x",
+                "omega_y",
+                "omega_z",
+            ]
+
+            fig_state, axes_state = plt.subplots(4, 4, figsize=(20, 12), sharex=False)
+            axes_state = axes_state.flatten()
+
+            for idx, label in enumerate(state_labels):
+                ax = axes_state[idx]
+                max_len = max(entry["values"].shape[0] for entry in state_series)
+                padded = np.array(
+                    [
+                        np.pad(
+                            entry["values"][:, idx],
+                            (0, max_len - entry["values"].shape[0]),
+                            mode="edge",
+                        )
+                        for entry in state_series
+                    ]
+                )
+
+                mean_state = np.mean(padded, axis=0)
+                std_state = np.std(padded, axis=0)
+                reference_dt = state_series[0]["dt"] if state_series else default_dt
+                timesteps = np.arange(max_len) * reference_dt
+
+                for entry in state_series:
+                    ax.plot(
+                        np.arange(entry["values"].shape[0]) * entry["dt"],
+                        entry["values"][:, idx],
+                        color="gray",
+                        alpha=0.2,
+                        linewidth=0.8,
+                        zorder=1,
+                    )
+
+                ax.plot(
+                    timesteps,
+                    mean_state,
+                    color="tab:blue",
+                    linewidth=2.0,
+                    zorder=2,
+                )
+                ax.fill_between(
+                    timesteps,
+                    mean_state - std_state,
+                    mean_state + std_state,
+                    color="tab:blue",
+                    alpha=0.25,
+                    zorder=1,
+                )
+                ax.set_title(label)
+                ax.set_xlabel("Time [s]")
+                ax.grid(True, alpha=0.3)
+
+            for idx in range(len(state_labels), len(axes_state)):
+                axes_state[idx].axis("off")
+
+            fig_state.suptitle("State trajectories over time")
+            fig_state.tight_layout(rect=[0.0, 0.03, 1.0, 0.97])
+
+            if output is None:
+                plt.show()
+            else:
+                output_state = Path(output.parent, "state_" + output.name)
+                output_state.parent.mkdir(parents=True, exist_ok=True)
+                fig_state.savefig(output_state, dpi=150)
+                plt.close(fig_state)

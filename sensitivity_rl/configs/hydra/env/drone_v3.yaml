@@ -1,3 +1,6 @@
+# @package _global_
+# Drone V3 environment configuration
+
 # Environment settings
 ENV_NAME: drone_v3
 
@@ -21,6 +24,4 @@ ACTOR_LAYER_SIZES: [128, 128, 128]
 CRITIC_LAYER_SIZES: [128, 128, 128]
 
 SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
-DOMAIN_RANDOMIZATION: false
 
-ALGORITHM: ppo

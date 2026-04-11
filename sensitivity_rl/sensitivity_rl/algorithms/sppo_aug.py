@@ -5,7 +5,8 @@ import jax.numpy as jnp
 from flax import nnx
 from flax.training.train_state import TrainState
 
-from .base import AlgorithmSpec
+from .ppo import make_eval_step_fn
+from .base import AlgorithmSpec, default_build_eval_state
 from buffers import Transition, RunnerState, UpdateState
 from algorithms.common import gae_sensitivity
 from net_utils import create_optimizer, make_linear_schedule
@@ -440,5 +441,7 @@ SPEC = AlgorithmSpec(
     init_networks=init_networks,
     extract_losses=extract_losses,
     init_runner_state=init_runner_state,
+    make_eval_step_fn=make_eval_step_fn,
+    build_eval_state=default_build_eval_state,
     uses_sensitivity=True,
 )

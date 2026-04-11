@@ -15,6 +15,7 @@ Usage:
 
 import os
 import json
+import math
 import subprocess
 import sys
 import time
@@ -25,10 +26,17 @@ from datetime import datetime
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=0 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
+    "--xla_gpu_autotune_level=0 "
+    "--xla_gpu_force_compilation_parallelism=8 "
+    "--xla_cpu_enable_fast_math=true "
+    "--xla_gpu_enable_fast_min_max=true "
+    "--xla_gpu_enable_triton_gemm=true "
+    "--xla_gpu_triton_gemm_any=true "
 )
-# Note that setting xla_gpu_autotune_level=1 greatly improves performance, but causes non-determinism even when seeding the rng.  
-# For reproducibility in experiments, we set it to 0 (no autotuning).  
+os.environ["PYTHONHASHSEED"] = "0"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+# Note that setting xla_gpu_autotune_level=1 greatly improves performance, but causes non-determinism even when seeding the rng.
+# For reproducibility in experiments, we set it to 0 (no autotuning).
 # For final training runs where speed is more important than exact reproducibility, setting it to 1 is recommended.
 # os.environ["XLA_FLAGS"] = (
 #     "--xla_gpu_autotune_level=1 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
@@ -69,8 +77,15 @@ _timing_state: dict = {"last_time": None}
 
 
 def log_metrics(
-    writer, losses, metric, targets, traj_batch_value, timestep,
-    num_steps, num_envs, extra_losses=None,
+    writer,
+    losses,
+    metric,
+    targets,
+    traj_batch_value,
+    timestep,
+    num_steps,
+    num_envs,
+    extra_losses=None,
 ):
     """Create logging callback for training metrics."""
     targets_var = jnp.var(targets)
@@ -107,7 +122,9 @@ def log_metrics(
             sensitivity_state_mean = metric["sensitivity_state"].mean()
             # print(f"  sensitivity: max={float(sensitivity_state_max):.4f}, mean={float(sensitivity_state_mean):.4f}")
             writer.add_scalar(
-                "returns/sensitivity_state_max", float(sensitivity_state_max), int(timestep)
+                "returns/sensitivity_state_max",
+                float(sensitivity_state_max),
+                int(timestep),
             )
             writer.add_scalar(
                 "returns/sensitivity_state_mean",
@@ -159,7 +176,61 @@ def debug_callback(config, metric):
     jax.debug.callback(callback, metric)
 
 
-def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
+def _periodic_eval_log_callback(
+    writer,
+    run_dir,
+    update_idx,
+    timestep,
+    should_eval,
+    episodic_return,
+    sensitivity_mean,
+    sensitivity_max,
+):
+    """Host callback for scalar evaluation logging only."""
+    if not bool(should_eval):
+        return
+
+    step = int(timestep)
+    update_num = int(update_idx) + 1
+    episodic_return_f = float(episodic_return)
+    sensitivity_mean_f = float(sensitivity_mean)
+    sensitivity_max_f = float(sensitivity_max)
+    has_sensitivity = not math.isnan(sensitivity_mean_f)
+
+    writer.add_scalar("eval/episodic_return", episodic_return_f, step)
+    if has_sensitivity:
+        writer.add_scalar("eval/sensitivity_state_mean", sensitivity_mean_f, step)
+        writer.add_scalar("eval/sensitivity_state_max", sensitivity_max_f, step)
+
+    record = {
+        "trigger": f"during_training_update_{update_num}",
+        "step": step,
+        "episodic_return": episodic_return_f,
+    }
+    if has_sensitivity:
+        record["sensitivity_state_mean"] = sensitivity_mean_f
+        record["sensitivity_state_max"] = sensitivity_max_f
+
+    eval_summary_path = run_dir / "evaluation_summary.json"
+    all_records = []
+    if eval_summary_path.exists():
+        try:
+            previous_records = json.loads(eval_summary_path.read_text())
+            if isinstance(previous_records, list):
+                all_records.extend(previous_records)
+        except json.JSONDecodeError:
+            pass
+    all_records.append(record)
+    eval_summary_path.write_text(json.dumps(all_records, indent=2))
+
+
+def make_train(
+    config,
+    spec: AlgorithmSpec,
+    writer: SummaryWriter,
+    init_rng,
+    run_dir: Path,
+):
     """Create unified training function for PPO-family algorithms.
 
     Args:
@@ -184,6 +255,12 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
     env_params = env.default_params
     env = spec.wrap_env(env, config)
 
+    eval_config = config.copy()
+    eval_config["DOMAIN_RANDOMIZATION"] = False
+    eval_env = ENV_REGISTRY[eval_config["ENV_NAME"]]()
+    eval_env_params = eval_env.default_params
+    eval_env = spec.wrap_env(eval_env, eval_config)
+
     # INIT NETWORKS outside JIT (NNX needs concrete rngs)
     networks = spec.init_networks(
         config,
@@ -195,13 +272,19 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
 
     if config.get("SENSITIVITY", False):
         env.set_actor(graphdef, networks["train_state"].params)
+        eval_env.set_actor(graphdef, networks["train_state"].params)
 
     # Create algorithm-specific functions (closures over graphdef)
     loss_fn = spec.make_loss_fn(config, graphdef)
     collect_fn = spec.make_collect_fn(config, env, env_params, networks)
     update_fn = spec.make_update_fn(config, loss_fn, shuffle_batch, networks)
+    eval_step_fn = spec.make_eval_step_fn(eval_config, graphdef, eval_env, eval_env_params)
 
-    
+    eval_during_training_enabled = bool(
+        config.get("EVAL_DURING_TRAINING_ENABLED", False)
+    )
+    eval_every_updates = int(config.get("EVAL_EVERY_UPDATES", 0))
+
     total_steps = config["TOTAL_TIMESTEPS"]
 
     def train(rng):
@@ -209,7 +292,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
         runner_state = spec.init_runner_state(config, env, env_params, networks, rng)
 
         # TRAIN LOOP
-        def _update_step(runner_state, _unused):
+        def _update_step(runner_state, update_idx):
             if config.get("SENSITIVITY", False):
                 env.update_network_params(runner_state.train_state.params)
 
@@ -232,13 +315,25 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
                 for k, v in gae_results.items()
                 if k not in ("advantages", "targets")
             }
+
+            update_extras = {**collect_state.extras, **gae_extras}
+
+            leaves_with_paths, _ = jax.tree_util.tree_flatten_with_path(
+                collect_state.train_state.params
+            )
+            update_extras["old_actor_params"] = tuple(
+                leaf
+                for path, leaf in leaves_with_paths
+                if any("actor" in str(path_entry) for path_entry in path)
+            )
+
             update_state = UpdateState(
                 train_state=collect_state.train_state,
                 traj_batch=traj_batch,
                 advantages=gae_results["advantages"],
                 targets=gae_results["targets"],
                 rng=collect_state.rng,
-                extras={**collect_state.extras, **gae_extras},
+                extras=update_extras,
             )
             update_state, loss_info = jax.lax.scan(
                 update_fn, update_state, None, config["UPDATE_EPOCHS"]
@@ -265,23 +360,160 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
                 extra_losses=extra_losses,
             )
 
+            if eval_during_training_enabled and eval_every_updates > 0:
+                should_eval = ((update_idx + 1) % eval_every_updates) == 0
+                
+                # Create a fresh runner state for eval_env to circumvent domain randomization PyTree mismatch
+                fresh_eval_rng, _ = jax.random.split(collect_state.rng)
+                fresh_eval_runner_state = spec.init_runner_state(
+                    eval_config, eval_env, eval_env_params, networks, fresh_eval_rng
+                )
+                eval_start_state = spec.build_eval_state(update_state, fresh_eval_runner_state)
+
+                episodic_return, sensitivity_mean, sensitivity_max = jax.lax.cond(
+                    should_eval,
+                    lambda s: _run_deterministic_eval_rollout(eval_config, s, eval_step_fn),
+                    lambda _s: (
+                        jnp.array(jnp.nan, dtype=jnp.float32),
+                        jnp.array(jnp.nan, dtype=jnp.float32),
+                        jnp.array(jnp.nan, dtype=jnp.float32),
+                    ),
+                    eval_start_state,
+                )
+
+                jax.debug.callback(
+                    lambda update_idx, timestep, should_eval, episodic_return, sensitivity_mean, sensitivity_max: _periodic_eval_log_callback(
+                        writer,
+                        run_dir,
+                        update_idx,
+                        timestep,
+                        should_eval,
+                        episodic_return,
+                        sensitivity_mean,
+                        sensitivity_max,
+                    ),
+                    update_idx,
+                    current_timestep,
+                    should_eval,
+                    episodic_return,
+                    sensitivity_mean,
+                    sensitivity_max,
+                )
+
             # Rebuild runner state with updated train_state(s)
+            runner_extras = {
+                k: v for k, v in update_state.extras.items() if k != "old_actor_params"
+            }
             runner_state = RunnerState(
                 train_state=update_state.train_state,
                 env_state=collect_state.env_state,
                 last_obs=collect_state.last_obs,
                 rng=update_state.rng,
-                extras={**collect_state.extras, **update_state.extras},
+                extras={**collect_state.extras, **runner_extras},
             )
-            return runner_state, None
+            return runner_state, current_timestep
 
-        # Run training loop
-        runner_state, _ = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
-        )
+        update_indices = jnp.arange(config["NUM_UPDATES"])
+        runner_state, _ = jax.lax.scan(_update_step, runner_state, update_indices)
         return runner_state
 
     return train
+
+
+def _run_deterministic_eval_rollout(config, eval_start_state, eval_step_fn):
+    """Run deterministic rollout for NUM_STEPS and aggregate evaluation metrics."""
+    _final_eval_state, info_batch = jax.lax.scan(
+        eval_step_fn,
+        eval_start_state,
+        None,
+        config["NUM_STEPS"],
+    )
+
+    returned_mask = info_batch["returned_episode"].astype(jnp.float32)
+    returned_returns = info_batch["returned_episode_returns"]
+    num_returned = returned_mask.sum()
+    episodic_return = jnp.where(
+        num_returned > 0,
+        (returned_returns * returned_mask).sum() / num_returned,
+        jnp.nan,
+    )
+
+    sensitivity_mean = jnp.nan
+    sensitivity_max = jnp.nan
+    if "sensitivity_state" in info_batch:
+        sensitivity_state = info_batch["sensitivity_state"]
+        sensitivity_mean = jnp.mean(sensitivity_state)
+        sensitivity_max = jnp.mean(jnp.max(sensitivity_state, axis=0))
+
+    return episodic_return, sensitivity_mean, sensitivity_max
+
+
+def run_evaluation_loop(
+    config,
+    eval_step_fn,
+    eval_start_state,
+    run_dir=None,
+    writer=None,
+    step=None,
+    trigger="post_training",
+):
+    """Run deterministic in-process evaluation loop and log return/sensitivity."""
+    if not config.get("EVAL_ENABLED", True):
+        return []
+
+    episodic_return, sensitivity_mean, sensitivity_max = (
+        _run_deterministic_eval_rollout(
+            config,
+            eval_start_state,
+            eval_step_fn,
+        )
+    )
+
+    episodic_return_f = float(episodic_return)
+    sensitivity_mean_f = float(sensitivity_mean)
+    sensitivity_max_f = float(sensitivity_max)
+    log_step = int(step) if step is not None else 0
+    has_sensitivity = not math.isnan(sensitivity_mean_f)
+
+    if writer is not None:
+        writer.add_scalar("eval/episodic_return", episodic_return_f, log_step)
+        if has_sensitivity:
+            writer.add_scalar(
+                "eval/sensitivity_state_mean", sensitivity_mean_f, log_step
+            )
+            writer.add_scalar("eval/sensitivity_state_max", sensitivity_max_f, log_step)
+
+    record = {
+        "trigger": trigger,
+        "step": log_step,
+        "episodic_return": episodic_return_f,
+    }
+    if has_sensitivity:
+        record["sensitivity_state_mean"] = sensitivity_mean_f
+        record["sensitivity_state_max"] = sensitivity_max_f
+
+    if run_dir is not None:
+        eval_summary_path = run_dir / "evaluation_summary.json"
+        all_records = []
+        if eval_summary_path.exists():
+            try:
+                previous_records = json.loads(eval_summary_path.read_text())
+                if isinstance(previous_records, list):
+                    all_records.extend(previous_records)
+            except json.JSONDecodeError:
+                pass
+
+        all_records.append(record)
+        eval_summary_path.write_text(json.dumps(all_records, indent=2))
+
+    print(
+        "[Eval] "
+        f"trigger={trigger} step={log_step} "
+        f"return={episodic_return_f:.4f} "
+        f"sensitivity_mean={sensitivity_mean_f:.4f} "
+        f"sensitivity_max={sensitivity_max_f:.4f}"
+    )
+    return [record]
 
 
 def run_evaluation(config, run_dir):
@@ -292,7 +524,7 @@ def run_evaluation(config, run_dir):
     print("Running evaluation rollouts (nominal)...")
     subprocess.run(
         [
-            "python3",
+            sys.executable,
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
@@ -303,7 +535,7 @@ def run_evaluation(config, run_dir):
     print("Running evaluation rollouts (perturbed)...")
     subprocess.run(
         [
-            "python3",
+            sys.executable,
             f"{script_dir}/rollouts.py",
             "--run_dirs",
             f"{run_dir}",
@@ -355,20 +587,18 @@ def main(cfg: DictConfig):
 
     # Create unified training function
     rng, init_rng = jax.random.split(rng)
-    train_fn = make_train(config, spec, writer, init_rng)
+    train_fn = make_train(config, spec, writer, init_rng, run_dir)
 
-    # JIT compile and train
-    train_jit = jax.jit(train_fn)
     print("Compiling and training...")
     start_time = time.time()
-    final_state = train_jit(rng)
+    final_state = jax.jit(train_fn)(rng)
     jax.block_until_ready(final_state)
     end_time = time.time()
 
     # Log training speed (total time includes compilation)
     total_time = end_time - start_time
     total_steps = config["TOTAL_TIMESTEPS"]
-    
+
     writer.add_scalar("perf/total_time_seconds", total_time, total_steps)
 
     # Save params

@@ -88,7 +88,7 @@ class DroneFlipV0(environment.Environment):
         self.obs_dim = 15  # CHANGED: Was 14 in drone_v2, added accumulated_flip_angle
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
-        self.target_pos = jnp.array([0.0, 0.0, 0.5])
+        self.target_pos = jnp.array([0.0, 0.0, 1.0])
         self.hovering_action = jnp.array(
             [
                 self.default_params.m
@@ -174,12 +174,12 @@ class DroneFlipV0(environment.Environment):
         )
 
         # THE PHASE SHIFT MULTIPLIER (Maintains the exploit fix to prevent tumbling)
-        angle_shortfall = jnp.maximum(0.0, target_angle - new_accumulated_angle)
-        phase_stabilize = jnp.exp(-0.5 * jnp.square(angle_shortfall))
-        stabilize = jnp.exp(-2.0 * jnp.square(angle_shortfall))
+        angle_shortfall = target_angle - new_accumulated_angle
+        phase_stabilize = jnp.exp(-0.3 * jnp.square(angle_shortfall))
+        stabilize = jnp.exp(-0.5 * jnp.square(angle_shortfall))
 
         # 2. DENSE FLIP STATE REWARD
-        reward_flip = 15.0 * flip_ratio
+        reward_flip = 50.0 * flip_ratio
 
         # 3. STRICTLY BOUNDED TRACKING REWARD
         pos_diff = state_next.pos - env_state.target_pos
@@ -187,17 +187,18 @@ class DroneFlipV0(environment.Environment):
 
         # A wide, strictly positive exponential.
         # It never drops below zero, providing a safe, guiding gradient from any distance.
-        reward_pos = 50.0 * jnp.exp(-0.5 * pos_error) * stabilize
+        reward_pos = jax.lax.select(
+            pos_error < 0.02,
+            120.0,  # reward when close to target
+            80.0 * jnp.exp(-10.0 * pos_error),  # distance improvement reward
+        )
 
         # Dynamic velocity damping. Only acts as a heavy brake when approaching the center.
         vel_error = jnp.linalg.norm(state_next.vel)
-        braking_zone = jnp.exp(-1.0 * pos_error)
-        reward_vel = -2.0 * braking_zone * vel_error * stabilize
+        close_proximity_factor = jnp.exp(-5.0 * pos_error)
+        reward_vel = -0.1 * vel_error - 2.0 * vel_error * close_proximity_factor
 
-        # 4. EXPLICIT ATTITUDE STABILIZATION
         q = state_next.attitude
-        upright_projection = 1.0 - 2.0 * (q[1] ** 2 + q[2] ** 2)
-        reward_upright = 3.0 * jnp.exp(-0.5 * (1.0 - upright_projection)) * stabilize
 
         # 5. SMOOTHED YAW ALIGNMENT AND SPIN PENALTY
         current_yaw = jnp.arctan2(
@@ -212,8 +213,10 @@ class DroneFlipV0(environment.Environment):
         reward_yaw = 2.0 * jnp.exp(-0.5 * yaw_error) * stabilize
 
         # A unified spin penalty to calm the noisy thrashing
-        omega_sq = jnp.square(state_next.omega)
-        spin_penalty = -0.05 * jnp.sum(omega_sq) * stabilize
+        omega_sq = jnp.square(state_next.omega[0]) + jnp.square(state_next.omega[2])
+        spin_penalty = (
+            -0.1 * omega_sq - 0.1 * jnp.square(state_next.omega[1]) * stabilize
+        )
 
         # 6. SMOOTH CONTROL EFFORT
         thrust_normalized_input = action_rescaled.at[0].set(
@@ -222,26 +225,28 @@ class DroneFlipV0(environment.Environment):
         thrust_normalized_input_last = env_state.last_u.at[0].set(
             env_state.last_u[0] / (params.max_input[0])
         )
-        ctrl_penalty = (
-            -0.15
-            * jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last)
-            ** 2
-        )
+        # ctrl_penalty = (
+        #     -0.15
+        #     * jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last)
+        #     ** 2
+        # )
 
         # 7. CRASH PENALTY
-        crash_penalty = jax.lax.select(state_next.pos[2] < 0.35, -50.0, 0.0)
+        crash_penalty = jax.lax.select(state_next.pos[2] < 0.5, -50.0, 0.0)
 
         # COMBINE REWARDS
         reward = (
             reward_flip
             + reward_pos
             + reward_vel
-            + reward_upright
+            # + reward_upright
             + reward_yaw
             + spin_penalty
-            + ctrl_penalty
+            # + ctrl_penalty
             + crash_penalty
-            + phase_stabilize * 5.0
+            + phase_stabilize * 40.0
+            - 0.1
+            * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last))
         )
 
         reward = reward.squeeze()
@@ -354,6 +359,7 @@ class DroneFlipV0(environment.Environment):
             minval=-0.1,
             maxval=0.1,
         )
+        pos = pos.at[2].set(-0.5)
         attitude = jnp.array([1.0, 0.0, 0.0, 0.0])
         vel = jnp.array([0.0, 0.0, 0.0])
         omega = jnp.array([0.0, 0.0, 0.0])
@@ -395,6 +401,8 @@ class DroneFlipV0(environment.Environment):
             jnp.cos(current_yaw - env_state.target_yaw),
         )
 
+        target_pitch_angle = 2.0 * jnp.pi - env_state.accumulated_flip_angle
+
         return jnp.concatenate(
             [
                 to_target.reshape(-1),
@@ -402,7 +410,7 @@ class DroneFlipV0(environment.Environment):
                 q.reshape(-1),
                 ang_vel.reshape(-1),
                 jnp.array([yaw_error]),
-                jnp.array([env_state.accumulated_flip_angle]),
+                jnp.array([target_pitch_angle / (2.0 * jnp.pi)]),
             ]
         ).squeeze()
 
@@ -538,12 +546,16 @@ class DroneFlipV0(environment.Environment):
         ax_pitch = fig.add_subplot(gs[0, 3])
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
+        frame_step = 10
+        frame_scale = 0.08
 
         # Collect distance_to_target and yaw_error from all rollouts
         all_distances = []
         all_yaw_errors = []
         all_pitch_angles = []
 
+        min_x = min_y = min_z = float("inf")
+        max_x = max_y = max_z = float("-inf")
         for series in series_list:
             state = series.get("state", None)
             if state is None:
@@ -551,8 +563,59 @@ class DroneFlipV0(environment.Environment):
             state = np.asarray(state)
             # state format: [pos(3), attitude(4), vel(3), omega(3)]
             pos = state[:, :3]
+            attitude = state[:, 3:7]
 
             ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+            min_x = np.min([min_x, np.min(pos[:, 0])])
+            min_y = np.min([min_y, np.min(pos[:, 1])])
+            min_z = np.min([min_z, np.min(pos[:, 2])])
+            max_x = np.max([max_x, np.max(pos[:, 0])])
+            max_y = np.max([max_y, np.max(pos[:, 1])])
+            max_z = np.max([max_z, np.max(pos[:, 2])])
+            # Draw body-frame axes every `frame_step` points using orientation quaternion.
+            for idx in range(0, pos.shape[0], frame_step):
+                rot = np.asarray(quat2rotm(jnp.asarray(attitude[idx])))
+                origin = pos[idx]
+                axis_x = rot[:, 0] * frame_scale
+                axis_y = rot[:, 1] * frame_scale
+                axis_z = rot[:, 2] * frame_scale
+
+                ax_path.quiver(
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    axis_x[0],
+                    axis_x[1],
+                    axis_x[2],
+                    color="red",
+                    linewidth=0.3,
+                    alpha=0.8,
+                    arrow_length_ratio=0.05,
+                )
+                ax_path.quiver(
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    axis_y[0],
+                    axis_y[1],
+                    axis_y[2],
+                    color="green",
+                    linewidth=0.3,
+                    alpha=0.8,
+                    arrow_length_ratio=0.05,
+                )
+                ax_path.quiver(
+                    origin[0],
+                    origin[1],
+                    origin[2],
+                    axis_z[0],
+                    axis_z[1],
+                    axis_z[2],
+                    color="blue",
+                    linewidth=0.3,
+                    alpha=0.8,
+                    arrow_length_ratio=0.05,
+                )
 
             if "target_pos" in series:
                 target = np.asarray(series["target_pos"])
@@ -587,6 +650,9 @@ class DroneFlipV0(environment.Environment):
                 pitch = np.asarray(eval_metrics["accumulated_flip_angle"]).flatten()
                 all_pitch_angles.append(pitch)
 
+        ax_path.set_xlim(np.min([min_x, min_y]), np.max([max_x, max_y]))
+        ax_path.set_ylim(np.min([min_x, min_y]), np.max([max_x, max_y]))
+        ax_path.set_zlim(min_z, max_z)
         ax_path.set_title("Quadrotor position trajectories")
         ax_path.set_xlabel("x [m]")
         ax_path.set_ylabel("y [m]")

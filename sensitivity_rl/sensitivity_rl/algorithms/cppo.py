@@ -4,7 +4,8 @@ import jax
 import jax.numpy as jnp
 from flax import nnx
 
-from .base import AlgorithmSpec
+from .ppo import make_eval_step_fn
+from .base import AlgorithmSpec, default_build_eval_state
 from algorithms.common import gae_standard
 from buffers import Transition, RunnerState, UpdateState
 from .ppo import init_networks  # Same network setup as PPO
@@ -162,7 +163,11 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             advantages=update_state.advantages,
             targets=update_state.targets,
             rng=rng,
-            extras={"nu": new_nu, "cvarlam": new_cvarlam},
+            extras={
+                **update_state.extras,
+                "nu": new_nu,
+                "cvarlam": new_cvarlam,
+            },
         )
 
         new_total_loss = (
@@ -320,4 +325,6 @@ SPEC = AlgorithmSpec(
     init_networks=init_networks,
     extract_losses=extract_losses,
     init_runner_state=init_runner_state,
+    make_eval_step_fn=make_eval_step_fn,
+    build_eval_state=default_build_eval_state,
 )

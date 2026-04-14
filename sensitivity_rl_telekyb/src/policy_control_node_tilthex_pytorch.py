@@ -22,9 +22,6 @@ from std_srvs.srv import Trigger
 
 from tk3_common import TK3Components_tilthex, read_state_and_rot_w, quat_multiply, quat_to_rot_matrix_wxyz, quat_to_euler_xyz
 
-# ==========================================
-# Classe per la Memoria delle Azioni (FIFO)
-# ==========================================
 class ObsHistory:
     def __init__(self):
         self.H = 5          # history window length
@@ -40,9 +37,6 @@ class ObsHistory:
         self.obs_FIFO[-1] = new_obs
         return self.obs_FIFO.reshape(self.H * self.obs_len)
 
-# ==========================================
-# Nodo Principale
-# ==========================================
 class PolicyControlNodePyTorch(Node): 
     def __init__(self): 
         super().__init__('policy_controller_pytorch') 
@@ -69,10 +63,11 @@ class PolicyControlNodePyTorch(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        # PyTorch e Motori Params
         self.declare_parameter('policy_path', 'configs/policy/policy114.pt') 
         self.declare_parameter('wmin', 16.0)
-        self.declare_parameter('wmax', 110.0)
+        self.declare_parameter('wmax', 110.0) # Original policy training limit
+        self.declare_parameter('wmax_limit', 100.0) # Hard clip for comparison
+        self.declare_parameter('c_f', 12.0e-4)
 
         self.declare_parameter('policy_duration', 4.0)  
         self.declare_parameter('frequency_hz', 100.0) 
@@ -99,12 +94,10 @@ class PolicyControlNodePyTorch(Node):
         self.is_flying = False 
         self.custom_setpoint_active = False
 
-        # Struttura dati per la rete PyTorch
         self.obs_history = ObsHistory()
         self.INPUT_DIM = 3 + 6 + 6 + 3 + 3 + (self.obs_history.obs_len * self.obs_history.H) # 117
         self.previous_actions = np.zeros(6, dtype=np.float32)
 
-        # --- PRE-LOAD AND WARM-UP POLICY ---
         policy_path = self.get_parameter('policy_path').value
         self.get_logger().info(f"Loading PyTorch policy from {policy_path}...")
         try:
@@ -121,7 +114,6 @@ class PolicyControlNodePyTorch(Node):
         except Exception as e:
             self.get_logger().error(f"Failed to load PyTorch policy: {e}")
             self.policy = None
-        # -----------------------------------
 
         self.get_logger().info('Policy control node initialized')
 
@@ -340,7 +332,6 @@ class PolicyControlNodePyTorch(Node):
         return response 
 
     def _build_observation(self, state: np.ndarray) -> Optional[np.ndarray]: 
-        """ Costruisce l'osservatore da 117 elementi come richiesto dalla rete PyTorch """
         if state is None: return None 
         
         pos = state[0:3] 
@@ -352,26 +343,20 @@ class PolicyControlNodePyTorch(Node):
             target_pos = self.setpoint[0:3].copy()
             target_quat_wxyz = self.setpoint[3:7].copy()
             
-        # Matrici di rotazione
         rot_mat = quat_to_rot_matrix_wxyz(quat_wxyz)
         rot_mat_target = quat_to_rot_matrix_wxyz(target_quat_wxyz)
         
-        # 1. Posizione desiderata nel frame BODY
         to_target_world = target_pos - pos 
         desired_pos_b = rot_mat.T @ to_target_world
         
-        # 2. Vettori di attitudine (Prime due colonne della mat. rotazione, appiattite)
         rot_w_flat = rot_mat[:, :2].T.flatten()
         rot_desired_att_w_flat = rot_mat_target[:, :2].T.flatten()
         
-        # 3. Velocità 
         root_vel_b = vel_world 
         root_avel_b = avel     
         
-        # 4. Aggiorna e recupera la history delle azioni
         obs_history_flat = self.obs_history.update_FIFO_obs_history(self.previous_actions)
         
-        # Composizione Vettore Finale (117 dim)
         obs = np.concatenate([ 
             desired_pos_b, 
             rot_w_flat,
@@ -392,7 +377,8 @@ class PolicyControlNodePyTorch(Node):
         
         skip_plots = self.get_parameter('skip_plots').value
         npz_filename = self.get_parameter('npz_filename').value
-        wmax = self.get_parameter('wmax').value
+        wmax_limit = self.get_parameter('wmax_limit').value
+        cf = self.get_parameter('c_f').value
 
         times = np.array(log_data['t']) 
         pos_act = np.array(log_data['pos']) 
@@ -406,7 +392,6 @@ class PolicyControlNodePyTorch(Node):
         quats_act = np.array(log_data['quat'])
         quats_ref = np.array(log_data['quat_ref'])
 
-        # Error calculations
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
         avel_err = np.linalg.norm(avel_act, axis=1) 
@@ -415,7 +400,6 @@ class PolicyControlNodePyTorch(Node):
         dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
         total_error_rad = 2.0 * np.arccos(dot_prod)
 
-        # Folder management
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
@@ -470,14 +454,16 @@ class PolicyControlNodePyTorch(Node):
 
         fig2, axs2 = plt.subplots(2, 3, figsize=(18, 8)) 
         fig2.suptitle(f'TiltHex Inputs - Rotor Commands ({times[-1]:.1f}s)', fontsize=16) 
+        
+        max_thrust_n = cf * (wmax_limit ** 2)
 
         for i in range(6):
             row = i // 3  
             col = i % 3   
             if actions.shape[1] > i:
                 axs2[row, col].plot(times, actions[:, i], color='goldenrod', linewidth=2) 
-                axs2[row, col].set_title(f'Rotor {i+1} [Hz]') 
-                axs2[row, col].set_ylim(0, wmax + 10) # <-- Adattato per la scala in Hz
+                axs2[row, col].set_title(f'Rotor {i+1} [N]') 
+                axs2[row, col].set_ylim(0, max_thrust_n + 1.0)
                 
                 if row == 1: axs2[row, col].set_xlabel("Time [s]")
                 axs2[row, col].grid(True, alpha=0.3) 
@@ -545,6 +531,8 @@ class PolicyControlNodePyTorch(Node):
         
         wmin = self.get_parameter('wmin').value
         wmax = self.get_parameter('wmax').value
+        wmax_limit = self.get_parameter('wmax_limit').value # Load limiting param
+        cf = self.get_parameter('c_f').value
         
         rate = self.create_rate(frequency)
 
@@ -559,11 +547,10 @@ class PolicyControlNodePyTorch(Node):
         log_avel = np.zeros((max_steps, 3))
         log_pos_ref = np.zeros((max_steps, 3))
         log_euler_ref = np.zeros((max_steps, 3))
-        log_action = np.zeros((max_steps, 6)) # 6 = Dimensione Azione
+        log_action = np.zeros((max_steps, 6)) 
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
-        # Reset History Buffer all'avvio della policy
         self.obs_history = ObsHistory()
         self.previous_actions = np.zeros(6, dtype=np.float32)
 
@@ -602,27 +589,26 @@ class PolicyControlNodePyTorch(Node):
                     sleep(0.005) 
                     continue 
 
-                # 1. Costruisci Osservatore e converti in tensore
                 obs_np = self._build_observation(raw_state)
-                input_tensor = torch.from_numpy(obs_np).unsqueeze(0) # Aggiunge dimensione batch (1, 117)
+                input_tensor = torch.from_numpy(obs_np).unsqueeze(0)
                 
-                # 2. Inferenza Rete Neurale
                 actions_torch = self.policy(input_tensor)
-                actions = actions_torch.detach().numpy()[0] # Shape (6,)
+                actions = actions_torch.detach().numpy()[0] 
                 
                 if np.any(np.isnan(actions)): continue 
                 
-                # Memorizza l'azione scalata calcolata per il prossimo step dell'osservatore
                 self.previous_actions = actions
 
-                # 3. Scala Comandi ai Motori (da -1..1 a Hz)
                 rotors_vel = (wmax - wmin) * ((np.clip(actions, -1.0, 1.0) + 1.0) / 2.0) + wmin
                 
-                # Pocolibs si aspetta 8 elementi: [m1, m2, m3, m4, m5, m6, 0, 0]
+                # Apply hard limit clipping to normalize testing environment
+                rotors_vel = np.clip(rotors_vel, wmin, wmax_limit)
+                
                 rotor_speed_cmd = rotors_vel.tolist() + [0.0, 0.0]
 
-                # 4. Invia ai motori
                 self.components.rotorcraft.set_velocity(rotor_speed_cmd, ack=False)
+                
+                thrust_n = cf * (rotors_vel ** 2)
             
                 euler = quat_to_euler_xyz(raw_state[6:10])
 
@@ -637,21 +623,21 @@ class PolicyControlNodePyTorch(Node):
                 log_avel[step_idx] = raw_state[10:13]
                 log_pos_ref[step_idx] = target_pos
                 log_euler_ref[step_idx] = quat_to_euler_xyz(target_quat)
-                log_action[step_idx] = rotors_vel # Log in Hz, non raw [-1, 1]
+                log_action[step_idx] = thrust_n 
                 log_quat[step_idx] = raw_state[6:10]
                 log_quat_ref[step_idx] = target_quat
 
                 step_idx += 1
 
                 if step_idx % 50 == 0:
-                    min_act = np.min(rotors_vel)
-                    max_act = np.max(rotors_vel)
+                    min_act_n = np.min(thrust_n)
+                    max_act_n = np.max(thrust_n)
                     
                     self.get_logger().info(
                         f"T: {current_time:.1f}s | "
                         f"Z: {raw_state[2]:.2f}m | "
                         f"RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad | "
-                        f"Act[Hz]: [{min_act:.1f}, {max_act:.1f}]"
+                        f"Act[N]: [{min_act_n:.1f}, {max_act_n:.1f}]"
                     )
 
             except Exception as exc: 

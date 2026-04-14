@@ -26,7 +26,7 @@ from datetime import datetime
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Environment setup before JAX import
-# os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 # XLA determinism mode:
 #
@@ -287,8 +287,14 @@ def make_train(
     env_params = env.default_params
 
     override_kwargs = {}
-    if "REWARD_ATT_GAIN" in config:
-        override_kwargs["reward_att_gain"] = float(config["REWARD_ATT_GAIN"])
+    if "GAIN_STAB" in config:
+        override_kwargs["gain_stab"] = float(config["GAIN_STAB"])
+    if "GAIN_ATT" in config:
+        override_kwargs["gain_att"] = float(config["GAIN_ATT"])
+    if "GAIN_REF" in config:
+        override_kwargs["gain_ref"] = float(config["GAIN_REF"])
+    if "GAIN_SM" in config:
+        override_kwargs["gain_sm"] = float(config["GAIN_SM"])
     if "REWARD_POS_TOLERANCE" in config:
         override_kwargs["reward_pos_tolerance"] = float(config["REWARD_POS_TOLERANCE"])
 

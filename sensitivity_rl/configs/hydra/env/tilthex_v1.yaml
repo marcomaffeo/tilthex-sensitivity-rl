@@ -1,28 +1,32 @@
 # @package _global_
-# Drone V1 environment configuration
 
-# this file does not override tilhex_v0.yaml, but is a standalone config for tilthex_v1 environment
+ENV_NAME: "tilthex_v1"
 
-ENV_NAME: tilthex_v1
-
-# Environment-specific parameters
+# Environment settings
 NUM_ENVS: 2048
 NUM_STEPS: 200
-TOTAL_TIMESTEPS: 5e7
-NUM_MINIBATCHES: 128
+TOTAL_TIMESTEPS: 50000000
 
-# Override network architecture for drone
-ACTIVATION: tanh
+ACTIVATION: "tanh"
 ANNEAL_LR: true
 GRU_HIDDEN_SIZE: 64
 
-# Override some RL parameters for drone
+# Overrides RL parameters
+SEED: 30
+LR: 0.001
+UPDATE_EPOCHS: 5
+NUM_MINIBATCHES: 128
 GAMMA: 0.98
-CLIP_EPS: 0.2
+GAE_LAMBDA: 0.95
+CLIP_EPS: 0.1
 ENT_COEF: 0.001
-
-ACTOR_LAYER_SIZES: [256, 256]
-CRITIC_LAYER_SIZES: [256, 256]
-
+VF_COEF: 0.5
+MAX_GRAD_NORM: 0.5
+DOMAIN_RANDOMIZATION: false
 SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
 
+# Reward shaping
+# GAIN_STAB: 0.2
+# GAIN_ATT: 2.0
+# GAIN_SM: 0.01
+# GAIN_REF: 0.0005

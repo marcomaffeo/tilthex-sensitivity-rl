@@ -101,16 +101,22 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [14, 60, 140, 200, 440],
-    "REWARD_ATT_GAIN": [1.0, 2.0],
-    "REWARD_POS_TOLERANCE": [0.02, 0.04],
+    "SEED": [30],
+    
+    "GAIN_STAB": [0.05, 0.1, 0.2],          # Penalità velocità angolare
+    "GAIN_ATT": [1.0, 2.0],                 # Reward per allineamento
+    "GAIN_SM": [0.001, 0.005, 0.01],        # Penalità variazione comandi
+    
+    "GAIN_REF": [0.0005, 0.001],
+    #"REWARD_POS_TOLERANCE": [0.02, 0.04, 0.08],
+
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
-    "LR": [0.001, 0.0005, 0.0001],
-    "NUM_ENVS": [2048],
+    #"LR": [0.001, 0.0005, 0.0001],
+    #"NUM_ENVS": [2048, 4096],
     # "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2],
-    "UPDATE_EPOCHS": [1, 2, 4],
+    #"CLIP_EPS": [0.1, 0.2, 0.5],
+    #"UPDATE_EPOCHS": [1, 3, 5],
     # "ENT_COEF": [0.001],
     # "DOMAIN_RANDOMIZATION": [True, False],
     # "TOTAL_TIMESTEPS": [5_000_000],
@@ -121,7 +127,7 @@ SWEEP_PARAMS = {
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
     "ppo": {
-        "DOMAIN_RANDOMIZATION": [True, False],
+        "DOMAIN_RANDOMIZATION": [False, True],
     },
     "rappo": {
         "DOMAIN_RANDOMIZATION": [False],

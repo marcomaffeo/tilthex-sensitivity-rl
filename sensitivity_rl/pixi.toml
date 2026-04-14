@@ -15,6 +15,7 @@ python-build = "*"
 pip = "*"
 pytest = ">=8.4.2,<9"
 imageio = ">=2.37.0,<3"
+setuptools = "<70"
 
 
 [pypi-dependencies]

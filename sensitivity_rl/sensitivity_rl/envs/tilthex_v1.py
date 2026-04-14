@@ -83,7 +83,10 @@ class EnvParams(environment.EnvParams):
     I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))           # inertia off-diagonal terms [kg*m^2]
     action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                                   # action noise scale for exploration
     
-    reward_att_gain: float = struct.field(pytree_node=False, default=2.0)
+    gain_stab: float = struct.field(pytree_node=False, default=0.2)
+    gain_att: float = struct.field(pytree_node=False, default=2.0)
+    gain_ref: float = struct.field(pytree_node=False, default=0.0005)
+    gain_sm: float = struct.field(pytree_node=False, default=0.01)
     reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
 
     # Uncertain parameters
@@ -219,7 +222,7 @@ class TilthexV1(environment.Environment):
         q_err_vec = jnp.linalg.norm(q_error_body[1:])
         attitude_error_rad = 2.0 * jnp.arctan2(q_err_vec, q_err_w)
 
-        reward_orientation = params.reward_att_gain * jnp.exp(-1.0 * attitude_error_rad)   
+        reward_orientation = params.gain_att * jnp.exp(-1.0 * attitude_error_rad)   
         reward_app = jax.lax.select(
             jnp.linalg.norm(pos_diff) < params.reward_pos_tolerance,
             10.0,                                                       # reward when close to target
@@ -230,11 +233,11 @@ class TilthexV1(environment.Environment):
         thrust_normalized_input_last = env_state.last_u / params.max_input
 
         reward = (
-            -0.1 * jnp.linalg.norm(state_next.omega)
+            - params.gain_stab * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_orientation
-            - 0.001 * jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2
-            - 0.005 * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
+            - params.gain_ref * jnp.linalg.norm(thrust_normalized_input - (env_state.u_optimal_ref / params.max_input)) ** 2
+            - params.gain_sm * (jnp.linalg.norm(thrust_normalized_input - thrust_normalized_input_last) ** 2)
         )
 
         reward = reward.squeeze()

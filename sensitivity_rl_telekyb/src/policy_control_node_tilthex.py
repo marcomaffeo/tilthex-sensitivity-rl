@@ -717,8 +717,12 @@ def publish_attitude_cli(args):
 def main(args=None): 
     try:
         os.nice(-10)
-    except Exception:
-        pass
+    except PermissionError:
+        import sys
+        print("WARNING: os.nice(-10) failed due to lack of permissions. Run with elevated privileges for RT performance.", file=sys.stderr)
+    except Exception as e:
+        import sys
+        print(f"WARNING: os.nice failed: {e}", file=sys.stderr)
         
     rclpy.init(args=args) 
     node = PolicyControlNode() 
@@ -729,7 +733,7 @@ def main(args=None):
         pass 
     finally: 
         node.destroy_node() 
-        rclpy.shutdown() 
+        rclpy.shutdown()
 
 if __name__ == '__main__': 
     import sys

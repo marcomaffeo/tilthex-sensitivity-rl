@@ -95,7 +95,7 @@ class PolicyControlNodePyTorch(Node):
         self.custom_setpoint_active = False
 
         self.obs_history = ObsHistory()
-        self.INPUT_DIM = 3 + 6 + 6 + 3 + 3 + (self.obs_history.obs_len * self.obs_history.H) # 117
+        self.INPUT_DIM = 3 + 6 + 6 + 3 + 3 + (self.obs_history.obs_len * self.obs_history.H) # 51
         self.previous_actions = np.zeros(6, dtype=np.float32)
 
         policy_path = self.get_parameter('policy_path').value

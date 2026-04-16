@@ -2,7 +2,7 @@
 authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
 channels = ["conda-forge", "robostack-jazzy"]
 name = "telekyb_sim"
-platforms = ["linux-64"]
+platforms = ["linux-aarch64"]
 version = "0.1.0"
 
 [activation]
@@ -88,9 +88,6 @@ eigen = "*" # rotorcraft
 libudev = "*"
 asciidoctor = "*"
 proxsuite = "*"
-gz-sim = "<10"
-libgz-launch = ">=8,<9"
-gz-plugin = ">=4.0.0,<5"
 # dependencies for python use only
 loop-rate-limiters = "*"
 pyyaml = ">=6.0.2"
@@ -106,7 +103,7 @@ ros-jazzy-std-srvs = "*"
 colcon-common-extensions = "*"
 
 [pypi-dependencies]
-jax = { version = "*", extras = ["cuda12"] }
+jax = { version = "*" }
 flax = ">=0.12.6"
 distrax = "*"
 torch = "*"

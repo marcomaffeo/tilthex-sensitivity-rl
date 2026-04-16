@@ -14,9 +14,9 @@ class TK3Components:
         # g = genomix.connect('hostname')
 
         # adapt path to your setup
-        g.rpath(os.environ['ROBOTPKG_BASE'] + '/lib/genom/pocolibs/plugins')
+        g.rpath('/home/onepiece/openrobots' + '/lib/genom/pocolibs/plugins')
 
-        self.optitrack = g.load('optitrack')
+        self.optitrack = g.load('/home/onepiece/devel/lib/genom/pocolibs/plugins/qualisys')
         self.rotorcraft = g.load('rotorcraft')
         self.pom = g.load('pom')
         self.nhfc = g.load('nhfc')
@@ -113,7 +113,7 @@ class TK3Components:
 
         # read position and orientation from optitrack
         self.pom.connect_port({
-            'local': 'measure/mocap', 'remote': 'optitrack/bodies/QR_4'
+            'local': 'measure/mocap', 'remote': 'qualisys/bodies/pcHexa2'
         })
         self.pom.add_measurement('mocap')
 
@@ -159,9 +159,9 @@ class TK3Components_tilthex:
         # g = genomix.connect('hostname')
 
         # adapt path to your setup
-        g.rpath(os.environ['ROBOTPKG_BASE'] + '/lib/genom/pocolibs/plugins')
+        g.rpath('/home/onepiece/openrobots' + '/lib/genom/pocolibs/plugins')
 
-        self.optitrack = g.load('optitrack')
+        self.optitrack = g.load('/home/onepiece/devel/lib/genom/pocolibs/plugins/qualisys')
         self.rotorcraft = g.load('rotorcraft')
         self.pom = g.load('pom')
         self.nhfc = g.load('nhfc')
@@ -175,15 +175,12 @@ class TK3Components_tilthex:
         # optitrack
         #
         # connect to the simulated optitrack system on localhost
-        self.optitrack.connect({
-            'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'
-        })
-
+        self.optitrack.connect('10.135.2.40')
 
         # rotorcraft
         #
         # connect to the simulated hexarotor
-        self.rotorcraft.connect({'serial': '/tmp/pty-hr6', 'baud': 0})
+        self.rotorcraft.connect({'serial': '/dev/ttyACM0', 'baud': 0})
 
         # get IMU at 1kHz and motor data at 20Hz
         self.rotorcraft.set_sensor_rate({'rate': {
@@ -282,7 +279,7 @@ class TK3Components_tilthex:
 
         # read position and orientation from optitrack
         self.pom.connect_port({
-            'local': 'measure/mocap', 'remote': 'optitrack/bodies/HR_6'
+            'local': 'measure/mocap', 'remote': 'qualisys/bodies/pcHexa2'
         })
         self.pom.add_measurement('mocap')
 

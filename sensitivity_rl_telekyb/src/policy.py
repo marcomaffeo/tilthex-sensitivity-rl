@@ -1,4 +1,5 @@
 import jax
+jax.default_device = jax.devices("cpu")[0]
 import jax.numpy as jnp
 import numpy as np
 from flax import nnx, serialization
@@ -8,6 +9,8 @@ from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from networks import ActorCritic, ActorCriticGRU, ActorDCritic
+
+
 
 class Policy:
     def __init__(self, path: Path):
@@ -96,5 +99,45 @@ class Policy:
         treedef = jax.tree.structure(template_state)
         flat_leaves = jax.tree.leaves(full_pure_dict)
         restored_state = jax.tree.unflatten(treedef, flat_leaves)
+           
 
         return graphdef, restored_state
+
+if __name__ == "__main__":
+
+    import time
+    policy = Policy(Path("configs/policy/PPO"))
+    obs = jnp.array([
+        0.0, 0.0, 0.0, # position
+        0.0, 0.0, 0.0, # velocity
+        1.0, 0.0, 0.0, 0.0, # quat_wxyz
+        0.0, 0.0, 0.0, # angular velocity
+        1.0, 0.0, 0.0, 0.0 # q_error_body
+    ]).astype(jnp.float32)
+    for i in range(100):
+        start = time.perf_counter()
+        obs = obs # change input to avoid caching effects
+        print("Observation:", obs)
+        action = policy.get_action(obs)
+        end = time.perf_counter()
+        print("Action:", action)
+        print(f"Inference time: {(end - start) * 1000:.2f} ms") 
+
+# if __name__ == "__main__":
+#     import time
+#     import torch
+#     policy = torch.jit.load("configs/policy/policy114.pt")
+#     INPUT_DIM = 51
+#     obs = np.zeros(INPUT_DIM, dtype=np.float32)
+
+#     for i in range(100):
+#         start = time.perf_counter()
+#         obs = obs + 0.001  # change input to avoid caching effects
+#         # print("Observation:", obs)
+#         obs_tensor = torch.from_numpy(obs).unsqueeze(0)
+#         action_tensor = policy(obs_tensor)
+#         action = action_tensor.detach().numpy()[0]
+#         end = time.perf_counter()
+
+#         print("Action:", action)
+#         print(f"Inference time: {(end - start) * 1000:.2f} ms")

@@ -28,7 +28,7 @@ create_all_pocolibs() {
 
     genomixd &
     optitrack-pocolibs -f &
-    #qualisys-pocolibs -f &
+    qualisys-pocolibs -f &
     #vicon-pocolibs -f &
     rotorcraft-pocolibs -f &
     pom-pocolibs -f &

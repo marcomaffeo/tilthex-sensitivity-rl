@@ -1,228 +1,113 @@
 import genomix
 import os
-
+import platform
 from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
+# Auto-detect target
+IS_REAL_ROBOT = (platform.machine() == "aarch64")
+
+def get_plugin_path():
+    base_path = os.environ.get('ROBOTPKG_BASE', os.environ.get('CONDA_PREFIX', '/opt/openrobots'))
+    return base_path + '/lib/genom/pocolibs/plugins'
+
 class TK3Components:
+    """Standard Quadrotor (Simulation mostly)"""
     def __init__(self, log_dir: Path):
-
-        # this connects to components running on the same host (localhost)
         g = genomix.connect()
-        # to instead control components running on the remote computer "hostname" use
-        # g = genomix.connect('hostname')
-
-        # adapt path to your setup
-        g.rpath(os.environ['ROBOTPKG_BASE'] + '/lib/genom/pocolibs/plugins')
+        g.rpath(get_plugin_path())
 
         self.optitrack = g.load('optitrack')
         self.rotorcraft = g.load('rotorcraft')
         self.pom = g.load('pom')
         self.nhfc = g.load('nhfc')
-
         self.log_dir = log_dir
 
-    # --- setup ----------------------------------------------------------------
-    #
-    # configure components, to be called interactively
     def setup(self):
-        # optitrack
-        #
-        # connect to the simulated optitrack system on localhost
-        self.optitrack.connect({
-            'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'
-        })
-
-
-        # rotorcraft
-        #
-        # connect to the simulated quadrotor
+        self.optitrack.connect({'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'})
         self.rotorcraft.connect({'serial': '/tmp/pty-qr4', 'baud': 0})
+        self.rotorcraft.set_sensor_rate({'rate': {'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1}})
+        self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
+        self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
-        # get IMU at 1kHz and motor data at 20Hz
-        self.rotorcraft.set_sensor_rate({'rate': {
-            'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1
-        }})
-
-        # Filter IMU: 20Hz cut-off frequency for gyroscopes and 5Hz for
-        # accelerometers. This is important for cancelling vibrations.
-        self.rotorcraft.set_imu_filter({
-            'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]
-        })
-
-        # read propellers velocities from nhfc controller
-        self.rotorcraft.connect_port({
-            'local': 'rotor_input', 'remote': 'nhfc/rotor_input'
-        })
-
-
-        # nhfc
-        #
-        # configure quadrotor geometry: 4 rotors, not tilted, 23cm arms
         self.nhfc.set_gtmrp_geom({
             'rotors': 4, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.23, 'mass': 1.28,
             'rx':0, 'ry': 0, 'rz': -1, 'cf': 6.5e-4, 'ct': 1e-5
         })
-
-        # emergency descent parameters
-        self.nhfc.set_emerg({'emerg': {
-            'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
-        }})
-
-        # PID tuning
+        self.nhfc.set_emerg({'emerg': {'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3}})
         self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 5.0}})
         self.nhfc.set_servo_gain({ 'gain': {
             'Kpxy': 5, 'Kpz': 10, 'Kqxy': 4, 'Kqz': 1,
             'Kvxy': 6, 'Kvz': 8, 'Kwxy': 1, 'Kwz': 0.1,
             'Kixy': 0, 'Kiz': 1.0
         }})
-
-        # use tilt-prioritized controller
         self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'})
+        self.nhfc.connect_port({'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'})
+        self.nhfc.connect_port({'local': 'state', 'remote': 'pom/frame/robot'})
 
-        # read measured propeller velocities from rotorcraft
-        self.nhfc.connect_port({
-            'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'
-        })
-
-        # read current state from pom
-        self.nhfc.connect_port({
-            'local': 'state', 'remote': 'pom/frame/robot'
-        })
-
-
-        # pom
-        #
-        # configure kalman filter
         self.pom.set_prediction_model('::pom::constant_acceleration')
         self.pom.set_process_noise({'max_jerk': 100, 'max_dw': 50})
-
-        # allow sensor data up to 250ms old
         self.pom.set_history_length({'history_length': 0.25})
-        # configure magnetic field
-        self.pom.set_mag_field({'magdir': {
-            'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06
-        }})
-
-        # read IMU and magnetometers from rotorcraft
+        self.pom.set_mag_field({'magdir': {'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06}})
         self.pom.connect_port({'local': 'measure/imu', 'remote': 'rotorcraft/imu'})
         self.pom.add_measurement('imu')
         self.pom.connect_port({'local': 'measure/mag', 'remote': 'rotorcraft/mag'})
         self.pom.add_measurement('mag')
-
-        # read position and orientation from optitrack
-        self.pom.connect_port({
-            'local': 'measure/mocap', 'remote': 'optitrack/bodies/QR_4'
-        })
+        self.pom.connect_port({'local': 'measure/mocap', 'remote': 'optitrack/bodies/QR_4'})
         self.pom.add_measurement('mocap')
 
-
-    # --- start ----------------------------------------------------------------
-    #
-    # Spin the motors and servo on current position. To be called interactively
     def start(self):
         self.pom.log_state('/tmp/pom.log')
         self.pom.log_measurements('/tmp/pom-measurements.log')
-
         self.optitrack.set_logfile('/tmp/opti.log')
-
         self.rotorcraft.log('/tmp/rotorcraft.log')
         self.rotorcraft.start()
-        self.rotorcraft.servo(ack=True) # this runs until stopped or input error
-
+        self.rotorcraft.servo(ack=True)
         self.nhfc.log('/tmp/nhfc.log')
-        self.nhfc.set_current_position() # hover on current position
+        self.nhfc.set_current_position()
 
-
-    # --- stop -----------------------------------------------------------------
-    #
-    # Stop motors. To be called interactively
     def stop(self):
         self.rotorcraft.stop()
         self.rotorcraft.log_stop()
-
         self.nhfc.stop()
         self.nhfc.log_stop()
-
         self.pom.log_stop()
-
         self.optitrack.unset_logfile()
 
 
 class TK3Components_tilthex:
+    """TiltHex Platform (Sim and Real hardware auto-switching)"""
     def __init__(self, log_dir: Path):
-
-        # this connects to components running on the same host (localhost)
         g = genomix.connect()
-        # to instead control components running on the remote computer "hostname" use
-        # g = genomix.connect('hostname')
+        g.rpath(get_plugin_path())
 
-        # adapt path to your setup
-        g.rpath(os.environ['ROBOTPKG_BASE'] + '/lib/genom/pocolibs/plugins')
-
-        self.optitrack = g.load('optitrack')
         self.rotorcraft = g.load('rotorcraft')
         self.pom = g.load('pom')
         self.nhfc = g.load('nhfc')
-
         self.log_dir = log_dir
 
-    # --- setup ----------------------------------------------------------------
-    #
-    # configure components, to be called interactively
+        if IS_REAL_ROBOT:
+            print("[TK3] aarch64 Target Detected. Loading Qualisys MocCap.")
+            self.mocap = g.load('qualisys')
+        else:
+            print("[TK3] x86_64 Target Detected. Loading Optitrack MoCap (Sim).")
+            self.mocap = g.load('optitrack')
+
     def setup(self):
-        # optitrack
-        #
-        # connect to the simulated optitrack system on localhost
-        self.optitrack.connect({
-            'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'
-        })
+        # Hardware specific serial and MoCap routing
+        if IS_REAL_ROBOT:
+            self.mocap.connect('10.135.2.40')
+            self.rotorcraft.connect({'serial': '/dev/ttyACM0', 'baud': 0})
+        else:
+            self.mocap.connect({'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'})
+            self.rotorcraft.connect({'serial': '/tmp/pty-hr6', 'baud': 0})
 
+        self.rotorcraft.set_sensor_rate({'rate': {'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1}})
+        self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
+        self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
-        # rotorcraft
-        #
-        # connect to the simulated hexarotor
-        self.rotorcraft.connect({'serial': '/tmp/pty-hr6', 'baud': 0})
-
-        # get IMU at 1kHz and motor data at 20Hz
-        self.rotorcraft.set_sensor_rate({'rate': {
-            'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1
-        }})
-
-        # Filter IMU: 20Hz cut-off frequency for gyroscopes and 5Hz for
-        # accelerometers. This is important for cancelling vibrations.
-        self.rotorcraft.set_imu_filter({
-            'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]
-        })
-
-        # read propellers velocities from nhfc controller
-        self.rotorcraft.connect_port({
-            'local': 'rotor_input', 'remote': 'nhfc/rotor_input'
-        })
-
-
-        # nhfc
-        #
-        # configure hexarotor geometry: 6 rotors, 20 degrees tilted, 39cm arms
-        # self.nhfc.set_gtmrp_geom({
-        #     'rotors': 6, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.39, 'mass': 2.99248,
-        #     'rx':-20, 'ry': 0.0, 'rz': -1, 'cf': 12.0e-4, 'ct': 2.4e-5
-        # })
-
-        #  # emergency descent parameters
-        # self.nhfc.set_emerg({'emerg': {
-        #     'descent': 0.5, 'dx': 10.5, 'dq': 9.5, 'dv': 10.5, 'dw': 19.5
-        # }})
-
-        #  # PID tuning
-        # self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 1.0}})
-        # self.nhfc.set_servo_gain({ 'gain': {
-        #     'Kpxy': 20, 'Kpz': 20, 'Kqxy': 15, 'Kqz': 15,
-        #     'Kvxy': 10, 'Kvz': 10, 'Kwxy': 1.5, 'Kwz': 1,
-        #     'Kixy': 5, 'Kiz': 5
-        # }})
-
+        # nhfc geometry and parameters for TiltHex
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
             'cx': 0, 'cy': 0, 'cz': 0,
@@ -231,13 +116,7 @@ class TK3Components_tilthex:
             'rx': -20.0, 'ry': 0.0, 'rz': -1, 
             'cf': 12.0e-4, 'ct': 2.4e-5
         })
-
-        # emergency descent parameters
-        self.nhfc.set_emerg({'emerg': {
-            'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3
-        }})
-
-        # PID tuning
+        self.nhfc.set_emerg({'emerg': {'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3}})
         self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 0.15}})
         self.nhfc.set_servo_gain({ 'gain': {
             'Kpxy': 8.0, 'Kpz': 12.0,
@@ -247,82 +126,51 @@ class TK3Components_tilthex:
             'Kixy': 0.0, 'Kiz': 0.3
         }})
 
-        # use tilt-prioritized controller
         self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'}) 
-
-        # read measured propeller velocities from rotorcraft
-        self.nhfc.connect_port({
-            'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'
-        })
-
-        # read current state from pom
-        self.nhfc.connect_port({
-            'local': 'state', 'remote': 'pom/frame/robot'
-        })
-
+        self.nhfc.connect_port({'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'})
+        self.nhfc.connect_port({'local': 'state', 'remote': 'pom/frame/robot'})
 
         # pom
-        #
-        # configure kalman filter
         self.pom.set_prediction_model('::pom::constant_acceleration')
         self.pom.set_process_noise({'max_jerk': 100, 'max_dw': 50})
-
-        # allow sensor data up to 250ms old
         self.pom.set_history_length({'history_length': 0.25})
-        # configure magnetic field
-        self.pom.set_mag_field({'magdir': {
-            'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06
-        }})
-
-        # read IMU and magnetometers from rotorcraft
+        self.pom.set_mag_field({'magdir': {'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06}})
         self.pom.connect_port({'local': 'measure/imu', 'remote': 'rotorcraft/imu'})
         self.pom.add_measurement('imu')
         self.pom.connect_port({'local': 'measure/mag', 'remote': 'rotorcraft/mag'})
         self.pom.add_measurement('mag')
-
-        # read position and orientation from optitrack
-        self.pom.connect_port({
-            'local': 'measure/mocap', 'remote': 'optitrack/bodies/HR_6'
-        })
+        
+        if IS_REAL_ROBOT:
+            self.pom.connect_port({'local': 'measure/mocap', 'remote': 'qualisys/bodies/pcHexa2'})
+        else:
+            self.pom.connect_port({'local': 'measure/mocap', 'remote': 'optitrack/bodies/HR_6'})
+        
         self.pom.add_measurement('mocap')
 
-
-    # --- start ----------------------------------------------------------------
-    #
-    # Spin the motors and servo on current position. To be called interactively
     def start(self):
         self.pom.log_state('/tmp/pom.log')
         self.pom.log_measurements('/tmp/pom-measurements.log')
-
-        self.optitrack.set_logfile('/tmp/opti.log')
-
+        self.mocap.set_logfile('/tmp/mocap.log')
+        
         self.rotorcraft.log('/tmp/rotorcraft.log')
         self.rotorcraft.start()
-        self.rotorcraft.servo(ack=True) # this runs until stopped or input error
-
+        self.rotorcraft.servo(ack=True)
+        
         self.nhfc.log('/tmp/nhfc.log')
-        self.nhfc.set_current_position() # hover on current position
+        self.nhfc.set_current_position()
 
-    # --- stop -----------------------------------------------------------------
-    #
-    # Stop motors. To be called interactively
     def stop(self):
         self.rotorcraft.stop()
         self.rotorcraft.log_stop()
-
         self.nhfc.stop()
         self.nhfc.log_stop()
-
         self.pom.log_stop()
+        self.mocap.unset_logfile()
 
-        self.optitrack.unset_logfile()
-
-
+# --- Common helper functions ---
 def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
-    '''Read state from pom, rotate the angular velocity in body frame, return a np array'''
     pom = components.pom
-    # Read state
-    body = pom.frame('robot')['frame'] # body is a dictionary, we access the field 'frame'
+    body = pom.frame('robot')['frame']
     pos_dict = body['pos']
     pos = np.array([pos_dict['x'], pos_dict['y'], pos_dict['z']],dtype=NP_DTYPE)
     att_dict = body['att']
@@ -332,8 +180,7 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
     vel = np.array([vel_dict['vx'], vel_dict['vy'], vel_dict['vz']],dtype=NP_DTYPE)
     avel_dict = body['avel']
     avel_world = np.array([avel_dict['wx'], avel_dict['wy'], avel_dict['wz']],dtype=NP_DTYPE)
-    # POM gives angular velocity in WORLD frame!! Rotate it in body frame
-    # quat is the rotation from body frame to world frame, we need the inverse (world to body)
+    
     avel = att_rotation.T @ avel_world
     
     if print_state:
@@ -343,34 +190,21 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
         print('vel:\n', vel)
         print('avel:\n', avel)
 
-    return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE) # np array
+    return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE)
 
 def wrench_to_rotor_speed(components, wrench):
-
-    # inverse allocation matrix mapping thrust (z-body) to squared propeller speed
     alloc_inverse = np.array(components.nhfc.get_body_parameters()["body"]["iG"]).reshape(8, 6)[:4, 2:6]
-    
     rotor_force = alloc_inverse @ wrench
     rotor_force = np.nan_to_num(rotor_force, nan=0.0, posinf=0.0, neginf=0.0)
     rotor_force = np.clip(rotor_force, 0.0, 1e6)
-
-    rotor_speed = np.sqrt(rotor_force).tolist()
-        
-    return rotor_speed
+    return np.sqrt(rotor_force).tolist()
 
 def action_to_rotor_speed(components, action):
-    """
-    Converts the policy action [-1, 1] into rotor speed [rad/s].
-    """
     cf = 12.0e-4
-
     force_cmds = np.array(action, dtype=np.float64)
     force_cmds = np.clip(force_cmds, 0.3072, 12.0)
     force_cmds = np.maximum(force_cmds, 0.0)
-
-    rotor_speed = np.sqrt(force_cmds / cf).tolist()
-
-    return rotor_speed
+    return np.sqrt(force_cmds / cf).tolist()
 
 def quat_multiply(q1, q2):
     w1, x1, y1, z1 = q1
@@ -389,7 +223,6 @@ def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
         [2.0*(x*y + z*w),       1.0 - 2.0*(x**2 + z**2), 2.0*(y*z - x*w)],
         [2.0*(x*z - y*w),       2.0*(y*z + x*w),       1.0 - 2.0*(x**2 + y**2)]
     ], dtype=np.float64)
-
 
 def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
     w, x, y, z = q[0], q[1], q[2], q[3]

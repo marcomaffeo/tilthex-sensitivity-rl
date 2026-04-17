@@ -2,7 +2,7 @@
 authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
 channels = ["conda-forge", "robostack-jazzy"]
 name = "telekyb_sim"
-platforms = ["linux-64"]
+platforms = ["linux-64", "linux-aarch64"]
 version = "0.1.0"
 
 [activation]
@@ -88,16 +88,10 @@ eigen = "*" # rotorcraft
 libudev = "*"
 asciidoctor = "*"
 proxsuite = "*"
-gz-sim = "<10"
-libgz-launch = ">=8,<9"
-gz-plugin = ">=4.0.0,<5"
-# dependencies for python use only
 loop-rate-limiters = "*"
 pyyaml = ">=6.0.2"
 matplotlib = ">=3.10.5"
 bokeh = "*"
-
-# ROS2 Jazzy dependencies
 ros-jazzy-ros-core = "*"
 ros-jazzy-geometry-msgs = "*"
 ros-jazzy-sensor-msgs = "*"
@@ -106,7 +100,17 @@ ros-jazzy-std-srvs = "*"
 colcon-common-extensions = "*"
 
 [pypi-dependencies]
-jax = { version = "*", extras = ["cuda12"] }
 flax = ">=0.12.6"
 distrax = "*"
 torch = "*"
+
+[target.linux-64.dependencies]
+gz-sim = "<10"
+libgz-launch = ">=8,<9"
+gz-plugin = ">=4.0.0,<5"
+
+[target.linux-64.pypi-dependencies]
+jax = { version = "*", extras = ["cuda12"] }
+
+[target.linux-aarch64.pypi-dependencies]
+jax = { version = "*" }

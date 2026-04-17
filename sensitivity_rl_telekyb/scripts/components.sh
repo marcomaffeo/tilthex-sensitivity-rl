@@ -25,18 +25,27 @@ kill_all_pocolibs() {
 create_all_pocolibs() {
     echo "Creating all pocolibs components..."
     h2 init
-
     genomixd &
-    optitrack-pocolibs -f &
-    #qualisys-pocolibs -f &
-    #vicon-pocolibs -f &
+
+    # Auto-Detected Architecture
+    ARCH=$(uname -m)
+    
+    if [ "$ARCH" = "aarch64" ]; then
+        echo "[Components] ARM64 target detected (Physical Jetson)."
+        echo "[Components] Launching Qualisys Mocap..."
+        qualisys-pocolibs -f &
+    else
+        echo "[Components] x86_64 target detected (Simulation PC)."
+        echo "[Components] Launching Optitrack Mocap..."
+        optitrack-pocolibs -f &
+    fi
+    
     rotorcraft-pocolibs -f &
     pom-pocolibs -f &
     nhfc-pocolibs -f &
     maneuver-pocolibs -f &
-    #uavatt-pocolibs -f &
-    #uavpos-pocolibs -f &
     dynamixel-pocolibs -f &
+    
     echo "Creation done."
 }
 

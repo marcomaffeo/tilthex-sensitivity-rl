@@ -4,10 +4,19 @@ import numpy as np
 from flax import nnx, serialization
 import functools
 import json
+import platform
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
 from networks import ActorCritic, ActorCriticGRU, ActorDCritic
+
+# Auto-Detect Target Architecture
+if platform.machine() == "aarch64":
+    jax.default_device = jax.devices("cpu")[0]
+    print("[Policy] ARM64 target detected. Forcing JAX to CPU.")
+else:
+    print("[Policy] x86_64 target detected. Using default JAX device (GPU if available).")
+
 
 class Policy:
     def __init__(self, path: Path):
@@ -96,5 +105,6 @@ class Policy:
         treedef = jax.tree.structure(template_state)
         flat_leaves = jax.tree.leaves(full_pure_dict)
         restored_state = jax.tree.unflatten(treedef, flat_leaves)
+           
 
         return graphdef, restored_state

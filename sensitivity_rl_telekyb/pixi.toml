@@ -18,6 +18,7 @@ tilthex-control = {cmd = "python -i src/tk3-tilthex-control.py"}
 policy-control = {cmd = "python src/policy_control_node.py"}
 policy-control-tilthex = {cmd = "python src/policy_control_node_tilthex.py"}
 policy-control-tilthex-pytorch = {cmd = "python src/policy_control_node_tilthex_pytorch.py"}
+plot-svg = { cmd = "python src/plot.py"}
 
 # Policy management tasks
 policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
@@ -25,6 +26,8 @@ policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/Trigger" }
 policy-takeoff = { cmd = "ros2 service call /control/takeoff std_srvs/srv/Trigger" }
 policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/Trigger" }
 policy-loop-stop = { cmd = "ros2 service call /policy/stop std_srvs/srv/Trigger" }
+policy-pid-start = { cmd = "ros2 service call /policy/pid_start std_srvs/srv/Trigger" }
+policy-pid-stop = { cmd = "ros2 service call /policy/pid_stop std_srvs/srv/Trigger" }
 policy-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
 policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
 

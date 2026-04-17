@@ -112,7 +112,7 @@ class TK3Components_tilthex:
             'rotors': 6, 
             'cx': 0, 'cy': 0, 'cz': 0,
             'armlen': 0.39, 
-            'mass': 2.99248,
+            'mass': 3.235,
             'rx': -20.0, 'ry': 0.0, 'rz': -1, 
             'cf': 12.0e-4, 'ct': 2.4e-5
         })

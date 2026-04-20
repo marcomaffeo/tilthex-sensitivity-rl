@@ -19,6 +19,8 @@ policy-control = {cmd = "python src/policy_control_node.py"}
 policy-control-tilthex = {cmd = "python src/policy_control_node_tilthex.py"}
 policy-control-tilthex-pytorch = {cmd = "python src/policy_control_node_tilthex_pytorch.py"}
 plot-svg = { cmd = "python src/plot.py"}
+policy-battery = { cmd = "python src/policy_control_node_tilthex.py --battery" }
+policy-telemetry = { cmd = "python src/policy_control_node_tilthex.py --telemetry" }
 
 # Policy management tasks
 policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }

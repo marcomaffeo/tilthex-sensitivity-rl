@@ -717,6 +717,38 @@ def publish_attitude_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 
+def check_battery_cli():
+    print("Connecting to Genomix to check battery...")
+    try:
+        components = TK3Components_tilthex(Path("logs"))
+        bl = components.rotorcraft.get_battery()['battery']['level']
+        
+        if bl <= 14.8:
+            color = '\x1b[0;30;41m' # Red
+        elif bl <= 15.3:
+            color = '\x1b[0;30;43m' # Yellow
+        else:
+            color = '\x1b[0;30;42m' # Green
+            
+        print(f"{color}Battery: {bl}V\x1b[0m")
+    except Exception as e:
+        print(f"Failed to read battery. Are Genomix components active? Error: {e}")
+
+def check_telemetry_cli():
+    print("Connecting to Genomix to read telemetry...")
+    try:
+        components = TK3Components_tilthex(Path("logs"))
+        rates = components.rotorcraft.get_sensor_rate()
+        state = components.pom.frame('robot')['frame']
+        
+        print(f"--- Telemetry Snapshot ---")
+        print(f"Rates: {rates}")
+        print(f"Pos [m]: {state['pos']}")
+        print(f"Vel [m/s]: {state['vel']}")
+        print(f"AngVel [rad/s]: {state['avel']}")
+    except Exception as e:
+        print(f"Failed to read telemetry. Error: {e}")
+
 def main(args=None): 
     try:
         os.nice(-10)
@@ -744,5 +776,9 @@ if __name__ == '__main__':
         publish_setpoint_cli(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--attitude':
         publish_attitude_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--battery':
+        check_battery_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--telemetry':
+        check_telemetry_cli()
     else:
         main()

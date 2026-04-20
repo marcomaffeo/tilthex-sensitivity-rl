@@ -31,6 +31,12 @@ def wrap_env(env, config):
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
+
     if env.type == "mujoco":
         env = MujocoSensitivityWrapper(env, expose_jacobians=True)
     else:

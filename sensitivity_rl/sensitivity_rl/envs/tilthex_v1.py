@@ -90,7 +90,7 @@ class EnvParams(environment.EnvParams):
     reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
 
     # Uncertain parameters
-    m: float = 2.99248                                                                                                                          # mass [kg] (2.91118 + (0.01355 x 6))
+    m: float = 3.235                                                                                                                          # mass [kg] (2.91118 + (0.01355 x 6))
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors
@@ -119,7 +119,7 @@ class TilthexV1(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.69,                                           # mass -10%
+            2.91,                                           # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
             jnp.array([0.001, 0.001, 0.02]),                # com offset [-110%, -110%, -10%]
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
@@ -127,7 +127,7 @@ class TilthexV1(environment.Environment):
             0.001,                                          # delay 
         ]
         self.params_max = [
-            3.29,                                           # mass +10%
+            3.56,                                           # mass +10%
             jnp.array([0.090, 0.093, 0.17]),                # inertia +10%
             jnp.array([0.002, 0.002, 0.03]),                # com offset [+110%, +110%, +10%]
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
@@ -487,7 +487,6 @@ class TilthexV1(environment.Environment):
                 "time": spaces.Discrete(params.max_steps_in_episode),
             }
         )
-
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:

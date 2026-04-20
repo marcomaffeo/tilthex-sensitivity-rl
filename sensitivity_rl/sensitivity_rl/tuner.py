@@ -101,14 +101,14 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [30],
+    "SEED": [120, 250],
     
-    "GAIN_STAB": [0.05, 0.1, 0.2],          # Penalità velocità angolare
-    "GAIN_ATT": [1.0, 2.0],                 # Reward per allineamento
-    "GAIN_SM": [0.001, 0.005, 0.01],        # Penalità variazione comandi
+    "GAIN_STAB": [0.2, 0.4],          # Penalità velocità angolare
+    "GAIN_ATT": [2.0, 2.5],                 # Reward per allineamento
+    "GAIN_SM": [0.001, 0.005, 0.01, 0.05],        # Penalità variazione comandi
     
-    "GAIN_REF": [0.0005, 0.001],
-    #"REWARD_POS_TOLERANCE": [0.02, 0.04, 0.08],
+    "GAIN_REF": [0.001, 0.005, 0.01],       # Penalità distanza target
+    "REWARD_POS_TOLERANCE": [0.02, 0.04],
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     #"LR": [0.001, 0.0005, 0.0001],

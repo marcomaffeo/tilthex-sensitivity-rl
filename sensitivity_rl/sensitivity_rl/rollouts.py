@@ -29,6 +29,8 @@ from jax.flatten_util import ravel_pytree
 from networks import ActorCritic, ActorCriticDual, ActorCriticGRU, ActorDCritic
 from utils import sample_env_params
 
+import numpy as np
+from pathlib import Path
 
 @dataclass
 class RolloutConfig:
@@ -308,7 +310,8 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         f" for {run_dir.name}"
     )
 
-    all_series = []  # Collect trajectory data for plotting
+    all_series_nominal = []
+    all_series_perturbed = []
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
@@ -369,13 +372,17 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
                 dt_val = float(np.asarray(dt_val))
             except Exception:
                 dt_val = float(default_dt)
-            # Collect series for plotting
+            
             series_entry = {"actions": actions}
             series_entry.update(state_flat)
             series_entry["eval_metrics"] = eval_metrics_flat
             series_entry["dt"] = dt_val
-            series_entry["is_nominal"] = (sample_idx == 0)
-            all_series.append(series_entry)
+            
+            # Separa i nominali dai perturbati
+            if sample_idx == 0:
+                all_series_nominal.append(series_entry)
+            else:
+                all_series_perturbed.append(series_entry)
 
             suffix = " (nominal)" if sample_idx == 0 else f" (sample {sample_idx})"
             print(
@@ -385,17 +392,42 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     print(f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}")
 
-    # Generate plots if requested
-    if rcfg.plot and all_series:
-        plot_name = "rollouts"
-        if rcfg.param_samples > 1:
-            plot_name += f"_perturbed"
-        output_path = rollouts_dir.parent / (plot_name + ".png")
-        print(f"[rollouts] Generating plot -> {output_path}")
-        try:
-            env_cls.plot_rollouts(all_series, output_path)
-        except Exception as exc:
-            print(f"[rollouts] Plotting failed: {exc}")
+    def save_series_to_npz(series_list, filename):
+        if not series_list: return
+        savez_path = run_dir / filename
+        
+        save_dict = {
+            "state": np.stack([s["state"] for s in series_list]),
+            "actions": np.stack([s["actions"] for s in series_list])
+        }
+        if "target_pos" in series_list[0]:
+            save_dict["target_pos"] = np.stack([s["target_pos"] for s in series_list])
+        if "target_attitude" in series_list[0]:
+            save_dict["target_attitude"] = np.stack([s["target_attitude"] for s in series_list])
+            
+        np.savez(savez_path, **save_dict)
+        print(f"[rollouts] Dati salvati in -> {savez_path}")
+
+    save_series_to_npz(all_series_nominal, "rollout_data_nominal.npz")
+    
+    if all_series_perturbed:
+        save_series_to_npz(all_series_nominal + all_series_perturbed, "rollout_data_perturbed.npz")
+
+    if rcfg.plot:
+        if all_series_nominal:
+            print(f"[rollouts] Generating plot -> {rollouts_dir.parent / 'rollouts_nominal.png'}")
+            try:
+                env_cls.plot_rollouts(all_series_nominal, rollouts_dir.parent / "rollouts_nominal.png")
+            except Exception as exc:
+                print(f"[rollouts] Plotting nominal failed: {exc}")
+                
+        if all_series_perturbed:
+            print(f"[rollouts] Generating plot -> {rollouts_dir.parent / 'rollouts_perturbed.png'}")
+            try:
+                # Plotta tutto insieme (nominal + perturbato) per far vedere la dispersione
+                env_cls.plot_rollouts(all_series_nominal + all_series_perturbed, rollouts_dir.parent / "rollouts_perturbed.png")
+            except Exception as exc:
+                print(f"[rollouts] Plotting perturbed failed: {exc}")
 
 
 def parse_args() -> argparse.Namespace:

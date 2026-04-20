@@ -26,7 +26,7 @@ from datetime import datetime
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=0 "
+    "--xla_gpu_autotune_level=1 "
     "--xla_gpu_force_compilation_parallelism=8 "
     "--xla_cpu_enable_fast_math=true "
     "--xla_gpu_enable_fast_min_max=true "
@@ -650,9 +650,18 @@ def main(cfg: DictConfig):
                 f"Warning: Environment attribute '{attr_name}' not found in {source}. Skipping."
             )
 
-    # Save config
+    # Save config (convert any remaining JAX arrays to Python types)
+    def _to_serializable(obj):
+        if isinstance(obj, dict):
+            return {k: _to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_serializable(v) for v in obj]
+        if isinstance(obj, jnp.ndarray):
+            return obj.tolist()
+        return obj
+
     with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(_to_serializable(config), f, indent=2)
 
     # Log hparams
     hparam_dict = {

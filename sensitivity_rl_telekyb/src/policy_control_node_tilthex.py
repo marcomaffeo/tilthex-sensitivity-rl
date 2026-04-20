@@ -479,10 +479,19 @@ class PolicyControlNode(Node):
         fig3.suptitle('Control Performance Metrics', fontsize=16)
         err_data = [(pos_err, "Pos [m]", "blue"), (total_error_rad, "Att [rad]", "red"), 
                     (vel_err, "Vel [m/s]", "green"), (avel_err, "AngVel [rad/s]", "purple")]
+        
         for i, (data, label, col) in enumerate(err_data):
             r, c = i // 2, i % 2
-            axs3[r, c].plot(times, data, color=col)
-            axs3[r, c].set_title(label); axs3[r, c].grid(True, alpha=0.3)
+            
+            # Extract final error value for the legend
+            final_val = data[-1] if len(data) > 0 else 0.0
+            legend_label = f"Final Err: {final_val:.4f}"
+            
+            axs3[r, c].plot(times, data, color=col, label=legend_label)
+            axs3[r, c].set_title(label)
+            axs3[r, c].grid(True, alpha=0.3)
+            axs3[r, c].legend(loc="upper right") # Display final error in legend
+            
         fig3.tight_layout()
 
         fig4, ax4 = plt.subplots(figsize=(10, 6))

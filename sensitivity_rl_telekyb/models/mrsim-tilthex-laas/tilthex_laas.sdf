@@ -7,7 +7,7 @@
     <link name="tilthex_laas">
       <inertial>
         <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
-        <mass>3.1537</mass>
+        <mass>2.98645</mass>
         <inertia>
           <ixx>0.082529</ixx>
           <ixy>0.00175324</ixy>

@@ -43,9 +43,9 @@ def wrap_env(env, config):
         env = MujocoSensitivityWrapper(env)
     else:
         env = SensitivityWrapper(env)
-        
+
     env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
-    env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
+    # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
 
     if config.get("DOMAIN_RANDOMIZATION", False):
         env = DomainRandomizationWrapper(env, env.default_params)
@@ -153,8 +153,8 @@ def make_collect_fn(config, env, env_params, networks):
         )
 
         # Add sensitivity regularization to reward at the end so that it is normalized
-        # sensitivity_reward = info.get("sensitivity_state_rw", jnp.zeros_like(reward))
-        # reward += config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_reward
+        sensitivity_reward = info.get("sensitivity_state_rw", jnp.zeros_like(reward))
+        reward += config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sensitivity_reward
 
         # Reset GRU hidden on episode end
         new_gru_hidden = (1 - done.reshape(-1, 1)) * new_gru_hidden + done.reshape(

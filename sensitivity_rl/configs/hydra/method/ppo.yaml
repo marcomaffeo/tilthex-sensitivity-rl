@@ -1,7 +1,7 @@
 # @package _global_
 # PPO/SPPO method configuration
 
-ALGORITHM: ppo
+ALGORITHM: sppo_aug_grad_param
 # Learning parameters
 LR: 0.001
 UPDATE_EPOCHS: 4
@@ -15,6 +15,7 @@ CLIP_EPS: 0.1
 ENT_COEF: 0.0
 VF_COEF: 0.5
 MAX_GRAD_NORM: 0.5
+POLICY_MAX_GRAD_NORM: 0.5
 DOMAIN_RANDOMIZATION: false
 
 # Network architecture
@@ -29,6 +30,10 @@ DEBUG: true
 
 # Sensitivity settings
 SENSITIVITY: true
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.02
+XI: 0.08
+RHO: 0.0
+TAU: 0.0001
 
 # GRU settings (for value sensitivity network)
 GRU_HIDDEN_SIZE: 128

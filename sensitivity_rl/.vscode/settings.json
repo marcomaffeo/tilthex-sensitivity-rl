@@ -9,5 +9,6 @@
   },
   "black-formatter.args": [
     "--line-length=88"
-  ]
+  ],
+  "python-envs.defaultEnvManager": "ms-python.python:system"
 }

@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from flax import nnx
 from flax.training.train_state import TrainState
 
-from .base import AlgorithmSpec
+from .base import AlgorithmSpec, default_build_eval_state
 from algorithms.common import gae_standard
 from net_utils import create_optimizer, make_linear_schedule
 from buffers import Transition, RunnerState, UpdateState
@@ -246,6 +246,37 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
     }
 
 
+def _policy_dist_from_model(model, obs, rng):
+    """Return policy distribution while supporting model signatures with/without rng."""
+    try:
+        model_out = model(obs, rng)
+    except TypeError:
+        model_out = model(obs)
+    return model_out[0]
+
+
+def make_eval_step_fn(config, graphdef, env, env_params):
+    """Create deterministic env-step function for evaluation rollouts."""
+
+    def _eval_step(eval_state, _unused):
+        params, env_state, last_obs, rng = eval_state
+        rng, model_rng = jax.random.split(rng)
+        model = nnx.merge(graphdef, params)
+        pi = _policy_dist_from_model(model, last_obs, model_rng)
+        action = pi.mode()
+
+        rng, step_rng = jax.random.split(rng)
+        rng_step = jax.random.split(step_rng, config["NUM_ENVS"])
+        obsv, env_state, _reward, _done, info = env.step(
+            rng_step, env_state, action, env_params
+        )
+
+        new_eval_state = (params, env_state, obsv, rng)
+        return new_eval_state, info
+
+    return _eval_step
+
+
 SPEC = AlgorithmSpec(
     algo_name="PPO",
     wrap_env=wrap_env,
@@ -253,5 +284,7 @@ SPEC = AlgorithmSpec(
     make_collect_fn=make_collect_fn,
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
+    make_eval_step_fn=make_eval_step_fn,
+    build_eval_state=default_build_eval_state,
     init_networks=init_networks,
 )

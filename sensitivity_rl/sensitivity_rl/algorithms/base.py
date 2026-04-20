@@ -53,8 +53,22 @@ def default_init_runner_state(config, env, env_params, networks, rng):
 
 def default_run_dir(algo_name, config, runs_root, ts):
     """Standard run directory: ``<env>/<ALGO>_[DR_]<timestamp>``."""
-    suffix = f"{algo_name}_DR_{ts}" if config.get("DOMAIN_RANDOMIZATION", False) else f"{algo_name}_{ts}"
+    suffix = (
+        f"{algo_name}_DR_{ts}"
+        if config.get("DOMAIN_RANDOMIZATION", False)
+        else f"{algo_name}_{ts}"
+    )
     return runs_root / config["ENV_NAME"] / suffix
+
+
+def default_build_eval_state(update_state, collect_state):
+    """Default eval carry state (non-recurrent policies)."""
+    return (
+        update_state.train_state.params,
+        collect_state.env_state,
+        collect_state.last_obs,
+        update_state.rng,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +98,8 @@ class AlgorithmSpec:
         init_runner_state:    Create the initial RunnerState.
         run_dir:              Build the run directory path.
         uses_sensitivity:     Whether the algorithm needs sensitivity wrappers.
+        build_eval_state:     Build minimal eval carry from update/collect state.
+        make_eval_step_fn:    Build algorithm-specific deterministic eval step.
     """
 
     # --- required ---
@@ -100,6 +116,8 @@ class AlgorithmSpec:
     extract_losses: Optional[Callable] = None
     init_runner_state: Optional[Callable] = None
     run_dir: Optional[Callable] = None
+    build_eval_state: Optional[Callable] = None
+    make_eval_step_fn: Optional[Callable] = None
 
     def __post_init__(self):
         if self.extract_losses is None:
@@ -111,3 +129,5 @@ class AlgorithmSpec:
             self.run_dir = lambda config, runs_root, ts: default_run_dir(
                 name, config, runs_root, ts
             )
+        if self.build_eval_state is None:
+            self.build_eval_state = default_build_eval_state

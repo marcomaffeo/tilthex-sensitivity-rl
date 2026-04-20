@@ -131,7 +131,6 @@ class ClipAction(GymnaxWrapper):
         return self._env.step(key, state, action, params)
 
 
-
 class VecEnv(GymnaxWrapper):
     def __init__(self, env):
         super().__init__(env)
@@ -216,9 +215,11 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
             env_state=env_state,
         )
 
-        info["sensitivity_state_rw"] = info.get("sensitivity_state_rw", 0.0) / jnp.sqrt(
-            state.var_sens + 1e-8
+        norm_factor = jnp.sqrt(state.var_sens + 1e-8)
+        info["sensitivity_state_rw"] = (
+            info.get("sensitivity_state_rw", 0.0) / norm_factor
         )
+        info["sens_norm_factor"] = jnp.full_like(reward, norm_factor)
 
         return obs, state, reward / jnp.sqrt(state.var + 1e-8), done, info
 
@@ -288,21 +289,26 @@ class SensitivityWrapper(GymnaxWrapper):
         super().__init__(env)
         self._expose_jacobians = expose_jacobians
 
-        self.state_unravel = jax.flatten_util.ravel_pytree(
+        state_flat, self.state_unravel = jax.flatten_util.ravel_pytree(
             self._env.reset(jax.random.PRNGKey(0))[1].state
-        )[1]
+        )
+        # Default to identity if the environment doesn't specify weights
+        self.W = getattr(self._env, "sens_weights", jnp.eye(state_flat.shape[0]))
 
-        nominal_flat, self.param_unravel = jax.flatten_util.ravel_pytree(self._env.default_params)
+        nominal_flat, self.param_unravel = jax.flatten_util.ravel_pytree(
+            self._env.default_params
+        )
         self._nominal_params_flat = nominal_flat
 
         # Use step_dynamics for Jacobians when available.  This avoids tracing
         # jacfwd through obs/reward/done/reset, which blows up the XLA graph
         # when domain randomisation is active.
-        self._use_step_dynamics = hasattr(self._env, 'step_dynamics')
-        self._has_rescale = hasattr(self._env, 'rescale_action')
-        self._has_get_obs = hasattr(self._env, 'get_obs')
+        self._use_step_dynamics = hasattr(self._env, "step_dynamics")
+        self._has_rescale = hasattr(self._env, "rescale_action")
+        self._has_get_obs = hasattr(self._env, "get_obs")
 
         self.action_gains = jax.jacfwd(self.compute_action, argnums=1)
+        self.action_gains_mean = jax.jacfwd(self.compute_action_mean, argnums=1)
         self.df_dx = jax.jacfwd(self._step_to_state_wrapped, argnums=2)
         self.df_du = jax.jacfwd(self._step_to_state_wrapped, argnums=3)
         self.df_dp = jax.jacfwd(self._step_to_state_wrapped, argnums=4)
@@ -320,6 +326,12 @@ class SensitivityWrapper(GymnaxWrapper):
         model = nnx.merge(self.graphdef, network_params)
         pi = model.actor(obs)
         action = pi.sample(seed=rng)
+        return action
+
+    def compute_action_mean(self, rng, obs, network_params):
+        model = nnx.merge(self.graphdef, network_params)
+        pi = model.actor(obs)
+        action = pi.mode()
         return action
 
     def step_sensitivity(
@@ -340,37 +352,35 @@ class SensitivityWrapper(GymnaxWrapper):
         df_dp = self.df_dp(key, sens_state.env_state, state, action, params_flat)
         dobs_dx = self.dobs_dx(key, sens_state.env_state, state, action, params_flat)
 
-        # df_dx = jnp.clip(df_dx, -1e3, 1e3)
-        # df_du = jnp.clip(df_du, -1e3, 1e3)
-        # df_dp = jnp.clip(df_dp, -1e3, 1e3)
-        # dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
+        df_dx = jnp.clip(df_dx, -1e3, 1e3)
+        df_du = jnp.clip(df_du, -1e3, 1e3)
+        df_dp = jnp.clip(df_dp, -1e3, 1e3)
+        dobs_dx = jnp.clip(dobs_dx, -1e3, 1e3)
 
         # # Replace NaN with 1e3
-        # df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
-        # df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
-        # df_dp = jnp.where(jnp.isnan(df_dp), 1e3, df_dp)
-        # dobs_dx = jnp.where(jnp.isnan(dobs_dx), 1e3, dobs_dx)
+        df_dx = jnp.where(jnp.isnan(df_dx), 1e3, df_dx)
+        df_du = jnp.where(jnp.isnan(df_du), 1e3, df_du)
+        df_dp = jnp.where(jnp.isnan(df_dp), 1e3, df_dp)
+        dobs_dx = jnp.where(jnp.isnan(dobs_dx), 1e3, dobs_dx)
 
-        df_dp_scaled = df_dp / jnp.clip(jnp.exp(sens_state.sensitivity.log_norm), -1e6, 1e10)
+        df_dp_scaled = df_dp / jnp.clip(
+            jnp.exp(sens_state.sensitivity.log_norm), -1e6, 1e10
+        )
 
         # Unpack sensitivities
         sens_s = sens_state.sensitivity.state  # ds/dp
         dmu_dobs = self.action_gains(key, obs, self.network_params)  # dmu/dobs
 
-        # dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
-        # dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
+        dmu_dobs = jnp.clip(dmu_dobs, -1e3, 1e3)
+        dmu_dobs = jnp.where(jnp.isnan(dmu_dobs), 1e3, dmu_dobs)
 
         # Update action sensitivity
         sens_a = dmu_dobs @ dobs_dx @ sens_s  # du/dp
-        # sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
+        sens_a = jnp.where(jnp.isnan(sens_a), 1e3, sens_a)
 
         # Update sensitivities using chain rule
-        sens_s_next = (
-            df_dx @ sens_s
-            + df_du @ sens_a
-            + df_dp_scaled
-        )
-        # sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
+        sens_s_next = df_dx @ sens_s + df_du @ sens_a + df_dp_scaled
+        sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
 
         # not normalized
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
@@ -414,8 +424,13 @@ class SensitivityWrapper(GymnaxWrapper):
             key, sens_state, action, params, obs, done
         )
 
+        # Use default weight matrix if it's not set
+        sens_state_weighted = self.W @ next_sensitivity.state
+        weighted_norm = jnp.linalg.matrix_norm(sens_state_weighted, ord="fro")
+        weighted_log_norm = next_sensitivity.log_norm + jnp.log(weighted_norm + 1e-6)
+
         info["trw"] = reward
-        info["sensitivity_state"] = next_sensitivity.log_norm
+        info["sensitivity_state"] = weighted_log_norm
         if self._expose_jacobians:
             info["sens_bias"] = jac_info["sens_bias"]
             info["df_du"] = jac_info["df_du"]
@@ -439,9 +454,9 @@ class SensitivityWrapper(GymnaxWrapper):
                 action = self._env.rescale_action(action, params)
             next_state = self._env.step_dynamics(key, env_state, action, params)
         else:
-            env_state = self._env.step(
-                key, env_state, action, params
-            )[1]  # take next_env_state from step
+            env_state = self._env.step(key, env_state, action, params)[
+                1
+            ]  # take next_env_state from step
             next_state = env_state.state
         return jax.flatten_util.ravel_pytree(next_state)[0]
 
@@ -453,9 +468,7 @@ class SensitivityWrapper(GymnaxWrapper):
         else:
             params = self.param_unravel(params_flat)
             env_state = env_state.replace(state=state)
-            obs, env_state, _, _, _ = self._env.step(
-                key, env_state, action, params
-            )
+            obs, env_state, _, _, _ = self._env.step(key, env_state, action, params)
         return jax.flatten_util.ravel_pytree(obs)[0]
 
 
@@ -467,7 +480,9 @@ class MujocoSensitivityWrapper(SensitivityWrapper):
     def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
-        next_state = self._env.step_dynamics(key, env_state.replace(state=state), action, params)
+        next_state = self._env.step_dynamics(
+            key, env_state.replace(state=state), action, params
+        )
         return jax.flatten_util.ravel_pytree(next_state)[0]
 
     def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
@@ -494,9 +509,13 @@ class ComputeSensitivityReward(GymnaxWrapper):
             key, current_state, action, params
         )
 
-        info["sensitivity_state_rw"] = -(
+        norm_diff = jnp.exp(
             next_state.sensitivity.log_norm - current_state.sensitivity.log_norm
         )
+        sens_state_weighted = self.W @ (norm_diff * next_state.sensitivity.state)
+        weighted_norm = jnp.linalg.matrix_norm(sens_state_weighted, ord="fro")
+
+        info["sensitivity_state_rw"] = -jnp.log(weighted_norm + 1e-6)
 
         return obs, next_state, reward, done, info
 
@@ -518,9 +537,13 @@ class AddSensitivityToReward(GymnaxWrapper):
             key, current_state, action, params
         )
 
-        reward += -self.regularization_weight * (
+        norm_diff = jnp.exp(
             next_state.sensitivity.log_norm - current_state.sensitivity.log_norm
         )
+        sens_state_weighted = self.W @ (norm_diff * next_state.sensitivity.state)
+        weighted_norm = jnp.linalg.matrix_norm(sens_state_weighted, ord="fro")
+
+        reward += -self.regularization_weight * jnp.log(weighted_norm + 1e-6)
 
         return obs, next_state, reward, done, info
 
@@ -766,9 +789,10 @@ class SensitivityOffWrapper(GymnaxWrapper):
     def __init__(self, env, regularization_weight=0.0, add_sensitivity_to_info=False):
         super().__init__(env)
 
-        self.state_unravel = jax.flatten_util.ravel_pytree(
+        state_flat, self.state_unravel = jax.flatten_util.ravel_pytree(
             self._env.reset(jax.random.PRNGKey(0))[1].state
-        )[1]
+        )
+        self.W = getattr(self._env, "sens_weights", jnp.eye(state_flat.shape[0]))
 
         self.param_unravel = jax.flatten_util.ravel_pytree(self._env.default_params)[1]
 
@@ -781,7 +805,9 @@ class SensitivityOffWrapper(GymnaxWrapper):
             self._step_to_state_and_obs_wrapped, argnums=(2, 3, 4)
         )
 
-    def set_actor(self, graphdef, network_params, get_action, action_scale, action_bias):
+    def set_actor(
+        self, graphdef, network_params, get_action, action_scale, action_bias
+    ):
         # Should add a check for dimension compatibility
         self.graphdef = graphdef
         self.network_params = network_params
@@ -938,9 +964,14 @@ class SensitivityOffWrapper(GymnaxWrapper):
             key, sens_state, action, params, obs, done
         )
 
+        # Use initialized weight matrix
+        sens_state_weighted = self.W @ next_sensitivity.state
+        weighted_norm = jnp.linalg.matrix_norm(sens_state_weighted, ord="fro")
+        weighted_log_norm = next_sensitivity.log_norm + jnp.log(weighted_norm + 1e-6)
+
         info["trw"] = reward
-        info["sensitivity_state"] = next_sensitivity.log_norm
-        info["sensitivity_state_rw"] = -(next_sensitivity.log_norm)
+        info["sensitivity_state"] = weighted_log_norm
+        info["sensitivity_state_rw"] = -weighted_log_norm
 
         sens_state = SensitivityOffEnvState(
             env_state=env_state, sensitivity=next_sensitivity

@@ -584,6 +584,88 @@ class ResetEnvWrapper(GymnaxWrapper):
         return obs, state, reward, done, info
 
 
+# ---------------------------------------------------------------------------
+# Constraint evaluation wrapper (for CaT batch processing)
+# ---------------------------------------------------------------------------
+
+class ConstraintEvalWrapper(GymnaxWrapper):
+    """Thin wrapper that evaluates hard/soft constraints and stores raw values in info.
+
+    The environment must implement ``hard_constraints(state, params)`` and
+    ``soft_constraints(state, params)`` methods.  Each returns a 1-D array of
+    constraint values (positive = violated, zero or negative = satisfied).
+
+    Must be placed **below** ``ResetEnvWrapper`` and **below**
+    ``SensitivityWrapper`` in the wrapper stack so that it operates on the
+    base ``EnvState``.
+    """
+
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,
+    ):
+        obs, state_st, reward, done, info = self._env.step(
+            key, state, action, params
+        )
+        # Evaluate constraints on the post-step (pre-reset) state.
+        hard_c = self._env.hard_constraints(state_st, params)
+        soft_c = self._env.soft_constraints(state_st, params)
+        # Only store non-empty constraint arrays; zero-length arrays cause
+        # division-by-zero in minibatch reshaping downstream.
+        if hard_c.shape[0] > 0:
+            info["hard_constraints"] = hard_c
+        if soft_c.shape[0] > 0:
+            info["soft_constraints"] = soft_c
+        return obs, state_st, reward, done, info
+
+
+class ConstraintPenaltyWrapper(GymnaxWrapper):
+    """Subtract a fixed penalty from the reward when any constraint is violated.
+
+    Must be placed **after** ``ConstraintEvalWrapper`` in the wrapper stack so
+    that ``info`` already contains ``hard_constraints`` / ``soft_constraints``.
+
+    Parameters
+    ----------
+    env : GymnaxWrapper
+        Wrapped environment (must already have constraint info populated).
+    penalty : float
+        Value subtracted from the reward at each violating timestep.
+    """
+
+    def __init__(self, env, penalty: float = 1.0):
+        super().__init__(env)
+        self._penalty = penalty
+
+    def step(
+        self,
+        key: chex.PRNGKey,
+        state,
+        action: Union[int, float, jax.Array],
+        params: Optional[environment.EnvParams] = None,
+    ):
+        obs, state_st, reward, done, info = self._env.step(
+            key, state, action, params
+        )
+        # Check if any constraint dimension is violated (> 0)
+        hard_c = info.get("hard_constraints", jnp.zeros((0,)))
+        soft_c = info.get("soft_constraints", jnp.zeros((0,)))
+        hard_violated = hard_c.max(initial=0.0) > 0.0
+        soft_violated = soft_c.max(initial=0.0) > 0.0
+        violated = hard_violated | soft_violated
+        reward = reward - self._penalty * violated.astype(jnp.float32)
+
+        # Constraint violation metrics
+        all_c = jnp.concatenate([hard_c, soft_c])
+        max_violation = jnp.where(all_c.shape[0] > 0, all_c.max(initial=0.0), 0.0)
+        info["constraint_violated"] = violated.astype(jnp.float32)
+        info["constraint_violation"] = jnp.maximum(max_violation, 0.0)
+        return obs, state_st, reward, done, info
+
+
 class DomainRandomizationEnvState(NamedTuple):
     env_state: environment.EnvState
     params: environment.EnvParams

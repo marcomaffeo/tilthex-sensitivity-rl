@@ -115,6 +115,17 @@ def log_metrics(
                 int(timestep),
             )
 
+        # Constraint metrics (only present when constraint wrapper is active)
+        if "constraint_violated" in metric:
+            violation_rate = metric["constraint_violated"].mean()
+            mean_violation = metric["constraint_violation"].mean()
+            writer.add_scalar(
+                "constraints/violation_rate", float(violation_rate), int(timestep)
+            )
+            writer.add_scalar(
+                "constraints/mean_violation", float(mean_violation), int(timestep)
+            )
+
         writer.add_scalar(
             "train/old_approx_kl", float(losses["old_approx_kl"]), int(timestep)
         )
@@ -209,7 +220,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
         runner_state = spec.init_runner_state(config, env, env_params, networks, rng)
 
         # TRAIN LOOP
-        def _update_step(runner_state, _unused):
+        def _update_step(runner_state, update_idx):
             if config.get("SENSITIVITY", False):
                 env.update_network_params(runner_state.train_state.params)
 
@@ -277,7 +288,7 @@ def make_train(config, spec: AlgorithmSpec, writer: SummaryWriter, init_rng):
 
         # Run training loop
         runner_state, _ = jax.lax.scan(
-            _update_step, runner_state, None, config["NUM_UPDATES"]
+            _update_step, runner_state, jnp.arange(config["NUM_UPDATES"])
         )
         return runner_state
 
@@ -354,8 +365,8 @@ def main(cfg: DictConfig):
     writer = SummaryWriter(f"{run_dir}")
 
     # Create unified training function
-    rng, init_rng = jax.random.split(rng)
-    train_fn = make_train(config, spec, writer, init_rng)
+    # rng, init_rng = jax.random.split(rng)
+    train_fn = make_train(config, spec, writer, rng)
 
     # JIT compile and train
     train_jit = jax.jit(train_fn)

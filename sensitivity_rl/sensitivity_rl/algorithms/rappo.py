@@ -20,6 +20,8 @@ from envs.wrappers import (
     ResetEnvWrapper,
     SensitivityWrapper,
     MujocoSensitivityWrapper,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -27,6 +29,12 @@ def wrap_env(env, config):
     """Apply PPO-specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
+
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
     # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
     if config.get("SENSITIVITY", False):

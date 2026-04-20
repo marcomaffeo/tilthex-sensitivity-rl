@@ -22,6 +22,8 @@ from envs.wrappers import (
     VecEnv,
     NormalizeVecRewardSensitivity,
     NormalizeVecReward,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -29,7 +31,13 @@ def wrap_env(env, config):
     """Apply SPPO-aug specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
-    
+
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
+
     if env.type == "mujoco":
         env = MujocoSensitivityWrapper(env)
     else:

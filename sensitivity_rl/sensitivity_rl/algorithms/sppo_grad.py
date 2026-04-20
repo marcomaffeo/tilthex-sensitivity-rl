@@ -36,6 +36,8 @@ from envs.wrappers import (
     LogWrapper,
     VecEnv,
     NormalizeVecRewardSensitivity,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -49,6 +51,12 @@ def wrap_env(env, config):
     """Same wrapper stack as SPPO but with Jacobians exposed in info."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
+
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
     if env.type == "mujoco":
         env = MujocoSensitivityWrapper(env, expose_jacobians=True)
@@ -138,13 +146,12 @@ def make_loss_fn(config, graphdef):
 
         loss_actor = -jnp.minimum(
             ratio * (gae + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sens_per_sample),
-            jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * gae,
+            jnp.clip(ratio, 1.0 - config["CLIP_EPS"], 1.0 + config["CLIP_EPS"]) * (gae + config["SENSITIVITY_REGULARIZATION_WEIGHT"] * sens_per_sample),
         ).mean()
         entropy = pi.entropy().mean()
 
         # ---- differentiable sensitivity loss ----
         # ratio is stop-gradiented so only the sensitivity term carries grads
-        
         total_loss = (
             loss_actor
             + config["VF_COEF"] * value_loss

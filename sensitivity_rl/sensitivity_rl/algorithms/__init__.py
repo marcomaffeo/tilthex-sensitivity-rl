@@ -9,6 +9,7 @@ from . import rappo
 from . import sppo_grad
 from . import sppo_grad_param
 from . import sppo_aug_grad_param
+from . import sppo_aug_grad_param_dual
 
 ALGORITHM_REGISTRY = {
     "ppo": ppo.SPEC,
@@ -19,6 +20,7 @@ ALGORITHM_REGISTRY = {
     "cppo": cppo.SPEC,
     "rappo": rappo.SPEC,
     "sppo_aug_grad_param": sppo_aug_grad_param.SPEC,
+    "sppo_aug_grad_param_dual": sppo_aug_grad_param_dual.SPEC,
 }
 
 __all__ = [

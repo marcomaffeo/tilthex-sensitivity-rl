@@ -128,21 +128,21 @@ METHOD_SPECIFIC_SWEEPS = {
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_grad": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.3, 0.2],
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_grad_param": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05, 0.02, 0.03],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.3, 0.2],
         "XI": [0.08, 0.04, 0.1],
         "RHO": [0.5, 0.1, 0.3],
         "TAU": [1e-3, 2e-3, 1e-4, 5e-4],
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_aug_grad_param": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.3, 0.2],
         "XI": [0.08],
-        "RHO": [0.0],
-        "TAU": [1e-4],
+        "RHO": [0.0, 0.1],
+        "TAU": [1e-5],
         "DOMAIN_RANDOMIZATION": [False],
     },
     # "sac": {
@@ -170,7 +170,7 @@ METHOD_CONFIG_NAMES = {
 # Number of experiments to run in parallel (set based on your CPU/GPU resources)
 # Set to 1 for sequential execution, or higher for parallel execution
 # Note: Each parallel job will run in a separate process
-NUM_PARALLEL_JOBS = 3
+NUM_PARALLEL_JOBS = 4
 
 # Set to True to run evaluation rollouts after each experiment
 RUN_EVAL_ROLLOUTS = True
@@ -264,6 +264,7 @@ def run_experiment_job(
     pure_params = params.to_pure_dict()
     (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(pure_params))
 
+    config.pop("SENS_W", None)
     with open(run_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 

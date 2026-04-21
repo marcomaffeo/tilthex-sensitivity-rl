@@ -18,6 +18,7 @@ USAGE:
 """
 
 import argparse
+import csv
 import json
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional
@@ -25,6 +26,77 @@ import numpy as np
 import matplotlib.pyplot as plt
 from collections import defaultdict
 from tensorboard.backend.event_processing import event_accumulator
+
+
+def save_table_image_latex_style(
+    headers: List[str],
+    rows: List[List[str]],
+    title: str,
+    output_file: Path,
+):
+    """Save a table as a PNG with a LaTeX-like (booktabs) visual style."""
+    if not rows:
+        print(f"Warning: No rows to render for table image: {output_file}")
+        return
+
+    fig_height = max(2.8, 0.42 * (len(rows) + 1) + 1.4)
+    fig_width = max(10.0, 2.1 * len(headers))
+
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=rows,
+        colLabels=headers,
+        cellLoc="center",
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)
+    table.scale(1.0, 1.35)
+
+    # Booktabs-like look: no inner cell borders, serif text, bold header.
+    for (r, _), cell in table.get_celld().items():
+        cell.set_linewidth(0.0)
+        cell.set_edgecolor("white")
+        cell.set_facecolor("white")
+        cell.get_text().set_fontfamily("serif")
+        if r == 0:
+            cell.get_text().set_weight("bold")
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+
+    table_bbox = table.get_window_extent(renderer=renderer).transformed(
+        ax.transAxes.inverted()
+    )
+    x0, y0, x1, y1 = table_bbox.x0, table_bbox.y0, table_bbox.x1, table_bbox.y1
+
+    header_bbox = (
+        table[(0, 0)]
+        .get_window_extent(renderer=renderer)
+        .transformed(ax.transAxes.inverted())
+    )
+    y_header_bottom = header_bbox.y0
+
+    ax.hlines(y1, x0, x1, colors="black", linewidth=1.4, transform=ax.transAxes)
+    ax.hlines(
+        y_header_bottom,
+        x0,
+        x1,
+        colors="black",
+        linewidth=0.9,
+        transform=ax.transAxes,
+    )
+    ax.hlines(y0, x0, x1, colors="black", linewidth=1.4, transform=ax.transAxes)
+
+    ax.set_title(title, fontsize=13, fontweight="bold", fontfamily="serif", pad=12)
+
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Saved table image: {output_file}")
 
 
 def load_tensorboard_data(log_dir: Path, tags: List[str]) -> Dict[str, np.ndarray]:
@@ -278,7 +350,13 @@ def plot_metric_comparison(
         fontsize=14,
         fontweight="bold",
     )
-    ax.legend(loc="best", fontsize=9, framealpha=0.9)
+    ax.legend(
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.15),
+        ncol=2,
+        fontsize=9,
+        framealpha=0.9,
+    )
     ax.grid(True, alpha=0.3)
 
     # Save plot
@@ -314,7 +392,7 @@ def create_summary_table(
             continue
 
         params_dict = dict(param_key)
-        row = {"params": params_dict}
+        row = {"params": params_dict, "num_seeds": len(exp_dirs)}
 
         for metric_tag in metrics:
             final_values = []
@@ -343,6 +421,69 @@ def create_summary_table(
 
     print(f"Saved summary: {output_file}")
 
+    # Save as CSV with explicit approach/environment columns.
+    csv_file = output_dir / "summary_table.csv"
+    csv_headers = [
+        "approach",
+        "environment",
+        "configuration",
+        "num_seeds",
+        "episodic_return_mean",
+        "episodic_return_std",
+        "sensitivity_mean",
+        "sensitivity_mean_std",
+        "sensitivity_max",
+        "sensitivity_max_std",
+    ]
+    with open(csv_file, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=csv_headers)
+        writer.writeheader()
+
+        for row in summary:
+            params = row.get("params", {})
+            method = params.get("method", "Unknown")
+            env = params.get("env", "Unknown")
+
+            config_parts = []
+            for k, v in sorted(params.items()):
+                if k in ["method", "env", "seed"]:
+                    continue
+                if isinstance(v, float):
+                    config_parts.append(f"{k}={v:.3g}")
+                else:
+                    config_parts.append(f"{k}={v}")
+
+            writer.writerow(
+                {
+                    "approach": method,
+                    "environment": env,
+                    "configuration": (
+                        ", ".join(config_parts) if config_parts else "Default"
+                    ),
+                    "num_seeds": row.get("num_seeds", ""),
+                    "episodic_return_mean": row.get(
+                        "returns/episodic_return_true_mean", np.nan
+                    ),
+                    "episodic_return_std": row.get(
+                        "returns/episodic_return_true_std", np.nan
+                    ),
+                    "sensitivity_mean": row.get(
+                        "returns/sensitivity_state_mean_mean", np.nan
+                    ),
+                    "sensitivity_mean_std": row.get(
+                        "returns/sensitivity_state_mean_std", np.nan
+                    ),
+                    "sensitivity_max": row.get(
+                        "returns/sensitivity_state_max_mean", np.nan
+                    ),
+                    "sensitivity_max_std": row.get(
+                        "returns/sensitivity_state_max_std", np.nan
+                    ),
+                }
+            )
+
+    print(f"Saved CSV table: {csv_file}")
+
     # Print table to console
     print("\n" + "=" * 80)
     print("SUMMARY TABLE (Final 10% average)")
@@ -355,6 +496,58 @@ def create_summary_table(
             if mean_key in row and not np.isnan(row[mean_key]):
                 print(f"  {metric_tag}: {row[mean_key]:.4f} ± {row[std_key]:.4f}")
     print("=" * 80 + "\n")
+
+    # Save a publication-style table image.
+    headers = [
+        "Configuration",
+        "Episodic Return",
+        "Sensitivity Mean",
+        "Sensitivity Max",
+    ]
+    image_rows = []
+
+    for row in summary:
+        params = row.get("params", {})
+        label_parts = []
+        for k, v in sorted(params.items()):
+            if k in ["method", "env", "seed"]:
+                continue
+            if isinstance(v, float):
+                label_parts.append(f"{k}={v:.3g}")
+            else:
+                label_parts.append(f"{k}={v}")
+        config_label = ", ".join(label_parts) if label_parts else "Default"
+
+        def fmt_metric(mean_key: str, std_key: str) -> str:
+            if np.isnan(row.get(mean_key, np.nan)):
+                return "N/A"
+            return f"{row[mean_key]:.3f} ± {row[std_key]:.3f}"
+
+        image_rows.append(
+            [
+                config_label,
+                fmt_metric(
+                    "returns/episodic_return_true_mean",
+                    "returns/episodic_return_true_std",
+                ),
+                fmt_metric(
+                    "returns/sensitivity_state_mean_mean",
+                    "returns/sensitivity_state_mean_std",
+                ),
+                fmt_metric(
+                    "returns/sensitivity_state_max_mean",
+                    "returns/sensitivity_state_max_std",
+                ),
+            ]
+        )
+
+    table_image_file = output_dir / "summary_table_latex.png"
+    save_table_image_latex_style(
+        headers,
+        image_rows,
+        "Sweep Summary (Final 10% Mean ± Std)",
+        table_image_file,
+    )
 
 
 def compute_pareto_front(objectives: np.ndarray) -> np.ndarray:

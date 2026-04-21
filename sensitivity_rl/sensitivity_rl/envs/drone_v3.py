@@ -1,5 +1,5 @@
-"""Drone V2 Environment.
-JAX implementation of the Mikrokopter drone environment considering uncertainties on the mass, inertia, 
+"""Drone V3 Environment.
+JAX implementation of the Mikrokopter drone environment considering uncertainties on the mass, inertia,
 position of the center of mass.
 """
 
@@ -16,6 +16,7 @@ from gymnax.environments.environment import TEnvParams, TEnvState
 
 from .math import quat2rotm, quat_product, skew, quat_inverse
 
+
 @struct.dataclass
 class ModelState:
     pos: jax.Array
@@ -29,7 +30,7 @@ class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
     target_yaw: jax.Array  # Desired yaw angle (rotation around z-axis)
-    last_u: jax.Array 
+    last_u: jax.Array
     time: int
 
     # provide proxy access to regular attributes of wrapped object
@@ -55,10 +56,10 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([25.0, 3.0, 3.0, 1.0])
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([1.0, 1.0, 1.0])
+        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 1.0])
     )
     env_min_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, 0.0])
+        pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, -1.0])
     )
     dt: float = struct.field(pytree_node=False, default=0.02)
     g: float = struct.field(pytree_node=False, default=9.81)
@@ -91,7 +92,6 @@ class DroneV3(environment.Environment):
         self.hovering_input = jnp.array(
             [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]
         )
-
 
         self.params_min = [
             1.0,  # mass
@@ -158,9 +158,10 @@ class DroneV3(environment.Environment):
         u_actual = env_state.last_u + alpha * (action_rescaled - env_state.last_u)
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
+        vel_norm = jnp.linalg.norm(state_next.vel)
 
-        reward_app = - 1.0 * pos_diff_norm + jax.lax.select(
-            pos_diff_norm < 0.05,
+        reward_app = -1.0 * pos_diff_norm + jax.lax.select(
+            jnp.logical_and(pos_diff_norm < 0.05, vel_norm < 0.1),
             10.0,  # reward when close to target
             0.0,  # distance improvement reward
         )
@@ -168,23 +169,34 @@ class DroneV3(environment.Environment):
         # Compute yaw error from quaternion
         # Yaw can be extracted from quaternion as: yaw = atan2(2*(q0*q3 + q1*q2), 1 - 2*(q2^2 + q3^2))
         q = state_next.attitude
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                         jnp.cos(current_yaw - env_state.target_yaw)))
+        current_yaw = jnp.arctan2(
+            2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2)
+        )
+        yaw_error = jnp.abs(
+            jnp.arctan2(
+                jnp.sin(current_yaw - env_state.target_yaw),
+                jnp.cos(current_yaw - env_state.target_yaw),
+            )
+        )
 
-        reward_yaw = - 1.0 * yaw_error + jax.lax.select(
+        reward_yaw = -1.0 * yaw_error + jax.lax.select(
             yaw_error < 0.05,
             1.0,  # reward when close to target
             0.0,  # no reward otherwise
         )
 
-
         reward = (
             # -0.01 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_yaw
-            - 2.0 * (jnp.linalg.norm((action_rescaled - self.hovering_input)/params.max_input))
-            - 1.0 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
+            - 1.0
+            * (
+                jnp.linalg.norm(
+                    (action_rescaled - self.hovering_input) / params.max_input
+                )
+            )
+            - 0.2
+            * (jnp.linalg.norm((action_rescaled - env_state.last_u) / params.max_input))
         )
 
         reward = reward.squeeze()
@@ -205,7 +217,6 @@ class DroneV3(environment.Environment):
             done,
             {"discount": self.discount(env_state, params)},
         )
-
 
     def step_dynamics(
         self,
@@ -246,12 +257,16 @@ class DroneV3(environment.Environment):
         orientation_mat = quat2rotm(quat)
 
         total_force = (
-            jnp.array([0.0, 0.0, u[0]]) - params.m * params.g * orientation_mat[2, :] - params.m * ang_vel_skew @ ang_vel_skew @ params.com_pos
+            jnp.array([0.0, 0.0, u[0]])
+            - params.m * params.g * orientation_mat[2, :]
+            - params.m * ang_vel_skew @ ang_vel_skew @ params.com_pos
         )  # transpose + 3rd col = 3rd row
 
         total_torque = (
-            u[1:4] - ang_vel_skew @ params.I @ ang_vel - params.m * params.g * skew(params.com_pos) @ orientation_mat[2, :]
-        ) 
+            u[1:4]
+            - ang_vel_skew @ params.I @ ang_vel
+            - params.m * params.g * skew(params.com_pos) @ orientation_mat[2, :]
+        )
 
         # Spatial Inertia Matrix
         si_mat = jnp.diag(
@@ -261,11 +276,8 @@ class DroneV3(environment.Environment):
         si_mat = si_mat.at[0:3, 3:6].set(-params.m * skew(params.com_pos))
         si_mat = si_mat.at[3:6, 0:3].set(params.m * skew(params.com_pos))
 
+        acc = jnp.linalg.solve(si_mat, jnp.concatenate([total_force, total_torque]))
 
-        acc = jnp.linalg.solve(
-            si_mat, jnp.concatenate([total_force, total_torque])
-        )
-        
         # Semi-implicit Euler integration
         vel = state.vel + params.dt * orientation_mat @ acc[:3]
         omega = state.omega + params.dt * acc[3:6]
@@ -314,7 +326,7 @@ class DroneV3(environment.Environment):
                 maxval=params.env_max_limits,
             ),
         )
-        
+
         # Sample target yaw uniformly between -pi and pi
         target_yaw = jax.lax.select(
             params.is_testing,
@@ -340,11 +352,15 @@ class DroneV3(environment.Environment):
         to_target = env_state.target_pos - pos
         q = state.attitude
         ang_vel = state.omega
-        
+
         # Compute current yaw and yaw error
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        yaw_error = jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                jnp.cos(current_yaw - env_state.target_yaw))
+        current_yaw = jnp.arctan2(
+            2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2)
+        )
+        yaw_error = jnp.arctan2(
+            jnp.sin(current_yaw - env_state.target_yaw),
+            jnp.cos(current_yaw - env_state.target_yaw),
+        )
 
         return jnp.concatenate(
             [
@@ -362,38 +378,46 @@ class DroneV3(environment.Environment):
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
-    def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
+    def eval_metrics(
+        self, env_state: EnvState, params: EnvParams
+    ) -> dict[str, jax.Array]:
         """Compute evaluation metrics for the current state.
-        
+
         Args:
             env_state: Current environment state
             params: Environment parameters
-            
+
         Returns:
             Dictionary of metric names to scalar values
         """
         state = env_state.state
-        
+
         # Distance to target
         distance_to_target = jnp.linalg.norm(state.pos - env_state.target_pos)
-        
+
         # Velocity magnitude
         velocity_magnitude = jnp.linalg.norm(state.vel)
-        
+
         # Angular velocity magnitude
         angular_velocity_magnitude = jnp.linalg.norm(state.omega)
-        
+
         # Attitude error (deviation from upright quaternion [1, 0, 0, 0])
         upright_quat = jnp.array([1.0, 0.0, 0.0, 0.0])
         quat_error = quat_product(quat_inverse(state.attitude), upright_quat)
         attitude_error = 2.0 * jnp.arccos(jnp.clip(jnp.abs(quat_error[0]), 0.0, 1.0))
-        
+
         # Yaw error
         q = state.attitude
-        current_yaw = jnp.arctan2(2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2]**2 + q[3]**2))
-        yaw_error = jnp.abs(jnp.arctan2(jnp.sin(current_yaw - env_state.target_yaw), 
-                                         jnp.cos(current_yaw - env_state.target_yaw)))
-        
+        current_yaw = jnp.arctan2(
+            2.0 * (q[0] * q[3] + q[1] * q[2]), 1.0 - 2.0 * (q[2] ** 2 + q[3] ** 2)
+        )
+        yaw_error = jnp.abs(
+            jnp.arctan2(
+                jnp.sin(current_yaw - env_state.target_yaw),
+                jnp.cos(current_yaw - env_state.target_yaw),
+            )
+        )
+
         return {
             "distance_to_target": distance_to_target,
             "velocity_magnitude": velocity_magnitude,
@@ -458,7 +482,7 @@ class DroneV3(environment.Environment):
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
         """Plot quadrotor rollout trajectories.
-        
+
         Args:
             series_list: List of trajectory dictionaries with keys:
                 - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
@@ -466,10 +490,11 @@ class DroneV3(environment.Environment):
                 - 'target_pos': optional target position array
                 - 'eval_metrics': optional dict with 'distance_to_target' array
             output: Optional path to save the figure. If None, displays interactively.
+                When provided, an additional state-trajectory figure is saved to str(output) + "1".
         """
         import matplotlib.pyplot as plt
-        
-        plt.style.use("seaborn-v0_8")
+
+        plt.rcdefaults()
         fig = plt.figure(figsize=(16, 8))
         gs = fig.add_gridspec(2, 4, height_ratios=[2, 1], width_ratios=[1, 1, 1, 1])
 
@@ -479,9 +504,14 @@ class DroneV3(environment.Environment):
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
 
+        _defaults = EnvParams()
+        min_input = np.asarray(_defaults.min_input)
+        max_input = np.asarray(_defaults.max_input)
+
         # Collect distance_to_target and yaw_error from all rollouts
         distance_series = []
         yaw_series = []
+        state_series = []
         default_dt = 0.02
 
         for series in series_list:
@@ -489,35 +519,48 @@ class DroneV3(environment.Environment):
             if state is None:
                 continue
             state = np.asarray(state)
+            series_dt = float(series.get("dt", default_dt))
             # state format: [pos(3), attitude(4), vel(3), omega(3)]
             pos = state[:, :3]
-            
-            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+
+            is_nominal = series.get("is_nominal", False)
+            traj_color = "red" if is_nominal else "grey"
+            traj_alpha = 0.9 if is_nominal else 0.4
+            traj_lw = 1.5 if is_nominal else 0.8
+            traj_zorder = 6 if is_nominal else 3
+
+            if state.ndim == 2 and state.shape[1] >= 13:
+                state_series.append({"values": state[:, :13], "dt": series_dt, "is_nominal": is_nominal})
+
+            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
 
             if "target_pos" in series:
                 target = np.asarray(series["target_pos"])
                 if target.ndim >= 2:
                     target = target[0]
                 ax_path.scatter(
-                    target[0], target[1], target[2], marker="x", color="red", s=30
+                    target[0], target[1], target[2], marker="x", color="red", s=30, zorder=10
                 )
 
             ax_path.scatter(
-                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
+                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30, zorder=10
+            )
+            ax_path.scatter(
+                pos[-1, 0], pos[-1, 1], pos[-1, 2], marker="s", color="blue", s=30, zorder=10
             )
 
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
                 for idx, ax in enumerate(axes_act):
                     if idx < actions.shape[1]:
-                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], alpha=0.6)
+                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
                     ax.set_xlabel("t")
                     ax.set_ylabel(labels[idx])
+                    ax.set_ylim(float(min_input[idx]), float(max_input[idx]))
                     ax.grid(True, alpha=0.3)
 
             # Collect distance_to_target and yaw_error if available
             eval_metrics = series.get("eval_metrics", {})
-            series_dt = float(series.get("dt", default_dt))
             if "distance_to_target" in eval_metrics:
                 dist = np.asarray(eval_metrics["distance_to_target"]).flatten()
                 distance_series.append({"values": dist, "dt": series_dt})
@@ -535,17 +578,25 @@ class DroneV3(environment.Environment):
         if distance_series or yaw_series:
             # Create twin axis for yaw error
             ax_yaw = ax_dist.twinx()
-            
+
             # Plot distance to target
             if distance_series:
                 max_len = max(d["values"].shape[0] for d in distance_series)
-                padded = np.array([
-                    np.pad(d["values"], (0, max_len - d["values"].shape[0]), mode='edge') 
-                    for d in distance_series
-                ])
+                padded = np.array(
+                    [
+                        np.pad(
+                            d["values"],
+                            (0, max_len - d["values"].shape[0]),
+                            mode="edge",
+                        )
+                        for d in distance_series
+                    ]
+                )
                 mean_dist = np.mean(padded, axis=0)
                 std_dist = np.std(padded, axis=0)
-                reference_dt = distance_series[0]["dt"] if distance_series else default_dt
+                reference_dt = (
+                    distance_series[0]["dt"] if distance_series else default_dt
+                )
                 timesteps = np.arange(max_len) * reference_dt
 
                 for dist_entry in distance_series:
@@ -571,32 +622,41 @@ class DroneV3(environment.Environment):
                     mean_dist - std_dist,
                     mean_dist + std_dist,
                     alpha=0.3,
-                    color="blue"
+                    color="blue",
                 )
                 ax_dist.set_ylabel("Distance to target [m]", color="blue")
-                ax_dist.tick_params(axis='y', labelcolor='blue')
-                
+                ax_dist.tick_params(axis="y", labelcolor="blue")
+
                 # Display final mean and std
                 final_mean = mean_dist[-1]
                 final_std = std_dist[-1]
                 ax_dist.text(
-                    0.02, 0.98, 
+                    0.02,
+                    0.98,
                     f"Distance: {final_mean:.3f} ± {final_std:.3f} m",
                     transform=ax_dist.transAxes,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5)
+                    verticalalignment="top",
+                    bbox=dict(boxstyle="round", facecolor="lightblue", alpha=0.5),
                 )
-            
+
             # Plot yaw error
             if yaw_series:
                 max_len_yaw = max(y["values"].shape[0] for y in yaw_series)
-                padded_yaw = np.array([
-                    np.pad(y["values"], (0, max_len_yaw - y["values"].shape[0]), mode='edge') 
-                    for y in yaw_series
-                ])
+                padded_yaw = np.array(
+                    [
+                        np.pad(
+                            y["values"],
+                            (0, max_len_yaw - y["values"].shape[0]),
+                            mode="edge",
+                        )
+                        for y in yaw_series
+                    ]
+                )
                 mean_yaw = np.mean(padded_yaw, axis=0)
                 std_yaw = np.std(padded_yaw, axis=0)
-                reference_dt = distance_series[0]["dt"] if distance_series else yaw_series[0]["dt"]
+                reference_dt = (
+                    distance_series[0]["dt"] if distance_series else yaw_series[0]["dt"]
+                )
                 timesteps_yaw = np.arange(max_len_yaw) * reference_dt
 
                 for yaw_entry in yaw_series:
@@ -609,28 +669,31 @@ class DroneV3(environment.Environment):
                         zorder=1,
                     )
 
-                ax_yaw.plot(timesteps_yaw, mean_yaw, color="red", label="Yaw error", linewidth=2)
+                ax_yaw.plot(
+                    timesteps_yaw, mean_yaw, color="red", label="Yaw error", linewidth=2
+                )
                 ax_yaw.fill_between(
                     timesteps_yaw,
                     mean_yaw - std_yaw,
                     mean_yaw + std_yaw,
                     alpha=0.3,
-                    color="red"
+                    color="red",
                 )
                 ax_yaw.set_ylabel("Yaw error [rad]", color="red")
-                ax_yaw.tick_params(axis='y', labelcolor='red')
-                
+                ax_yaw.tick_params(axis="y", labelcolor="red")
+
                 # Display final yaw mean and std
                 final_yaw_mean = mean_yaw[-1]
                 final_yaw_std = std_yaw[-1]
                 ax_dist.text(
-                    0.02, 0.88, 
+                    0.02,
+                    0.88,
                     f"Yaw error: {final_yaw_mean:.3f} ± {final_yaw_std:.3f} rad",
                     transform=ax_dist.transAxes,
-                    verticalalignment='top',
-                    bbox=dict(boxstyle='round', facecolor='lightsalmon', alpha=0.5)
+                    verticalalignment="top",
+                    bbox=dict(boxstyle="round", facecolor="lightsalmon", alpha=0.5),
                 )
-            
+
             ax_dist.set_title("Distance and Yaw Error over time")
             ax_dist.set_xlabel("Time [s]")
             ax_dist.grid(True, alpha=0.3)
@@ -638,14 +701,20 @@ class DroneV3(environment.Environment):
             ax_dist.set_ylim(0, dist_top)
             yaw_top = max(ax_yaw.get_ylim()[1], 0)
             ax_yaw.set_ylim(0, yaw_top)
-            
+
             # Add legend
             lines1, labels1 = ax_dist.get_legend_handles_labels()
             lines2, labels2 = ax_yaw.get_legend_handles_labels()
             ax_dist.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
         else:
-            ax_dist.text(0.5, 0.5, "No eval_metrics available", 
-                        ha='center', va='center', transform=ax_dist.transAxes)
+            ax_dist.text(
+                0.5,
+                0.5,
+                "No eval_metrics available",
+                ha="center",
+                va="center",
+                transform=ax_dist.transAxes,
+            )
             ax_dist.set_title("Distance and Yaw Error over time")
 
         plt.tight_layout()
@@ -656,3 +725,91 @@ class DroneV3(environment.Environment):
             output.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(output, dpi=150)
             plt.close(fig)
+
+        # Extra figure: each state component trajectory with mean/std shading
+        if state_series:
+            state_labels = [
+                "pos_x",
+                "pos_y",
+                "pos_z",
+                "q_w",
+                "q_x",
+                "q_y",
+                "q_z",
+                "vel_x",
+                "vel_y",
+                "vel_z",
+                "omega_x",
+                "omega_y",
+                "omega_z",
+            ]
+
+            fig_state, axes_state = plt.subplots(4, 4, figsize=(20, 12), sharex=False)
+            axes_state = axes_state.flatten()
+
+            for idx, label in enumerate(state_labels):
+                ax = axes_state[idx]
+                max_len = max(entry["values"].shape[0] for entry in state_series)
+                padded = np.array(
+                    [
+                        np.pad(
+                            entry["values"][:, idx],
+                            (0, max_len - entry["values"].shape[0]),
+                            mode="edge",
+                        )
+                        for entry in state_series
+                    ]
+                )
+
+                mean_state = np.mean(padded, axis=0)
+                std_state = np.std(padded, axis=0)
+                reference_dt = state_series[0]["dt"] if state_series else default_dt
+                timesteps = np.arange(max_len) * reference_dt
+
+                for entry in state_series:
+                    s_nominal = entry.get("is_nominal", False)
+                    s_color = "red" if s_nominal else "grey"
+                    s_alpha = 0.9 if s_nominal else 0.2
+                    s_lw = 1.5 if s_nominal else 0.8
+                    s_zorder = 3 if s_nominal else 1
+                    ax.plot(
+                        np.arange(entry["values"].shape[0]) * entry["dt"],
+                        entry["values"][:, idx],
+                        color=s_color,
+                        alpha=s_alpha,
+                        linewidth=s_lw,
+                        zorder=s_zorder,
+                    )
+
+                ax.plot(
+                    timesteps,
+                    mean_state,
+                    color="tab:blue",
+                    linewidth=2.0,
+                    zorder=2,
+                )
+                ax.fill_between(
+                    timesteps,
+                    mean_state - std_state,
+                    mean_state + std_state,
+                    color="tab:blue",
+                    alpha=0.25,
+                    zorder=1,
+                )
+                ax.set_title(label)
+                ax.set_xlabel("Time [s]")
+                ax.grid(True, alpha=0.3)
+
+            for idx in range(len(state_labels), len(axes_state)):
+                axes_state[idx].axis("off")
+
+            fig_state.suptitle("State trajectories over time")
+            fig_state.tight_layout(rect=[0.0, 0.03, 1.0, 0.97])
+
+            if output is None:
+                plt.show()
+            else:
+                output_state = Path(output.parent, "state_" + output.name)
+                output_state.parent.mkdir(parents=True, exist_ok=True)
+                fig_state.savefig(output_state, dpi=150)
+                plt.close(fig_state)

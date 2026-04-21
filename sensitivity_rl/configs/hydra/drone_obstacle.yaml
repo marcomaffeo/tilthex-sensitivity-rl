@@ -1,0 +1,19 @@
+# Configuration for Drone Obstacle environment (inherits drone_v3 defaults)
+defaults:
+  - drone_v3
+  - _self_
+
+# Override environment
+ENV_NAME: drone_obstacle
+NUM_STEPS: 200
+
+TOTAL_TIMESTEPS: 2e8
+
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
+
+
+# Enable constraint penalty wrapper
+CONSTRAINTS: true
+CONSTRAINT_PENALTY: 100.0
+
+ALGORITHM: ppo

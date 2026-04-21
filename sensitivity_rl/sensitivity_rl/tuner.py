@@ -87,11 +87,11 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["ppo", "sppo_grad"]
+METHODS = ["sppo_aug_grad_param", "sppo_grad", "ppo"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
-ENVIRONMENTS = ["drone_v3"]
+ENVIRONMENTS = ["halfcheetah_v5"]
 
 # Parameter sweeps - can be method-specific or shared across all methods
 # Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
@@ -101,7 +101,7 @@ ENVIRONMENTS = ["drone_v3"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [0, 2, 10],
+    "SEED": [0],
     # "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     # "LR": [0.001, 0.0005, 0.0001],
     # "NUM_ENVS": [25, 50, 100],
@@ -128,7 +128,21 @@ METHOD_SPECIFIC_SWEEPS = {
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_grad": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.025, 0.075, 0.05],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05],
+        "DOMAIN_RANDOMIZATION": [False],
+    },
+    "sppo_grad_param": {
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05, 0.02, 0.03],
+        "XI": [0.08, 0.04, 0.1],
+        "RHO": [0.5, 0.1, 0.3],
+        "TAU": [1e-3, 2e-3, 1e-4, 5e-4],
+        "DOMAIN_RANDOMIZATION": [False],
+    },
+    "sppo_aug_grad_param": {
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05],
+        "XI": [0.08],
+        "RHO": [0.0],
+        "TAU": [1e-4],
         "DOMAIN_RANDOMIZATION": [False],
     },
     # "sac": {
@@ -146,6 +160,7 @@ USE_SHARED_PARAMS_AS_FALLBACK = False
 METHOD_CONFIG_NAMES = {
     "ppo": "ppo",
     "sppo_grad": "ppo",
+    "sppo_aug_grad_param": "ppo",
     "rappo": "rappo",
     "cppo": "cppo",
     "sac-estimation": "sac",
@@ -155,13 +170,13 @@ METHOD_CONFIG_NAMES = {
 # Number of experiments to run in parallel (set based on your CPU/GPU resources)
 # Set to 1 for sequential execution, or higher for parallel execution
 # Note: Each parallel job will run in a separate process
-NUM_PARALLEL_JOBS = 2
+NUM_PARALLEL_JOBS = 3
 
 # Set to True to run evaluation rollouts after each experiment
 RUN_EVAL_ROLLOUTS = True
 
 # Set to True to generate plots after sweep completes
-GENERATE_PLOTS = False
+GENERATE_PLOTS = True
 
 # Evaluation settings
 EVAL_CONFIG = {
@@ -241,7 +256,7 @@ def run_experiment_job(
     config = normalize_config(config_dict, method)
 
     writer = SummaryWriter(str(run_dir))
-    train_fn = make_train(config, spec, writer, rng)
+    train_fn = make_train(config, spec, writer, rng, run_dir)
     train_jit = jax.jit(train_fn)
     final_state = train_jit(rng)
 

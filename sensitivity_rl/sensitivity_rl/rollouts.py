@@ -39,7 +39,6 @@ class RolloutConfig:
     plot: bool
 
 
-
 def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
     cfg_path = run_dir / "config.json"
     params_path = run_dir / "policy_params.msgpack"
@@ -71,7 +70,6 @@ def build_env_from_config(
     wrapped_env = ClipAction(wrapped_env)
 
     return wrapped_env, env_params, env_name, env_cls
-
 
 
 def _flatten_value(x):
@@ -126,7 +124,9 @@ def rollout_episode(
         initial_metrics = env.eval_metrics(env_state, env_params)
         for key, val0 in initial_metrics.items():
             flat0 = _flatten_value(val0)
-            eval_metrics_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
+            eval_metrics_buf[key] = jnp.zeros(
+                (horizon + 1, flat0.shape[0]), dtype=flat0.dtype
+            )
             eval_metrics_buf[key] = eval_metrics_buf[key].at[0].set(flat0)
 
     def body_fun(i, carry):
@@ -162,7 +162,10 @@ def rollout_episode(
         return (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf)
 
     rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = jax.lax.fori_loop(
-        0, horizon, body_fun, (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf)
+        0,
+        horizon,
+        body_fun,
+        (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf),
     )
 
     return actions_buf, logs_buf, eval_metrics_buf
@@ -192,15 +195,11 @@ def extract_actor_params(pure_dict: Dict) -> Dict:
     actor_dict = {}
     for key, value in pure_dict.items():
         if key.startswith("actor_"):
-            actor_dict[key[len("actor_"):]] = value
+            actor_dict[key[len("actor_") :]] = value
     return actor_dict
 
 
-def init_model_and_params(
-    config: Dict[str, Any], env, env_params, params_bytes: bytes
-):
-    full_pure_dict = serialization.msgpack_restore(params_bytes)
-
+def init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes: bytes):
     actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
     critic_layer_sizes = tuple(
         config.get("CRITIC_LAYER_SIZES", config["ACTOR_LAYER_SIZES"])
@@ -213,7 +212,8 @@ def init_model_and_params(
     algorithm = config.get("ALGORITHM", "ppo").lower()
     if algorithm in ("rappo",):
         model = ActorDCritic(
-            obs_dim, action_dim,
+            obs_dim,
+            action_dim,
             activation=activation,
             actor_layer_sizes=actor_layer_sizes,
             rngs=rngs,
@@ -221,7 +221,8 @@ def init_model_and_params(
     elif algorithm in ("sppo", "sppo_grad"):
         gru_hidden_size = config.get("HIDDEN_SIZE", 64)
         model = ActorCriticGRU(
-            obs_dim, action_dim,
+            obs_dim,
+            action_dim,
             activation=activation,
             actor_layer_sizes=actor_layer_sizes,
             critic_layer_sizes=critic_layer_sizes,
@@ -229,9 +230,9 @@ def init_model_and_params(
             rngs=rngs,
         )
     elif algorithm in ("sppo_aug",):
-        # sppo_aug main network is ActorCritic (secondary CriticGRU not saved)
         model = ActorCritic(
-            obs_dim, action_dim,
+            obs_dim,
+            action_dim,
             activation=activation,
             actor_layer_sizes=actor_layer_sizes,
             critic_layer_sizes=critic_layer_sizes,
@@ -239,17 +240,26 @@ def init_model_and_params(
         )
     else:
         model = ActorCritic(
-            obs_dim, action_dim,
+            obs_dim,
+            action_dim,
             activation=activation,
             actor_layer_sizes=actor_layer_sizes,
             critic_layer_sizes=critic_layer_sizes,
             rngs=rngs,
         )
 
-    graphdef, template_state = nnx.split(model)
-    treedef = jax.tree.structure(template_state)
-    flat_leaves = jax.tree.leaves(full_pure_dict)
-    restored_state = jax.tree.unflatten(treedef, flat_leaves)
+    # Extract the pure dict from the dummy model to use as a strict typing template
+    _, template_state = nnx.split(model)
+    template_pure_dict = template_state.to_pure_dict()
+
+    # Let Flax parse the bytes against the template, coercing string keys back to integers
+    restored_pure_dict = serialization.from_bytes(template_pure_dict, params_bytes)
+
+    # Safely update the model with the strictly typed dictionary
+    nnx.update(model, restored_pure_dict)
+
+    # Split the updated model to get the final restored state for JAX
+    graphdef, restored_state = nnx.split(model)
 
     return graphdef, restored_state
 
@@ -259,9 +269,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     config, params_bytes = load_run_artifacts(run_dir)
     env, env_params, env_name, env_cls = build_env_from_config(config)
 
-    graphdef, params = init_model_and_params(
-        config, env, env_params, params_bytes
-    )
+    graphdef, params = init_model_and_params(config, env, env_params, params_bytes)
 
     rollouts_dir = run_dir / "rollouts"
     rollouts_dir.mkdir(parents=True, exist_ok=True)
@@ -315,9 +323,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         )
 
         actions_batch = np.asarray(actions_batch)
-        state_batch_np = {
-            key: np.asarray(val) for key, val in state_batch.items()
-        }
+        state_batch_np = {key: np.asarray(val) for key, val in state_batch.items()}
         eval_metrics_batch_np = {
             key: np.asarray(val) for key, val in eval_metrics_batch.items()
         }
@@ -334,8 +340,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
                 traj_file = rollouts_dir / f"traj_{traj_id:05d}.msgpack"
             else:
                 traj_file = (
-                    rollouts_dir
-                    / f"traj_{traj_id:05d}_sample_{sample_idx:02d}.msgpack"
+                    rollouts_dir / f"traj_{traj_id:05d}_sample_{sample_idx:02d}.msgpack"
                 )
 
             actions = actions_batch[sample_idx]
@@ -368,21 +373,16 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             series_entry.update(state_flat)
             series_entry["eval_metrics"] = eval_metrics_flat
             series_entry["dt"] = dt_val
+            series_entry["is_nominal"] = (sample_idx == 0)
             all_series.append(series_entry)
 
-            suffix = (
-                " (nominal)"
-                if sample_idx == 0
-                else f" (sample {sample_idx})"
-            )
+            suffix = " (nominal)" if sample_idx == 0 else f" (sample {sample_idx})"
             print(
                 f"[rollouts] Saved trajectory {traj_id}/{rcfg.num_rollouts}{suffix}"
                 f" -> {traj_file}"
             )
 
-    print(
-        f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}"
-    )
+    print(f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}")
 
     # Generate plots if requested
     if rcfg.plot and all_series:

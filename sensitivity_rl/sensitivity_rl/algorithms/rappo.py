@@ -5,7 +5,8 @@ import jax.numpy as jnp
 from flax import nnx
 from flax.training.train_state import TrainState
 
-from .base import AlgorithmSpec
+from .ppo import make_eval_step_fn
+from .base import AlgorithmSpec, default_build_eval_state
 from algorithms.common import gae_standard
 from net_utils import create_optimizer, make_linear_schedule
 from buffers import Transition, RunnerState, UpdateState
@@ -20,6 +21,8 @@ from envs.wrappers import (
     ResetEnvWrapper,
     SensitivityWrapper,
     MujocoSensitivityWrapper,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -27,6 +30,12 @@ def wrap_env(env, config):
     """Apply PPO-specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
+
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
     # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
     if config.get("SENSITIVITY", False):
@@ -146,9 +155,7 @@ def make_collect_fn(config, env, env_params, networks):
     def _env_step(runner_state: RunnerState, unused):
         rng, _rng = jax.random.split(runner_state.rng)
         model = nnx.merge(graphdef, runner_state.train_state.params)
-        pi, (quantile_values, _) = model(
-            runner_state.last_obs, rng
-        )
+        pi, (quantile_values, _) = model(runner_state.last_obs, rng)
         action = pi.sample(seed=_rng)
         log_prob = pi.log_prob(action)
 
@@ -230,9 +237,7 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     """Calculate GAE for PPO."""
     rng, _rng = jax.random.split(collect_state.rng)
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
-    _, (last_val, _) = model(
-        collect_state.last_obs, _rng
-    )
+    _, (last_val, _) = model(collect_state.last_obs, _rng)
     # Standard GAE but giving B x T
     advantages, targets = gae_standard(config, traj_batch, last_val)
     advantages = jnp.mean(advantages, axis=-2)
@@ -293,4 +298,6 @@ SPEC = AlgorithmSpec(
     make_update_fn=make_update_fn,
     calculate_gae=calculate_gae,
     init_networks=init_networks,
+    make_eval_step_fn=make_eval_step_fn,
+    build_eval_state=default_build_eval_state,
 )

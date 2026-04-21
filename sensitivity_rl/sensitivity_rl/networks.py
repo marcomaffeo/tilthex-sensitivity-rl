@@ -74,7 +74,12 @@ class ActorCritic(nnx.Module):
 
     def actor(self, x):
         """Actor forward pass."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
@@ -84,7 +89,12 @@ class ActorCritic(nnx.Module):
 
     def critic(self, x):
         """Critic forward pass."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.critic_layers:
             x = activation(layer(x))
         return jnp.squeeze(self.critic_output_layer(x), axis=-1)
@@ -180,7 +190,12 @@ class ActorDCritic(nnx.Module):
 
     def actor(self, x):
         """Actor forward pass."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
@@ -225,7 +240,11 @@ class ActorDCritic(nnx.Module):
         taus = jnp.expand_dims(taus, -1)
 
         cos = jnp.cos(taus * pis)
-        assert cos.shape == (batch_size, self.n_taus, self.n_cosines), "cos shape is incorrect"
+        assert cos.shape == (
+            batch_size,
+            self.n_taus,
+            self.n_cosines,
+        ), "cos shape is incorrect"
         return cos, taus
 
 
@@ -263,7 +282,12 @@ class SoftQNetwork(nnx.Module):
         )
 
     def __call__(self, state, action):
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         x = jnp.concatenate([state, action], axis=-1)
         for layer in self.layers:
             x = activation(layer(x))
@@ -305,7 +329,12 @@ class SensQNetwork(nnx.Module):
         )
 
     def __call__(self, state, action, sens):
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         x = jnp.concatenate([state, action, sens], axis=-1)
         for layer in self.layers:
             x = activation(layer(x))
@@ -354,7 +383,12 @@ class Actor(nnx.Module):
         self.actor_log_std = nnx.Param(jnp.zeros(action_dim))
 
     def __call__(self, x):
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
@@ -368,6 +402,7 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: boo
     Sample from a Gaussian policy pi, apply tanh squashing, and rescale to the
     environment action space with (scale_action, bias_action).
     """
+
     def sample_fn(action):
         return pi.sample(seed=_rng)
 
@@ -378,9 +413,7 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: boo
     x_t = jax.lax.cond(sample, sample_fn, use_action_fn, action)
 
     y_t = jnp.tanh(x_t)
-    log_prob = pi.log_prob(x_t) - jnp.log(
-        scale_action * (1 - y_t**2) + 1e-6
-    ).sum(-1)
+    log_prob = pi.log_prob(x_t) - jnp.log(scale_action * (1 - y_t**2) + 1e-6).sum(-1)
     mean_tanh = jnp.tanh(pi.mean())
     action_out = y_t * scale_action + bias_action
     mean = mean_tanh * scale_action + bias_action
@@ -486,7 +519,12 @@ class ActorCriticDual(nnx.Module):
 
     def actor(self, x):
         """Actor forward pass."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
@@ -496,7 +534,12 @@ class ActorCriticDual(nnx.Module):
 
     def critic(self, x):
         """Dual critic forward pass (value and sensitivity value)."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
 
         c = x
         for layer in self.critic_layers:
@@ -563,7 +606,12 @@ class CriticGRU(nnx.Module):
             value_s: sensitivity value estimate [batch]
             new_hidden_state: updated GRU hidden state [batch, gru_hidden_size]
         """
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
 
         new_hidden_state, _ = self.gru_cell(hidden_state, obs)
 
@@ -658,7 +706,12 @@ class ActorCriticGRU(nnx.Module):
 
     def actor(self, x):
         """Actor forward pass (no hidden state needed)."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
@@ -668,7 +721,12 @@ class ActorCriticGRU(nnx.Module):
 
     def critic(self, x, hidden_state):
         """GRU-based critic forward pass."""
-        activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
+        if self.activation_name == "relu":
+            activation = nnx.relu
+        elif self.activation_name == "elu":
+            activation = nnx.elu
+        else:
+            activation = nnx.tanh
 
         new_hidden_state, _ = self.gru_cell(hidden_state, x)
 

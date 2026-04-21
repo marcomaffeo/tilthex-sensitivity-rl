@@ -96,7 +96,7 @@ class EnvParams(environment.EnvParams):
     obstacle_size_noise: float = struct.field(pytree_node=False, default=0.1)
     obstacle_noise: float = struct.field(pytree_node=False, default=0.3)
 
-    max_steps_in_episode: int = struct.field(pytree_node=False, default=300)
+    max_steps_in_episode: int = struct.field(pytree_node=False, default=200)
     is_testing: bool = struct.field(pytree_node=False, default=False)
 
 
@@ -244,9 +244,10 @@ class DroneObstacle(environment.Environment):
         u_actual = env_state.last_u + alpha * (action_rescaled - env_state.last_u)
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
+        vel_norm = jnp.linalg.norm(state_next.vel)
 
-        reward_app = - 1.0 * pos_diff_norm + jax.lax.select(
-            pos_diff_norm < 0.05,
+        reward_app = -1.0 * pos_diff_norm + jax.lax.select(
+            jnp.logical_and(pos_diff_norm < 0.05, vel_norm < 0.1),
             10.0,  # reward when close to target
             0.0,  # distance improvement reward
         )
@@ -269,8 +270,8 @@ class DroneObstacle(environment.Environment):
             # -0.01 * jnp.linalg.norm(state_next.omega)
             + reward_app
             + reward_yaw
-            - 2.0 * (jnp.linalg.norm((action_rescaled - self.hovering_input)/params.max_input))
-            - 0.5 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
+            - 1.0 * (jnp.linalg.norm((action_rescaled - self.hovering_input)/params.max_input))
+            - 0.2 * (jnp.linalg.norm((action_rescaled - env_state.last_u)/params.max_input))
         )
 
         reward = reward.squeeze()
@@ -570,7 +571,7 @@ class DroneObstacle(environment.Environment):
         import matplotlib.pyplot as plt
         from matplotlib.patches import Rectangle
 
-        plt.style.use("seaborn-v0_8")
+        plt.rcdefaults()
         fig = plt.figure(figsize=(16, 8))
         gs = fig.add_gridspec(2, 4, height_ratios=[2, 1])
 
@@ -578,6 +579,10 @@ class DroneObstacle(environment.Environment):
         ax_dist = fig.add_subplot(gs[0, 2:])
         axes_act = [fig.add_subplot(gs[1, i]) for i in range(4)]
         act_labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
+
+        _defaults = EnvParams()
+        min_input = np.asarray(_defaults.min_input)
+        max_input = np.asarray(_defaults.max_input)
 
         distance_series = []
         collision_counts = []
@@ -590,15 +595,22 @@ class DroneObstacle(environment.Environment):
             state_data = np.asarray(state_data)
             pos = state_data[:, :3]  # [pos(3), quat(4), vel(3), omega(3)]
 
-            ax_xy.plot(pos[:, 0], pos[:, 1], alpha=0.5, linewidth=1.0)
-            ax_xy.scatter(pos[0, 0], pos[0, 1], marker="o", color="green", s=20, zorder=5)
+            is_nominal = series.get("is_nominal", False)
+            traj_color = "red" if is_nominal else "grey"
+            traj_alpha = 0.9 if is_nominal else 0.4
+            traj_lw = 1.5 if is_nominal else 0.8
+            traj_zorder = 6 if is_nominal else 3
+
+            ax_xy.plot(pos[:, 0], pos[:, 1], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
+            ax_xy.scatter(pos[0, 0], pos[0, 1], marker="o", color="green", s=20, zorder=10)
+            ax_xy.scatter(pos[-1, 0], pos[-1, 1], marker="s", color="blue", s=20, zorder=10)
 
             if "target_pos" in series:
                 target = np.asarray(series["target_pos"])
                 if target.ndim >= 2:
                     target = target[0]
                 ax_xy.scatter(
-                    target[0], target[1], marker="x", color="red", s=50, zorder=5
+                    target[0], target[1], marker="x", color="red", s=50, zorder=10
                 )
 
             # Draw obstacle (use first series to determine position)
@@ -615,14 +627,15 @@ class DroneObstacle(environment.Environment):
                 )
                 ax_xy.add_patch(rect)
 
-            # Actions
+            # Actions (with axis limits set to input range)
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
                 for idx, ax in enumerate(axes_act):
                     if idx < actions.shape[1]:
-                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], alpha=0.6)
+                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
                     ax.set_xlabel("t")
                     ax.set_ylabel(act_labels[idx])
+                    ax.set_ylim(float(min_input[idx]), float(max_input[idx]))
                     ax.grid(True, alpha=0.3)
 
             # Metrics
@@ -636,7 +649,6 @@ class DroneObstacle(environment.Environment):
                 collision_counts.append(int(coll.sum()))
 
         # ── finalize XY plot ──────────────────────────────────────────────
-        _defaults = EnvParams()
         ax_xy.set_aspect("equal")
         ax_xy.set_xlim(float(_defaults.env_min_limits[0]),
                         float(_defaults.env_max_limits[0]))

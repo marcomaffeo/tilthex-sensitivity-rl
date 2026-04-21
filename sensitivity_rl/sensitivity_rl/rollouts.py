@@ -373,6 +373,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             series_entry.update(state_flat)
             series_entry["eval_metrics"] = eval_metrics_flat
             series_entry["dt"] = dt_val
+            series_entry["is_nominal"] = (sample_idx == 0)
             all_series.append(series_entry)
 
             suffix = " (nominal)" if sample_idx == 0 else f" (sample {sample_idx})"

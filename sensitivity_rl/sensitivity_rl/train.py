@@ -26,7 +26,7 @@ from datetime import datetime
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=1 "
+    "--xla_gpu_autotune_level=2 "
     "--xla_gpu_force_compilation_parallelism=8 "
     "--xla_cpu_enable_fast_math=true "
     "--xla_gpu_enable_fast_min_max=true "

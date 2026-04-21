@@ -40,6 +40,8 @@ from envs.wrappers import (
     LogWrapper,
     VecEnv,
     NormalizeVecRewardSensitivity,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 

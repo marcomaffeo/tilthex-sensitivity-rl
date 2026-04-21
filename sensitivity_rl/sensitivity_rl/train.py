@@ -22,6 +22,9 @@ import time
 from pathlib import Path
 from datetime import datetime
 
+# Restrict to only the first GPU
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 # Environment setup before JAX import
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
@@ -278,7 +281,9 @@ def make_train(
     loss_fn = spec.make_loss_fn(config, graphdef)
     collect_fn = spec.make_collect_fn(config, env, env_params, networks)
     update_fn = spec.make_update_fn(config, loss_fn, shuffle_batch, networks)
-    eval_step_fn = spec.make_eval_step_fn(eval_config, graphdef, eval_env, eval_env_params)
+    eval_step_fn = spec.make_eval_step_fn(
+        eval_config, graphdef, eval_env, eval_env_params
+    )
 
     eval_during_training_enabled = bool(
         config.get("EVAL_DURING_TRAINING_ENABLED", False)
@@ -362,17 +367,21 @@ def make_train(
 
             if eval_during_training_enabled and eval_every_updates > 0:
                 should_eval = ((update_idx + 1) % eval_every_updates) == 0
-                
+
                 # Create a fresh runner state for eval_env to circumvent domain randomization PyTree mismatch
                 fresh_eval_rng, _ = jax.random.split(collect_state.rng)
                 fresh_eval_runner_state = spec.init_runner_state(
                     eval_config, eval_env, eval_env_params, networks, fresh_eval_rng
                 )
-                eval_start_state = spec.build_eval_state(update_state, fresh_eval_runner_state)
+                eval_start_state = spec.build_eval_state(
+                    update_state, fresh_eval_runner_state
+                )
 
                 episodic_return, sensitivity_mean, sensitivity_max = jax.lax.cond(
                     should_eval,
-                    lambda s: _run_deterministic_eval_rollout(eval_config, s, eval_step_fn),
+                    lambda s: _run_deterministic_eval_rollout(
+                        eval_config, s, eval_step_fn
+                    ),
                     lambda _s: (
                         jnp.array(jnp.nan, dtype=jnp.float32),
                         jnp.array(jnp.nan, dtype=jnp.float32),
@@ -641,6 +650,7 @@ def main(cfg: DictConfig):
             )
 
     # Save config
+    config.pop("SENS_W", None)
     with open(run_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
 

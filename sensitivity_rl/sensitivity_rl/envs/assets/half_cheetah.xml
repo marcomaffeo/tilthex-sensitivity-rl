@@ -35,12 +35,12 @@
 <mujoco model="cheetah">
   <compiler angle="radian" coordinate="local" inertiafromgeom="true" settotalmass="14"/>
   <default>
-    <joint armature=".1" damping=".01" limited="true" solimplimit="0 .8 .03" solreflimit=".02 1" stiffness="8"/>
-    <geom conaffinity="0" condim="3" contype="1" friction=".4 .1 .1" rgba="0.8 0.6 .4 1" solimp="0.0 0.8 0.01" solref="0.02 1"/>
-    <motor ctrllimited="true" ctrlrange="-1 1"/>
+    <joint armature=".1" damping=".02" limited="true" solimplimit="0 .8 .03" solreflimit=".02 1" stiffness="8"/>
+    <geom conaffinity="0" condim="3" contype="1" friction=".4 .08 .08" rgba="0.8 0.6 .4 1" solimp="0.0 0.6 0.04" solref="0.1 1"/>
+    <motor ctrllimited="true" ctrlrange="-1 1" forcelimited="true" forcerange="-40 40"/>
   </default>
   <size nstack="300000" nuser_geom="1"/>
-  <option gravity="0 0 -9.81" timestep="0.01" integrator="Euler" iterations="30" cone="pyramidal" tolerance="1e-4"/>
+  <option gravity="0 0 -9.81" timestep="0.01" integrator="Euler" iterations="35" cone="pyramidal" tolerance="1e-5"/>
   <asset>
     <texture builtin="gradient" height="100" rgb1="1 1 1" rgb2="0 0 0" type="skybox" width="100"/>
     <texture builtin="flat" height="1278" mark="cross" markrgb="1 1 1" name="texgeom" random="0.01" rgb1="0.8 0.6 0.4" rgb2="0.8 0.6 0.4" type="cube" width="127"/>
@@ -53,9 +53,9 @@
     <geom conaffinity="1" condim="3" material="MatPlane" name="floor" pos="0 0 0" rgba="0.8 0.9 0.8 1" size="40 40 40" type="plane"/>
     <body name="torso" pos="0 0 .7">
       <camera name="track" mode="trackcom" pos="0 -3 0.3" xyaxes="1 0 0 0 0 1"/>
-      <joint armature="0" axis="1 0 0" damping="0" limited="false" name="rootx" pos="0 0 0" stiffness="0" type="slide"/>
-      <joint armature="0" axis="0 0 1" damping="0" limited="false" name="rootz" pos="0 0 0" stiffness="0" type="slide"/>
-      <joint armature="0" axis="0 1 0" damping="0" limited="false" name="rooty" pos="0 0 0" stiffness="0" type="hinge"/>
+      <joint armature="0.01" axis="1 0 0" damping="0.05" limited="false" name="rootx" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0.01" axis="0 0 1" damping="0.05" limited="false" name="rootz" pos="0 0 0" stiffness="0" type="slide"/>
+      <joint armature="0.01" axis="0 1 0" damping="0.05" limited="false" name="rooty" pos="0 0 0" stiffness="0" type="hinge"/>
       <geom fromto="-.5 0 0 .5 0 0" name="torso" size="0.046" type="capsule"/>
       <geom axisangle="0 1 0 .87" name="head" pos=".6 0 .1" size="0.046 .15" type="capsule"/>
       <!-- <site name='tip'  pos='.15 0 .11'/>-->

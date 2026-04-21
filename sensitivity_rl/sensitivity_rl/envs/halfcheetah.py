@@ -379,6 +379,7 @@ class HalfCheetahV5(environment.Environment):
             series_list: List of trajectory dictionaries containing qpos and qvel.
             output: Optional path to save the figure.
         """
+        import json
         import matplotlib.pyplot as plt
         from matplotlib import cm
         import numpy as np
@@ -389,15 +390,17 @@ class HalfCheetahV5(environment.Environment):
         mj_model = mujoco.MjModel.from_xml_path(str(model_path))
         mj_data = mujoco.MjData(mj_model)
 
-        fig = plt.figure(figsize=(21, 12))
+        fig = plt.figure(figsize=(22, 14))
 
         # Create 3D subplot for full body trajectory
-        ax_3d = fig.add_subplot(2, 6, (1, 6), projection="3d")
+        ax_3d = fig.add_subplot(3, 6, (1, 6), projection="3d")
 
-        # Create 2D subplots for mean forward velocity, qpos, and qvel
-        ax_vel_mean = fig.add_subplot(2, 6, (7, 8))
-        ax_qpos_mean = fig.add_subplot(2, 6, (9, 10))
-        ax_qvel_mean = fig.add_subplot(2, 6, (11, 12))
+        # Create 2D subplots for mean forward velocity and separated torso/joint states
+        ax_vel_mean = fig.add_subplot(3, 6, (7, 8))
+        ax_torso_qpos_mean = fig.add_subplot(3, 6, (9, 10))
+        ax_joint_qpos_mean = fig.add_subplot(3, 6, (11, 12))
+        ax_torso_qvel_mean = fig.add_subplot(3, 6, (13, 15))
+        ax_joint_qvel_mean = fig.add_subplot(3, 6, (16, 18))
 
         colors = cm.viridis(np.linspace(0, 1, len(series_list)))
 
@@ -555,6 +558,32 @@ class HalfCheetahV5(environment.Environment):
             [qvel[:min_length] for qvel in all_qvel]
         )  # (n_series, timesteps, 9)
 
+        # Final-step state statistics across rollouts.
+        state_array = np.concatenate([qpos_array, qvel_array], axis=2)  # (..., 18)
+        final_state_values = state_array[:, -1, :]
+        final_state_mean = np.mean(final_state_values, axis=0)
+        final_state_std = np.std(final_state_values, axis=0)
+        final_state_labels = [
+            "qpos_x",
+            "qpos_z",
+            "qpos_rot",
+            "qpos_j1",
+            "qpos_j2",
+            "qpos_j3",
+            "qpos_j4",
+            "qpos_j5",
+            "qpos_j6",
+            "qvel_x",
+            "qvel_z",
+            "qvel_rot",
+            "qvel_j1",
+            "qvel_j2",
+            "qvel_j3",
+            "qvel_j4",
+            "qvel_j5",
+            "qvel_j6",
+        ]
+
         steps = np.arange(min_length)
 
         # Compute mean and std for forward velocity (qvel[:, 0])
@@ -579,12 +608,13 @@ class HalfCheetahV5(environment.Environment):
             label="± 1 std",
         )
 
-        # Compute mean and min/max ranges for qpos and qvel (excluding qvel[:, 0])
-
-        state_labels_qpos = [
+        # Compute mean and min/max ranges for torso and joint components separately.
+        state_labels_qpos_torso = [
             "qpos_x",
             "qpos_z",
             "qpos_rot",
+        ]
+        state_labels_qpos_joints = [
             "qpos_j1",
             "qpos_j2",
             "qpos_j3",
@@ -592,9 +622,12 @@ class HalfCheetahV5(environment.Environment):
             "qpos_j5",
             "qpos_j6",
         ]
-        state_labels_qvel = [
+        state_labels_qvel_torso = [
+            "qvel_x",
             "qvel_z",
             "qvel_rot",
+        ]
+        state_labels_qvel_joints = [
             "qvel_j1",
             "qvel_j2",
             "qvel_j3",
@@ -603,48 +636,90 @@ class HalfCheetahV5(environment.Environment):
             "qvel_j6",
         ]
 
-        qpos_colors = cm.tab10(np.linspace(0, 1, 9))
-        qvel_colors = cm.tab10(np.linspace(0, 1, 8))
+        qpos_torso_colors = cm.tab10(np.linspace(0, 1, 3))
+        qpos_joint_colors = cm.tab10(np.linspace(0, 1, 6))
+        qvel_torso_colors = cm.tab10(np.linspace(0, 1, 3))
+        qvel_joint_colors = cm.tab10(np.linspace(0, 1, 6))
 
-        # Plot qpos dimensions
-        for dim in range(9):
+        # Plot torso qpos dimensions (x, z, rot)
+        for dim in range(3):
             state_mean = np.mean(qpos_array[:, :, dim], axis=0)
-            state_max = np.max(qpos_array[:, :, dim], axis=0)
-            state_min = np.min(qpos_array[:, :, dim], axis=0)
-            ax_qpos_mean.plot(
+            state_std = np.std(qpos_array[:, :, dim], axis=0)
+            ax_torso_qpos_mean.plot(
                 steps,
                 state_mean,
-                color=qpos_colors[dim],
+                color=qpos_torso_colors[dim],
                 linewidth=1.5,
-                label=state_labels_qpos[dim],
+                label=state_labels_qpos_torso[dim],
                 alpha=0.7,
             )
-            ax_qpos_mean.fill_between(
+            ax_torso_qpos_mean.fill_between(
                 steps,
-                state_min,  # state_mean - state_std,
-                state_max,  # state_mean + state_std,
-                color=qpos_colors[dim],
+                state_mean - state_std,
+                state_mean + state_std,
+                color=qpos_torso_colors[dim],
                 alpha=0.2,
             )
 
-        # Plot qvel dimensions (skip first one - forward velocity)
-        for dim in range(1, 9):
-            state_mean = np.mean(qvel_array[:, :, dim], axis=0)
-            state_max = np.max(qvel_array[:, :, dim], axis=0)
-            state_min = np.min(qvel_array[:, :, dim], axis=0)
-            ax_qvel_mean.plot(
+        # Plot joint qpos dimensions (j1..j6)
+        for dim in range(3, 9):
+            joint_idx = dim - 3
+            state_mean = np.mean(qpos_array[:, :, dim], axis=0)
+            state_std = np.std(qpos_array[:, :, dim], axis=0)
+            ax_joint_qpos_mean.plot(
                 steps,
                 state_mean,
-                color=qvel_colors[dim - 1],
+                color=qpos_joint_colors[joint_idx],
                 linewidth=1.5,
-                label=state_labels_qvel[dim - 1],
+                label=state_labels_qpos_joints[joint_idx],
                 alpha=0.7,
             )
-            ax_qvel_mean.fill_between(
+            ax_joint_qpos_mean.fill_between(
                 steps,
-                state_min,  # state_mean - state_std,
-                state_max,  # state_mean + state_std,
-                color=qvel_colors[dim - 1],
+                state_mean - state_std,
+                state_mean + state_std,
+                color=qpos_joint_colors[joint_idx],
+                alpha=0.2,
+            )
+
+        # Plot torso qvel dimensions (x, z, rot)
+        for dim in range(3):
+            state_mean = np.mean(qvel_array[:, :, dim], axis=0)
+            state_std = np.std(qvel_array[:, :, dim], axis=0)
+            ax_torso_qvel_mean.plot(
+                steps,
+                state_mean,
+                color=qvel_torso_colors[dim],
+                linewidth=1.5,
+                label=state_labels_qvel_torso[dim],
+                alpha=0.7,
+            )
+            ax_torso_qvel_mean.fill_between(
+                steps,
+                state_mean - state_std,
+                state_mean + state_std,
+                color=qvel_torso_colors[dim],
+                alpha=0.2,
+            )
+
+        # Plot joint qvel dimensions (j1..j6)
+        for dim in range(3, 9):
+            joint_idx = dim - 3
+            state_mean = np.mean(qvel_array[:, :, dim], axis=0)
+            state_std = np.std(qvel_array[:, :, dim], axis=0)
+            ax_joint_qvel_mean.plot(
+                steps,
+                state_mean,
+                color=qvel_joint_colors[joint_idx],
+                linewidth=1.5,
+                label=state_labels_qvel_joints[joint_idx],
+                alpha=0.7,
+            )
+            ax_joint_qvel_mean.fill_between(
+                steps,
+                state_mean - state_std,
+                state_mean + state_std,
+                color=qvel_joint_colors[joint_idx],
                 alpha=0.2,
             )
 
@@ -672,33 +747,66 @@ class HalfCheetahV5(environment.Environment):
         ax_vel_mean.legend(fontsize=9)
         ax_vel_mean.grid(True, alpha=0.3)
 
-        # Configure qpos mean plot
-        ax_qpos_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
-        ax_qpos_mean.set_ylabel("Position Value", fontsize=11, fontweight="bold")
-        ax_qpos_mean.set_title(
-            "Mean qpos Components Across All Rollouts",
+        # Configure torso qpos mean plot
+        ax_torso_qpos_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
+        ax_torso_qpos_mean.set_ylabel("Position Value", fontsize=11, fontweight="bold")
+        ax_torso_qpos_mean.set_title(
+            "Torso qpos Components Across All Rollouts",
             fontsize=12,
             fontweight="bold",
         )
-        ax_qpos_mean.legend(fontsize=7, ncol=2, loc="best")
-        ax_qpos_mean.grid(True, alpha=0.3)
+        ax_torso_qpos_mean.legend(fontsize=8, ncol=1, loc="best")
+        ax_torso_qpos_mean.grid(True, alpha=0.3)
 
-        # Configure qvel mean plot
-        ax_qvel_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
-        ax_qvel_mean.set_ylabel("Velocity Value", fontsize=11, fontweight="bold")
-        ax_qvel_mean.set_title(
-            "Mean qvel Components (Excl. Forward) Across All Rollouts",
+        # Configure joint qpos mean plot
+        ax_joint_qpos_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
+        ax_joint_qpos_mean.set_ylabel("Position Value", fontsize=11, fontweight="bold")
+        ax_joint_qpos_mean.set_title(
+            "Joint qpos Components Across All Rollouts",
             fontsize=12,
             fontweight="bold",
         )
-        ax_qvel_mean.legend(fontsize=7, ncol=2, loc="best")
-        ax_qvel_mean.grid(True, alpha=0.3)
+        ax_joint_qpos_mean.legend(fontsize=7, ncol=2, loc="best")
+        ax_joint_qpos_mean.grid(True, alpha=0.3)
+
+        # Configure torso qvel mean plot
+        ax_torso_qvel_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
+        ax_torso_qvel_mean.set_ylabel("Velocity Value", fontsize=11, fontweight="bold")
+        ax_torso_qvel_mean.set_title(
+            "Torso qvel Components Across All Rollouts",
+            fontsize=12,
+            fontweight="bold",
+        )
+        ax_torso_qvel_mean.legend(fontsize=8, ncol=1, loc="best")
+        ax_torso_qvel_mean.grid(True, alpha=0.3)
+
+        # Configure joint qvel mean plot
+        ax_joint_qvel_mean.set_xlabel("Step", fontsize=11, fontweight="bold")
+        ax_joint_qvel_mean.set_ylabel("Velocity Value", fontsize=11, fontweight="bold")
+        ax_joint_qvel_mean.set_title(
+            "Joint qvel Components Across All Rollouts",
+            fontsize=12,
+            fontweight="bold",
+        )
+        ax_joint_qvel_mean.legend(fontsize=7, ncol=2, loc="best")
+        ax_joint_qvel_mean.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
         if output is not None:
             plt.savefig(output, dpi=150, bbox_inches="tight")
             print(f"[plot_rollouts] Figure saved to {output}")
+
+            stats_output = output.with_name(f"{output.stem}_final_state_stats.json")
+            stats_payload = {
+                "final_step": int(min_length - 1),
+                "state_labels": final_state_labels,
+                "mean": [float(v) for v in final_state_mean],
+                "std": [float(v) for v in final_state_std],
+            }
+            with stats_output.open("w", encoding="utf-8") as f:
+                json.dump(stats_payload, f, indent=2)
+            print(f"[plot_rollouts] Final state stats saved to {stats_output}")
         else:
             plt.show()
 

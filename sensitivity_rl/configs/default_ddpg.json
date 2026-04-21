@@ -3,6 +3,7 @@
     "LR": 5e-4,
     "NUM_ENVS": 1000,
     "NUM_STEPS": 200,
+    "SENSITIVITY_NUM_STEPS": 50,
     "TOTAL_TIMESTEPS": 5e7,
     "BUFFER_SIZE": 3e6,
     "BATCH_SIZE": 256,

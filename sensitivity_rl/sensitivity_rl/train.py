@@ -29,7 +29,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=0 "
+    "--xla_gpu_autotune_level=2 "
     "--xla_gpu_force_compilation_parallelism=8 "
     "--xla_cpu_enable_fast_math=true "
     "--xla_gpu_enable_fast_min_max=true "
@@ -133,6 +133,17 @@ def log_metrics(
                 "returns/sensitivity_state_mean",
                 float(sensitivity_state_mean),
                 int(timestep),
+            )
+
+        # Constraint metrics (only present when constraint wrapper is active)
+        if "constraint_violated" in metric:
+            violation_rate = metric["constraint_violated"].mean()
+            mean_violation = metric["constraint_violation"].mean()
+            writer.add_scalar(
+                "constraints/violation_rate", float(violation_rate), int(timestep)
+            )
+            writer.add_scalar(
+                "constraints/mean_violation", float(mean_violation), int(timestep)
             )
 
         writer.add_scalar(
@@ -595,8 +606,7 @@ def main(cfg: DictConfig):
     writer = SummaryWriter(f"{run_dir}")
 
     # Create unified training function
-    rng, init_rng = jax.random.split(rng)
-    train_fn = make_train(config, spec, writer, init_rng, run_dir)
+    train_fn = make_train(config, spec, writer, rng, run_dir)
 
     print("Compiling and training...")
     start_time = time.time()
@@ -649,10 +659,20 @@ def main(cfg: DictConfig):
                 f"Warning: Environment attribute '{attr_name}' not found in {source}. Skipping."
             )
 
-    # Save config
+    # Save config (convert any remaining JAX arrays to Python types)
     config.pop("SENS_W", None)
+
+    def _to_serializable(obj):
+        if isinstance(obj, dict):
+            return {k: _to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_serializable(v) for v in obj]
+        if isinstance(obj, jnp.ndarray):
+            return obj.tolist()
+        return obj
+
     with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(_to_serializable(config), f, indent=2)
 
     # Log hparams
     hparam_dict = {

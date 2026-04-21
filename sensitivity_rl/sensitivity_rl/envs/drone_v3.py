@@ -158,9 +158,10 @@ class DroneV3(environment.Environment):
         u_actual = env_state.last_u + alpha * (action_rescaled - env_state.last_u)
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
+        vel_norm = jnp.linalg.norm(state_next.vel)
 
         reward_app = -1.0 * pos_diff_norm + jax.lax.select(
-            pos_diff_norm < 0.05,
+            jnp.logical_and(pos_diff_norm < 0.05, vel_norm < 0.1),
             10.0,  # reward when close to target
             0.0,  # distance improvement reward
         )
@@ -186,15 +187,15 @@ class DroneV3(environment.Environment):
 
         reward = (
             # -0.01 * jnp.linalg.norm(state_next.omega)
-            +reward_app
+            + reward_app
             + reward_yaw
-            - 2.0
+            - 1.0
             * (
                 jnp.linalg.norm(
                     (action_rescaled - self.hovering_input) / params.max_input
                 )
             )
-            - 0.5
+            - 0.2
             * (jnp.linalg.norm((action_rescaled - env_state.last_u) / params.max_input))
         )
 
@@ -493,7 +494,7 @@ class DroneV3(environment.Environment):
         """
         import matplotlib.pyplot as plt
 
-        plt.style.use("seaborn-v0_8")
+        plt.rcdefaults()
         fig = plt.figure(figsize=(16, 8))
         gs = fig.add_gridspec(2, 4, height_ratios=[2, 1], width_ratios=[1, 1, 1, 1])
 
@@ -502,6 +503,10 @@ class DroneV3(environment.Environment):
         axes_act = [fig.add_subplot(gs[1, i]) for i in range(4)]
 
         labels = ["Thrust", "Torque X", "Torque Y", "Torque Z"]
+
+        _defaults = EnvParams()
+        min_input = np.asarray(_defaults.min_input)
+        max_input = np.asarray(_defaults.max_input)
 
         # Collect distance_to_target and yaw_error from all rollouts
         distance_series = []
@@ -518,30 +523,40 @@ class DroneV3(environment.Environment):
             # state format: [pos(3), attitude(4), vel(3), omega(3)]
             pos = state[:, :3]
 
-            if state.ndim == 2 and state.shape[1] >= 13:
-                state_series.append({"values": state[:, :13], "dt": series_dt})
+            is_nominal = series.get("is_nominal", False)
+            traj_color = "red" if is_nominal else "grey"
+            traj_alpha = 0.9 if is_nominal else 0.4
+            traj_lw = 1.5 if is_nominal else 0.8
+            traj_zorder = 6 if is_nominal else 3
 
-            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], alpha=0.6)
+            if state.ndim == 2 and state.shape[1] >= 13:
+                state_series.append({"values": state[:, :13], "dt": series_dt, "is_nominal": is_nominal})
+
+            ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
 
             if "target_pos" in series:
                 target = np.asarray(series["target_pos"])
                 if target.ndim >= 2:
                     target = target[0]
                 ax_path.scatter(
-                    target[0], target[1], target[2], marker="x", color="red", s=30
+                    target[0], target[1], target[2], marker="x", color="red", s=30, zorder=10
                 )
 
             ax_path.scatter(
-                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30
+                pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color="green", s=30, zorder=10
+            )
+            ax_path.scatter(
+                pos[-1, 0], pos[-1, 1], pos[-1, 2], marker="s", color="blue", s=30, zorder=10
             )
 
             actions = np.asarray(series.get("actions", []))
             if actions.size > 0:
                 for idx, ax in enumerate(axes_act):
                     if idx < actions.shape[1]:
-                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], alpha=0.6)
+                        ax.plot(np.arange(actions.shape[0]), actions[:, idx], color=traj_color, alpha=traj_alpha, linewidth=traj_lw, zorder=traj_zorder)
                     ax.set_xlabel("t")
                     ax.set_ylabel(labels[idx])
+                    ax.set_ylim(float(min_input[idx]), float(max_input[idx]))
                     ax.grid(True, alpha=0.3)
 
             # Collect distance_to_target and yaw_error if available
@@ -752,13 +767,18 @@ class DroneV3(environment.Environment):
                 timesteps = np.arange(max_len) * reference_dt
 
                 for entry in state_series:
+                    s_nominal = entry.get("is_nominal", False)
+                    s_color = "red" if s_nominal else "grey"
+                    s_alpha = 0.9 if s_nominal else 0.2
+                    s_lw = 1.5 if s_nominal else 0.8
+                    s_zorder = 3 if s_nominal else 1
                     ax.plot(
                         np.arange(entry["values"].shape[0]) * entry["dt"],
                         entry["values"][:, idx],
-                        color="gray",
-                        alpha=0.2,
-                        linewidth=0.8,
-                        zorder=1,
+                        color=s_color,
+                        alpha=s_alpha,
+                        linewidth=s_lw,
+                        zorder=s_zorder,
                     )
 
                 ax.plot(

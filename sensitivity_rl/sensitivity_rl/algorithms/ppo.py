@@ -10,6 +10,7 @@ from algorithms.common import gae_standard
 from net_utils import create_optimizer, make_linear_schedule
 from buffers import Transition, RunnerState, UpdateState
 from networks import ActorCritic
+from utils import init_network_params
 from envs.wrappers import (
     GymnaxWrapper,
     LogWrapper,
@@ -20,6 +21,8 @@ from envs.wrappers import (
     ResetEnvWrapper,
     SensitivityWrapper,
     MujocoSensitivityWrapper,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -27,6 +30,12 @@ def wrap_env(env, config):
     """Apply PPO-specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
+
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
     # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
     if config.get("SENSITIVITY", False):
@@ -217,6 +226,9 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         rngs=nnx.Rngs(int(rng[0])),
     )
+
+    # Optionally load pre-trained actor weights (keeps fresh critic)
+    network = init_network_params(network, config)
 
     graphdef, state = nnx.split(network)
 

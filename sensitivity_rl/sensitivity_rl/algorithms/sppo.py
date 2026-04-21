@@ -23,6 +23,8 @@ from envs.wrappers import (
     LogWrapper,
     VecEnv,
     NormalizeVecRewardSensitivity,
+    ConstraintEvalWrapper,
+    ConstraintPenaltyWrapper,
 )
 
 
@@ -31,14 +33,20 @@ def wrap_env(env, config):
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
+    # Optional constraint penalty wrapper
+    if config.get("CONSTRAINTS", False):
+        env = ConstraintEvalWrapper(env)
+        penalty = config.get("CONSTRAINT_PENALTY", 1.0)
+        env = ConstraintPenaltyWrapper(env, penalty=penalty)
+
     if env.type == "mujoco":
         env = MujocoSensitivityWrapper(env)
     else:
         env = SensitivityWrapper(env)
+
+    env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
     # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward
-    env = ComputeSensitivityReward(
-        env
-    )  # Computes sensitivity norm but does not modify reward
+
     if config.get("DOMAIN_RANDOMIZATION", False):
         env = DomainRandomizationWrapper(env, env.default_params)
     else:

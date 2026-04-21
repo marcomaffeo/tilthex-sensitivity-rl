@@ -8,7 +8,7 @@ hydra:
   
 defaults:
   - method: ppo
-  - env: halfcheetah_v5
+  - env: drone_v3
   - override hydra/job_logging: none  # Correct way to disable job logging
   - override hydra/hydra_logging: none  # Correct way to disable hydra logging
   - _self_
@@ -16,6 +16,9 @@ defaults:
 # Override any method/env settings below if needed
 # Random seed
 SEED: 1
+
+# Optional path to a saved policy_params.msgpack for actor warm-start
+LOAD_ACTOR_PARAMS_PATH: null
 
 # In-training deterministic evaluation loop
 EVAL_ENABLED: true

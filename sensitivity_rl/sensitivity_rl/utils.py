@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jnp
+import os
 from pathlib import Path
 from typing import Any, Mapping, Tuple
 from flax import nnx, serialization
@@ -29,14 +30,25 @@ def load_actor_params_from_file(params_path: str):
         if only the actor is needed).
     """
     params_file = Path(params_path)
+    if not params_file.is_absolute():
+        params_file = Path.cwd() / params_file
     if not params_file.exists():
-        raise FileNotFoundError(f"Parameters file not found: {params_path}")
+        hydra_orig_cwd = os.environ.get("HYDRA_ORIG_CWD")
+        if hydra_orig_cwd:
+            alt = Path(hydra_orig_cwd) / params_path
+            if alt.exists():
+                params_file = alt
+
+    if not params_file.exists():
+        raise FileNotFoundError(
+            f"Parameters file not found: {params_path} (resolved: {params_file})"
+        )
 
     try:
         params_bytes = params_file.read_bytes()
         return serialization.msgpack_restore(params_bytes)
     except Exception as e:
-        raise ValueError(f"Failed to load parameters from {params_path}: {e}")
+        raise ValueError(f"Failed to load parameters from {params_file}: {e}")
 
 
 def merge_actor_params_with_fresh_critic(loaded_pure_dict, fresh_state):

@@ -11,6 +11,7 @@ from buffers import Transition, RunnerState, UpdateState
 from algorithms.common import gae_sensitivity
 from net_utils import create_optimizer, make_linear_schedule
 from networks import ActorCritic, CriticGRU
+from utils import init_network_params
 from envs.wrappers import (
     GymnaxWrapper,
     ClipAction,
@@ -466,6 +467,9 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
         critic_layer_sizes=tuple(config.get("CRITIC_LAYER_SIZES", (256, 256))),
         rngs=nnx.Rngs(int(rng[0])),
     )
+
+    # Optionally load pre-trained actor weights (keeps fresh critic)
+    network = init_network_params(network, config)
 
     graphdef, state = nnx.split(network)
 

@@ -44,13 +44,13 @@ args = [
 ]
 cmd = "python src/policy_control_node_tilthex.py --setpoint {{ x }} {{ y }} {{ z }} {{ roll }} {{ pitch }} {{ yaw }}"
 
-[tasks.policy-attitude]
+[tasks.policy-setattitude]
 args = [
   { "arg" = "roll", "default" = "0.0" },
   { "arg" = "pitch", "default" = "0.0" },
   { "arg" = "yaw", "default" = "0.0" },
 ]
-cmd = "python src/policy_control_node_tilthex.py --attitude {{ roll }} {{ pitch }} {{ yaw }}"
+cmd = "python src/policy_control_node_tilthex.py --setattitude {{ roll }} {{ pitch }} {{ yaw }}"
 
 [tasks.sim]
 args = [

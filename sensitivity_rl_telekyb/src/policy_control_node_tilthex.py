@@ -51,10 +51,10 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO1') 
-        self.declare_parameter('policy_duration', 4.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO1') 
+        self.declare_parameter('policy_duration', 8.0)  
         self.declare_parameter('frequency_hz', 100.0) 
-        self.declare_parameter('takeoff_height', 0.1) 
+        self.declare_parameter('takeoff_height', 0.5) 
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
@@ -145,10 +145,11 @@ class PolicyControlNode(Node):
                 self.target_hold_z = initial_state[2]
                 
                 euler_init = quat_to_euler_xyz(initial_state[6:10])
-                init_yaw = euler_init[2]
+                self.init_yaw = euler_init[2]  
+                
                 self.setpoint = np.array([
                     self.hold_x, self.hold_y, self.target_hold_z, 
-                    np.cos(init_yaw / 2.0), 0.0, 0.0, np.sin(init_yaw / 2.0)
+                    np.cos(self.init_yaw / 2.0), 0.0, 0.0, np.sin(self.init_yaw / 2.0)
                 ])
 
             self.motors_armed = True 
@@ -160,7 +161,7 @@ class PolicyControlNode(Node):
             response.success = False 
             response.message = f'Arm failed: {str(e)}' 
             self.get_logger().error(response.message) 
-        return response 
+        return response
 
     def takeoff_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
@@ -229,10 +230,25 @@ class PolicyControlNode(Node):
 
     def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
         self.pid_active = False
-        # Ritorno automatico alla posizione di takeoff salvata
-        self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
+
+        state = read_state_and_rot_w(self.components)
+        if state is not None:
+            curr_x, curr_y, curr_z = state[0], state[1], state[2]
+            curr_yaw = quat_to_euler_xyz(state[6:10])[2]
+            
+            # Aggiorna i valori di hold per sicurezza
+            self.hold_x = curr_x
+            self.hold_y = curr_y
+            self.target_hold_z = curr_z
+            self.init_yaw = curr_yaw
+            
+            self.components.nhfc.set_position(curr_x, curr_y, curr_z, float(curr_yaw))
+            response.message = f'PID Navigation stopped. Holding current pose Z:{curr_z:.2f}m.'
+        else:
+            self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
+            response.message = 'PID Navigation stopped. Returning to old pose (sensor read failed).'
+            
         response.success = True
-        response.message = 'PID Navigation stopped. Returning to takeoff pose.'
         return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
@@ -254,35 +270,57 @@ class PolicyControlNode(Node):
         return response 
     
     def setpoint_callback(self, msg: PoseStamped): 
+        from scipy.spatial.transform import Rotation
+        
+        q_msg = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
+        euler_cli = quat_to_euler_xyz(q_msg)
+        
+        target_rpy = [euler_cli[0], euler_cli[1], euler_cli[2] + self.init_yaw]
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat()
+        
         with self.lock: 
             self.setpoint = np.array([ 
-                msg.pose.position.x, msg.pose.position.y, msg.pose.position.z, 
-                msg.pose.orientation.w, msg.pose.orientation.x, 
-                msg.pose.orientation.y, msg.pose.orientation.z
+                msg.pose.position.x, 
+                msg.pose.position.y, 
+                msg.pose.position.z, 
+                q_target[3], # w
+                q_target[0], # x
+                q_target[1], # y
+                q_target[2]  # z
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
         if self.pid_active:
-            q = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
-            yaw = quat_to_euler_xyz(q)[2]
-            self.components.nhfc.set_position(msg.pose.position.x, msg.pose.position.y, msg.pose.position.z, float(yaw))
+            self.components.nhfc.set_position(
+                msg.pose.position.x, 
+                msg.pose.position.y, 
+                msg.pose.position.z, 
+                float(target_rpy[2])
+            )
 
     def attitude_callback(self, msg: Quaternion): 
+        from scipy.spatial.transform import Rotation
+        
         state = read_state_and_rot_w(self.components)
         if state is None:
             self.get_logger().error("Cannot read state to snap position.")
             return
             
+        q_msg = [msg.w, msg.x, msg.y, msg.z]
+        euler_cli = quat_to_euler_xyz(q_msg)
+        target_rpy = [euler_cli[0], euler_cli[1], euler_cli[2] + self.init_yaw]
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat()
+            
         with self.lock:
             self.setpoint[0:3] = state[0:3]
-            self.setpoint[3] = msg.w
-            self.setpoint[4] = msg.x
-            self.setpoint[5] = msg.y
-            self.setpoint[6] = msg.z
+            self.setpoint[3] = q_target[3] # w
+            self.setpoint[4] = q_target[0] # x
+            self.setpoint[5] = q_target[1] # y
+            self.setpoint[6] = q_target[2] # z
             
             self.custom_setpoint_active = True
             
-        self.get_logger().info(f"Hover+Attitude target set. Position snapped to: X={state[0]:.2f}, Y={state[1]:.2f}, Z={state[2]:.2f}m")
+        self.get_logger().info(f"Attitude target set. Yaw offset applied: {target_rpy[2]:.2f} rad")
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
 
@@ -663,8 +701,23 @@ class PolicyControlNode(Node):
             self.components.rotorcraft.servo(ack=True) 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.nhfc.servo(ack=True) 
-            self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
-            self.get_logger().info(f"PID engaged. Returning to original takeoff target Z:{self.target_hold_z:.2f}m") 
+            
+            end_state = read_state_and_rot_w(self.components)
+            if end_state is not None:
+                end_x, end_y, end_z = end_state[0], end_state[1], end_state[2]
+                end_yaw = quat_to_euler_xyz(end_state[6:10])[2]
+                
+                # Update hold variables
+                self.hold_x = end_x
+                self.hold_y = end_y
+                self.target_hold_z = end_z
+                self.init_yaw = end_yaw
+                
+                self.components.nhfc.set_position(end_x, end_y, end_z, float(end_yaw))
+                self.get_logger().info(f"PID engaged. Holding end pose: X={end_x:.2f}, Y={end_y:.2f}, Z={end_z:.2f}m") 
+            else:
+                self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
+                self.get_logger().info("PID engaged. Sensors unreadable, falling back to old pose.")
 
         except Exception as e: 
             self.get_logger().error(f"RECOVERY FAILED: {e}")
@@ -733,7 +786,7 @@ def publish_attitude_cli(args):
     from geometry_msgs.msg import Quaternion
     
     if len(args) < 3:
-        print("Error: missing arguments. Usage: --attitude roll_deg pitch_deg yaw_deg")
+        print("Error: missing arguments. Usage: --setattitude roll_deg pitch_deg yaw_deg")
         return
 
     r_deg, p_deg, y_deg = map(float, args[:3])
@@ -815,7 +868,7 @@ if __name__ == '__main__':
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == '--setpoint':
         publish_setpoint_cli(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == '--attitude':
+    elif len(sys.argv) > 1 and sys.argv[1] == '--setattitude':
         publish_attitude_cli(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--battery':
         check_battery_cli()

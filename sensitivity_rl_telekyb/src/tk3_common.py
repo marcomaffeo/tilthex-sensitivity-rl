@@ -167,7 +167,6 @@ class TK3Components_tilthex:
         self.pom.log_stop()
         self.mocap.unset_logfile()
 
-# --- Common helper functions ---
 def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
     pom = components.pom
     body = pom.frame('robot')['frame']

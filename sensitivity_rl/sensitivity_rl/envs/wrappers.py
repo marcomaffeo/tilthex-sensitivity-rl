@@ -385,7 +385,7 @@ class SensitivityWrapper(GymnaxWrapper):
         sens_s_next = jnp.where(jnp.isnan(sens_s_next), 1e3, sens_s_next)
 
         # not normalized
-        norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
+        norm_next = jnp.linalg.matrix_norm(self.W @ sens_s_next, ord="fro")
 
         # normalize
         sens_s_next = sens_s_next / (norm_next + 1e-6)

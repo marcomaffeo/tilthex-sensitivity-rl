@@ -101,14 +101,13 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [120, 250],
+    "SEED": [30],
     
-    "GAIN_STAB": [0.2, 0.4],          # Penalità velocità angolare
-    "GAIN_ATT": [2.0, 2.5],                 # Reward per allineamento
-    "GAIN_SM": [0.001, 0.005, 0.01, 0.05],        # Penalità variazione comandi
-    
-    "GAIN_REF": [0.001, 0.005, 0.01],       # Penalità distanza target
-    "REWARD_POS_TOLERANCE": [0.02, 0.04],
+    "GAIN_STAB": [0.2],          # Penalità velocità angolare
+    "GAIN_ATT": [2.0],                 # Reward per allineamento
+    "GAIN_SM": [0.05, 0.01],        # Penalità variazione comandi
+    "GAIN_REF": [2],       # Penalità distanza target
+    "REWARD_POS_TOLERANCE": [0.04], # Tolleranza per reward di posizione
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     #"LR": [0.001, 0.0005, 0.0001],
@@ -127,7 +126,7 @@ SWEEP_PARAMS = {
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
     "ppo": {
-        "DOMAIN_RANDOMIZATION": [False, True],
+        "DOMAIN_RANDOMIZATION": [False],
     },
     "rappo": {
         "DOMAIN_RANDOMIZATION": [False],
@@ -273,9 +272,45 @@ def run_experiment_job(
     pure_params = params.to_pure_dict()
     (run_dir / "policy_params.msgpack").write_bytes(serialization.to_bytes(pure_params))
 
-    config.pop("SENS_W", None)
+    keys_to_remove = ["hydra", "defaults", "_self_"]
+    clean_config = {
+        k: v for k, v in config.items() 
+        if k not in keys_to_remove and not str(k).startswith("override")
+    }
+
+    # Estrazione dinamica esatta come in train.py
+    try:
+        from envs import ENV_REGISTRY
+        env = ENV_REGISTRY[clean_config["ENV_NAME"]]()
+        env_params = env.default_params
+        
+        clean_config["env"] = {}
+        env_attrs = [
+            ("action_dim", "env", "action_dim"),
+            ("obs_dim", "env", "obs_dim"),
+            ("param_dim", "env", "param_dim"),
+            ("MIN_ACTION", "env_params", "min_action"),
+            ("MAX_ACTION", "env_params", "max_action"),
+            ("MIN_INPUT", "env_params", "min_input"),
+            ("MAX_INPUT", "env_params", "max_input"),
+        ]
+
+        for config_key, source, attr_name in env_attrs:
+            source_obj = env if source == "env" else env_params
+            attr_value = getattr(source_obj, attr_name)
+            if isinstance(attr_value, (int, float, bool)):
+                clean_config["env"][config_key] = (
+                    int(attr_value) if isinstance(attr_value, (int, bool)) else attr_value
+                )
+            else:
+                clean_config["env"][config_key] = attr_value.tolist()
+                
+    except Exception as e:
+        print(f"Warning: Failed to inject physical env mapping. {e}")
+
     with open(run_dir / "config.json", "w") as f:
-        json.dump(config, f, indent=2)
+        json.dump(clean_config, f, indent=2)
+    # --- END MODIFICATION ---
 
     hparam_dict = {
         k: v for k, v in config.items() if isinstance(v, (int, float, bool, str))

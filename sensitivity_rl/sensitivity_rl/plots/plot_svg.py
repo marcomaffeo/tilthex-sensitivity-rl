@@ -80,9 +80,8 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
             # Linea in primo piano, arancione
             ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=nom_color, linewidth=2.5, zorder=10, label=lbl_nom)
             
-            # Start nominale distinto (opzionale, ma utile)
-            lbl_start_nom = r'$\mathrm{Start\ (Nom)}$' if i == 0 else None
-            ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color=nom_color, s=50, zorder=12, label=lbl_start_nom)
+            # Start nominale distinto (senza label in legenda)
+            ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color=nom_color, s=50, zorder=12)
 
             if actions.size > 0:
                 t_steps = np.arange(actions.shape[0])
@@ -118,7 +117,7 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
 
         ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=c_3d, linewidth=lw_3d, zorder=zo_3d, label=lbl_3d) 
         
-        # BUGFIX: La renderizzazione degli Scatter è ORA FUORI dall'if i==0, quindi renderizza TUTTI gli start
+        # Renderizza tutti gli start
         ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color=start_color, s=40, zorder=11, label=label_start)  
 
         if target_pos_data is not None: 
@@ -168,13 +167,15 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
     ax_dist_err.set_ylabel(r'$e_p$ [m]') 
     handles, labels = ax_dist_err.get_legend_handles_labels() 
     if labels: 
-        ax_dist_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=20) 
+        # Legenda ingrandita per tracking error
+        ax_dist_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=26) 
     ax_dist_err.tick_params(labelbottom=False)  
 
     ax_att_err.set(ylabel=r'$e_a$ [rad]', xlabel=r'$t$ [steps]') 
     handles, labels = ax_att_err.get_legend_handles_labels() 
     if labels: 
-        ax_att_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=20) 
+        # Legenda ingrandita per tracking error
+        ax_att_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=26) 
     fig_err.align_ylabels() 
     fig_err.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.1, hspace=0.2) 
 

@@ -83,14 +83,14 @@ class EnvParams(environment.EnvParams):
     I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))           # inertia off-diagonal terms [kg*m^2]
     action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                                   # action noise scale for exploration
     
-    gain_stab: float = struct.field(pytree_node=False, default=0.2)
-    gain_att: float = struct.field(pytree_node=False, default=2.0)
-    gain_ref: float = struct.field(pytree_node=False, default=0.0005)
-    gain_sm: float = struct.field(pytree_node=False, default=0.01)
+    gain_stab: float = struct.field(pytree_node=False, default=0.2)             # reward gain for angular velocity penalty to encourage stability
+    gain_att: float = struct.field(pytree_node=False, default=2.0)              # reward gain for attitude error to encourage correct orientation
+    gain_ref: float = struct.field(pytree_node=False, default=2.0)              # reward gain to encourage following the ideal action for hovering at target
+    gain_sm: float = struct.field(pytree_node=False, default=0.01)              # reward gain to encourage smoother actions and reduce chattering
     reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
 
     # Uncertain parameters
-    m: float = 3.0                                                                                                                          # mass [kg] (2.91118 + (0.01355 x 6))
+    m: float = 2.936                                                                                                                            # mass [kg]
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors
@@ -119,17 +119,17 @@ class TilthexV1(environment.Environment):
         self.hovering_action = jnp.full((self.default_params.n,), hover_force)
 
         self.params_min = [
-            2.7,                                           # mass -10%
+            2.6,                                            # mass -10%
             jnp.array([0.074, 0.076, 0.14]),                # inertia -10%
-            jnp.array([0.0, 0.0, 0.02]),                # com offset [-110%, -110%, -10%]
+            jnp.array([0.0, 0.0, 0.01]),                    # com offset [-110%, -110%, -10%]
             jnp.full((6,), -22.0),                          # alpha tilt angles -2deg
             jnp.array(1.08e-3),                             # c_f -10%
             0.001,                                          # delay 
         ]
         self.params_max = [
-            3.2,                                           # mass +10%
+            3.2,                                            # mass +10%
             jnp.array([0.090, 0.093, 0.17]),                # inertia +10%
-            jnp.array([0.001, 0.001, 0.03]),                # com offset [+110%, +110%, +10%]
+            jnp.array([0.001, 0.001, 0.04]),                # com offset [+110%, +110%, +10%]
             jnp.full((6,), -18.0),                          # alpha tilt angles +2deg
             jnp.array(1.32e-3),                             # c_f +10%
             0.01,                                           # delay
@@ -351,8 +351,8 @@ class TilthexV1(environment.Environment):
             maxval=params.env_max_limits,
         )
 
-        min_rpy_rad = jnp.deg2rad(jnp.array([-2.0, -2.0, -45.0])) 
-        max_rpy_rad = jnp.deg2rad(jnp.array([2.0, 2.0, 45.0]))
+        min_rpy_rad = jnp.deg2rad(jnp.array([-2.0, -2.0, -180.0])) 
+        max_rpy_rad = jnp.deg2rad(jnp.array([2.0, 2.0, 180.0]))
 
         att_rad = jax.random.uniform(
             key_att,

@@ -86,7 +86,7 @@ class EnvParams(environment.EnvParams):
     I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))
     
     # Uncertain parameters
-    m: float = 2.91118 
+    m: float = 3.0 
     I: jax.Array = struct.field(pytree_node=True, default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]))
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors

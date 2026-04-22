@@ -18,7 +18,7 @@ tilthex-control = {cmd = "python -i src/tk3-tilthex-control.py"}
 policy-control = {cmd = "python src/policy_control_node.py"}
 policy-control-tilthex = {cmd = "python src/policy_control_node_tilthex.py"}
 policy-control-tilthex-pytorch = {cmd = "python src/policy_control_node_tilthex_pytorch.py"}
-plot-svg = { cmd = "python src/plot.py"}
+plot-svg = { cmd = "python src/plot.py" }
 policy-battery = { cmd = "python src/policy_control_node_tilthex.py --battery" }
 policy-telemetry = { cmd = "python src/policy_control_node_tilthex.py --telemetry" }
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-Post-processing script to generate Publication-Ready SVG plots from telemetry_full.npz files.
+Comparison script to generate Publication-Ready SVG plots comparing two telemetry files.
+Includes tracking errors and rotor inputs comparison with extra-large legends and thick lines.
 """
+import argparse
 from pathlib import Path
 import numpy as np
 
@@ -10,151 +12,116 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 
-def generate_svg_plots(npz_path: Path):
+def load_data(path: Path):
+    if path.is_dir():
+        npz_path = path / "telemetry_full.npz"
+    else:
+        npz_path = path
+        
     if not npz_path.exists():
-        raise FileNotFoundError(f"Telemetry file not found: {npz_path}")
-
-    print(f"Loading telemetry from: {npz_path}")
+        raise FileNotFoundError(f"File not found: {npz_path}")
+        
     data = np.load(npz_path)
-
-    policy_name = str(data['policy_name'])
     
-    out_dir = Path("plot_svg") / policy_name
-    out_dir.mkdir(parents=True, exist_ok=True)
-
+    # Pre-processing
     times = data['t']
     pos_act = data['pos']
-    vel_act = data['vel']
-    quats_act = data['quat']
-    avel_act = data['avel']
     pos_ref = data['pos_ref']
+    quats_act = data['quat']
     quats_ref = data['quat_ref']
     actions = data['action']
-    inf_times = data['inf_time']
-
-    euler_act = Rotation.from_quat(quats_act, scalar_first=True).as_euler('xyz')
-    euler_ref = Rotation.from_quat(quats_ref, scalar_first=True).as_euler('xyz')
-
+    
+    # Errors
     pos_err = np.linalg.norm(pos_act - pos_ref, axis=1)
-    vel_err = np.linalg.norm(vel_act, axis=1)
-    avel_err = np.linalg.norm(avel_act, axis=1)
-
     dot_prod = np.sum(quats_act * quats_ref, axis=1)
     dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
-    total_error_rad = 2.0 * np.arccos(dot_prod)
+    att_err = 2.0 * np.arccos(dot_prod)
+    
+    return times, pos_err, att_err, actions
+
+def generate_comparison_plots(path1: Path, label1: str, path2: Path, label2: str):
+    # Caricamento dati
+    t1, p_err1, a_err1, act1 = load_data(path1)
+    t2, p_err2, a_err2, act2 = load_data(path2)
+
+    # Output directory
+    out_dir = Path("comparison_plots")
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     # ==========================================
     # PUBLICATION-READY LATEX STYLE SETTINGS
     # ==========================================
     plt.rcParams.update({
-        "text.usetex": True,                   # Abilita il rendering LaTeX nativo
+        "text.usetex": True,
         "font.family": "serif",
-        "font.serif": ["Computer Modern Roman"], # Font standard LaTeX
-        "font.size": 14,
-        "axes.labelsize": 16,
-        "legend.fontsize": 12,
-        "xtick.labelsize": 12,
-        "ytick.labelsize": 12,
+        "font.serif": ["Computer Modern Roman"],
+        "font.size": 18,            
+        "axes.labelsize": 22,       
+        "legend.fontsize": 24,      # Legenda ancora più grande
+        "xtick.labelsize": 16,
+        "ytick.labelsize": 16,
         "axes.grid": True,
-        "grid.alpha": 0.4,                     # Griglia molto leggera
+        "grid.alpha": 0.3,
         "grid.linestyle": "--",
-        "axes.facecolor": "white",             # Niente sfondi grigi
-        "figure.facecolor": "white",
-        "savefig.bbox": "tight",               # Rimuove i bordi bianchi in eccesso
-        "savefig.pad_inches": 0.05
+        "axes.facecolor": "white",
+        "savefig.bbox": "tight",
+        "lines.antialiased": True
     })
 
-    # --- FIG 1: Positions & Attitude ---
-    fig1, axs1 = plt.subplots(2, 3, figsize=(16, 7))
-    
-    ylabels_pos = [r'$x$ [m]', r'$y$ [m]', r'$z$ [m]']
-    ylabels_euler = [r'$\phi$ [rad]', r'$\theta$ [rad]', r'$\psi$ [rad]']
-    
-    for i in range(3):
-        # Position (Row 0)
-        axs1[0, i].plot(times, pos_act[:, i], label=r'$\mathrm{Actual}$', color='blue', linewidth=1.5)
-        axs1[0, i].plot(times, pos_ref[:, i], '--', label=r'$\mathrm{Reference}$', color='black', alpha=0.8, linewidth=1.5)
-        axs1[0, i].set_ylabel(ylabels_pos[i])
-        axs1[0, i].tick_params(labelbottom=False) # Nasconde le label X nella riga superiore
-        
-        # Attitude (Row 1)
-        axs1[1, i].plot(times, euler_act[:, i], color='red', linewidth=1.5)
-        axs1[1, i].plot(times, euler_ref[:, i], '--', color='black', alpha=0.8, linewidth=1.5)
-        axs1[1, i].set_ylabel(ylabels_euler[i])
-        axs1[1, i].set_xlabel(r'$t$ [s]')
-    
-    # Legend solo nel primo subplot per pulizia visiva
-    axs1[0, 0].legend(loc='best', frameon=True, edgecolor='black')
-    fig1.align_ylabels()
-    fig1.tight_layout()
+    c1, c2 = '#1f77b4', '#ff7f0e' # Blu e Arancione
 
-    # --- FIG 2: Inputs (Rotor Commands) ---
-    fig2, axs2 = plt.subplots(2, 3, figsize=(16, 7))
-    for i in range(min(6, actions.shape[1])):
+    # --- FIG 1: Comparison Tracking Errors ---
+    fig_err, axs_err = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    
+    # Position Error
+    axs_err[0].plot(t1, p_err1, color=c1, label=label1, linewidth=4.0) # Linea molto spessa
+    axs_err[0].plot(t2, p_err2, color=c2, label=label2, linewidth=4.0, alpha=0.8)
+    axs_err[0].set_ylabel(r'$e_p$ [m]')
+    axs_err[0].legend(loc='upper right', frameon=True, shadow=True)
+    
+    # Attitude Error
+    axs_err[1].plot(t1, a_err1, color=c1, label=label1, linewidth=4.0)
+    axs_err[1].plot(t2, a_err2, color=c2, label=label2, linewidth=4.0, alpha=0.8)
+    axs_err[1].set_ylabel(r'$e_R$ [rad]')
+    axs_err[1].set_xlabel(r'$t$ [s]')
+            
+    fig_err.align_ylabels()
+    fig_err.tight_layout()
+    fig_err.savefig(out_dir / f"comparison_errors_{label1}_{label2}.svg", format='svg', transparent=True)
+
+    # --- FIG 2: Comparison Rotor Inputs ---
+    fig_inp, axs_inp = plt.subplots(2, 3, figsize=(18, 10), sharex=True)
+    num_rotors = min(6, act1.shape[1], act2.shape[1])
+    
+    for i in range(num_rotors):
         row, col = i // 3, i % 3
-        axs2[row, col].plot(times, actions[:, i], color='goldenrod', linewidth=1.5)
-        axs2[row, col].set_ylabel(rf'$f_{i+1}$ [N]')
-        axs2[row, col].set_ylim(0, 12)
+        axs_inp[row, col].plot(t1, act1[:, i], color=c1, label=label1, linewidth=3.0)
+        axs_inp[row, col].plot(t2, act2[:, i], color=c2, label=label2, linewidth=3.0, alpha=0.7)
+        axs_inp[row, col].set_ylabel(rf'$f_{i+1}$ [N]')
+        axs_inp[row, col].set_ylim(0, 12)
         
-        if row == 0:
-            axs2[row, col].tick_params(labelbottom=False)
-        else:
-            axs2[row, col].set_xlabel(r'$t$ [s]')
-            
-    fig2.align_ylabels()
-    fig2.tight_layout()
+        if row == 1:
+            axs_inp[row, col].set_xlabel(r'$t$ [s]')
+        if i == 0: 
+            axs_inp[row, col].legend(loc='upper right', frameon=True, fontsize=20)
 
-    # --- FIG 3: Tracking Errors ---
-    fig3, axs3 = plt.subplots(2, 2, figsize=(12, 7))
-    err_data = [
-        (pos_err, r'$e_p$ [m]', "blue"), 
-        (total_error_rad, r'$e_R$ [rad]', "red"), 
-        (vel_err, r'$e_v$ [m/s]', "green"), 
-        (avel_err, r'$e_\omega$ [rad/s]', "purple")
-    ]
-    for i, (data_arr, ylabel, col) in enumerate(err_data):
-        r, c = i // 2, i % 2
-        axs3[r, c].plot(times, data_arr, color=col, linewidth=1.5)
-        axs3[r, c].set_ylabel(ylabel)
-        
-        if r == 0:
-            axs3[r, c].tick_params(labelbottom=False)
-        else:
-            axs3[r, c].set_xlabel(r'$t$ [s]')
-            
-    fig3.align_ylabels()
-    fig3.tight_layout()
-
-    # --- FIG 4: JAX Inference Latency ---
-    fig4, ax4 = plt.subplots(figsize=(8, 4))
-    ax4.plot(times, inf_times * 1000.0, color='forestgreen', linewidth=1.5)
-    ax4.set_ylabel(r'$t_{\mathrm{inf}}$ [ms]')
-    ax4.set_xlabel(r'$t$ [s]')
-    fig4.tight_layout()
-
-    # --- SVG Export ---
-    figures = {
-        'positions_attitude': fig1,
-        'rotor_forces': fig2,
-        'tracking_errors': fig3,
-        'inference_latency': fig4
-    }
-
-    print(f"Exporting publication-ready SVG plots to: {out_dir}")
-    for name, fig in figures.items():
-        save_path = out_dir / f"{name}.svg"
-        # transparent=True assicura che il background sia trasparente per sovrapporlo in LaTeX
-        fig.savefig(save_path, format='svg', transparent=True)
-        plt.close(fig)
-
-    print("SVG export complete.")
+    fig_inp.align_ylabels()
+    fig_inp.tight_layout()
+    fig_inp.savefig(out_dir / f"comparison_inputs_{label1}_{label2}.svg", format='svg', transparent=True)
+    
+    plt.close('all')
+    print(f"Comparison plots (Extra Thick Lines) saved in: {out_dir}")
 
 if __name__ == "__main__":
-    TARGET_NPZ_FILE = "logs/SPPO_20260417_183227/telemetry_full.npz"
+    parser = argparse.ArgumentParser(description="Compare two telemetry logs.")
+    parser.add_argument("path1", type=str, help="Path to first log")
+    parser.add_argument("label1", type=str, help="Label for first log")
+    parser.add_argument("path2", type=str, help="Path to second log")
+    parser.add_argument("label2", type=str, help="Label for second log")
     
-    npz_path = Path(TARGET_NPZ_FILE)
-    
+    args = parser.parse_args()
+
     try:
-        generate_svg_plots(npz_path)
+        generate_comparison_plots(Path(args.path1), args.label1, Path(args.path2), args.label2)
     except Exception as e:
         print(f"FAILED: {e}")

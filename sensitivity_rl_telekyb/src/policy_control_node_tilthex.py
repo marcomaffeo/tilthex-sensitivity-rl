@@ -51,10 +51,10 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO') 
-        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO1') 
+        self.declare_parameter('policy_duration', 4.0)  
         self.declare_parameter('frequency_hz', 100.0) 
-        self.declare_parameter('takeoff_height', 0.2) 
+        self.declare_parameter('takeoff_height', 0.1) 
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
@@ -425,8 +425,9 @@ class PolicyControlNode(Node):
             
         sim_folder.mkdir(parents=True, exist_ok=True)
 
+        data_filename = "data.npz"
         np.savez(
-            sim_folder / "telemetry_full.npz",
+            sim_folder / data_filename,
             t=times,
             pos=pos_act,
             vel=vel_act,
@@ -438,7 +439,7 @@ class PolicyControlNode(Node):
             inf_time=inf_times,
             policy_name=policy_name
         )
-        self.get_logger().info(f"Full telemetry saved: {sim_folder / 'telemetry_full.npz'}")
+        self.get_logger().info(f"Full telemetry saved: {sim_folder / data_filename}")
 
         if skip_plots:
             self.get_logger().info("skip_plots=True: skipping image generation.")
@@ -450,56 +451,87 @@ class PolicyControlNode(Node):
         dot_prod = np.clip(np.abs(np.sum(quats_act * quats_ref, axis=1)), -1.0, 1.0)
         total_error_rad = 2.0 * np.arccos(dot_prod)
 
-        plt.style.use("seaborn-v0_8")
+        plt.style.use('default')
+        plt.rcParams.update({
+            'figure.facecolor': 'white',
+            'axes.facecolor': 'white',
+            'axes.grid': True,
+            'grid.color': '#d3d3d3',
+            'grid.linestyle': '--',
+            'grid.alpha': 0.8,
+            'axes.edgecolor': 'black',
+            'axes.linewidth': 1.2,
+            'font.family': 'serif',
+            'font.size': 12,
+            'axes.titlesize': 14,
+            'axes.labelsize': 12,
+            'legend.fontsize': 11,
+            'legend.frameon': True,
+            'legend.edgecolor': 'black',
+            'lines.linewidth': 2.0
+        })
+
+        c_act = '#1f77b4' # Blu
+        c_ref = '#000000' # Nero
+        c_att = '#d62728' # Rosso
+        c_mot = '#ff7f0e' # Arancione
 
         fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
-        fig1.suptitle(f'TiltHex State Tracking ({times[-1]:.1f}s)', fontsize=16) 
+        fig1.suptitle(f'TiltHex State Tracking ({times[-1]:.1f}s)', fontsize=16, fontweight='bold') 
         titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
         titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
+        
         for i in range(3):
-            axs1[0, i].plot(times, pos_act[:, i], label='Actual', linewidth=2)
-            axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
+            axs1[0, i].plot(times, pos_act[:, i], label='Actual', color=c_act)
+            axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
             axs1[0, i].set_title(titles_pos[i])
-            axs1[1, i].plot(times, euler_act[:, i], label='Actual', color='red', linewidth=2)
-            axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
+            axs1[0, i].set_xlabel('Time [s]')
+            if i == 0: axs1[0, i].legend(loc='best')
+
+            axs1[1, i].plot(times, euler_act[:, i], label='Actual', color=c_att)
+            axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
             axs1[1, i].set_title(titles_euler[i])
-            axs1[0, i].grid(True, alpha=0.3); axs1[1, i].grid(True, alpha=0.3)
-        fig1.tight_layout()
+            axs1[1, i].set_xlabel('Time [s]')
+            if i == 0: axs1[1, i].legend(loc='best')
+            
+        fig1.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         fig2, axs2 = plt.subplots(2, 3, figsize=(18, 8)) 
-        fig2.suptitle('Rotor Forces [N]', fontsize=16) 
+        fig2.suptitle('Rotor Forces [N]', fontsize=16, fontweight='bold') 
         for i in range(min(6, actions.shape[1])):
             row, col = i // 3, i % 3
-            axs2[row, col].plot(times, actions[:, i], color='goldenrod')
+            axs2[row, col].plot(times, actions[:, i], color=c_mot)
             axs2[row, col].set_title(f'Rotor {i+1}')
-            axs2[row, col].set_ylim(0, 12); axs2[row, col].grid(True, alpha=0.3)
-        fig2.tight_layout()
+            axs2[row, col].set_xlabel('Time [s]')
+            axs2[row, col].set_ylim(0, 12)
+        fig2.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         fig3, axs3 = plt.subplots(2, 2, figsize=(16, 10))
-        fig3.suptitle('Control Performance Metrics', fontsize=16)
-        err_data = [(pos_err, "Pos [m]", "blue"), (total_error_rad, "Att [rad]", "red"), 
-                    (vel_err, "Vel [m/s]", "green"), (avel_err, "AngVel [rad/s]", "purple")]
+        fig3.suptitle('Control Performance Metrics', fontsize=16, fontweight='bold')
+        err_data = [(pos_err, "Pos Error [m]", c_act), 
+                    (total_error_rad, "Attitude Error [rad]", c_att), 
+                    (vel_err, "Vel Error [m/s]", "#2ca02c"), 
+                    (avel_err, "AngVel Error [rad/s]", "#9467bd")]
         
         for i, (data, label, col) in enumerate(err_data):
             r, c = i // 2, i % 2
-            
-            # Extract final error value for the legend
             final_val = data[-1] if len(data) > 0 else 0.0
             legend_label = f"Final Err: {final_val:.4f}"
-            
             axs3[r, c].plot(times, data, color=col, label=legend_label)
             axs3[r, c].set_title(label)
-            axs3[r, c].grid(True, alpha=0.3)
-            axs3[r, c].legend(loc="upper right") # Display final error in legend
+            axs3[r, c].set_xlabel('Time [s]')
+            axs3[r, c].legend(loc="upper right")
             
-        fig3.tight_layout()
+        fig3.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         fig4, ax4 = plt.subplots(figsize=(10, 6))
-        ax4.plot(times, inf_times * 1000.0, color='forestgreen')
-        ax4.axhline(y=(1.0/self.frequency_hz)*1000.0, color='r', linestyle='--', label='Loop Limit')
-        ax4.set_title('JAX Inference Latency')
-        ax4.set_ylabel('Time [ms]'); ax4.set_xlabel('Time [s]')
-        ax4.legend(); ax4.grid(True, alpha=0.3)
+        ax4.plot(times, inf_times * 1000.0, color='#2ca02c')
+        ax4.axhline(y=(1.0/self.frequency_hz)*1000.0, color=c_att, linestyle='--', label='Loop Limit')
+        ax4.set_title('JAX Inference Latency', fontsize=14, fontweight='bold')
+        ax4.set_ylabel('Time [ms]')
+        ax4.set_xlabel('Time [s]')
+        ax4.legend(loc='best')
+        fig4.tight_layout()
 
         export_map = {
             'positions': fig1,
@@ -512,7 +544,7 @@ class PolicyControlNode(Node):
             for fmt in formats:
                 ext = fmt.strip().lower()
                 save_path = sim_folder / f"{name}.{ext}"
-                kwargs = {'dpi': 100} if ext == 'png' else {}
+                kwargs = {'dpi': 300, 'bbox_inches': 'tight'} if ext == 'png' else {'bbox_inches': 'tight'}
                 fig.savefig(save_path, **kwargs)
 
         for fig in export_map.values():

@@ -3,6 +3,7 @@ runs/
 results/
 videos/
 outputs/
+sensitivity_rl/plots/sweeps/
 
 .DS_Store
 

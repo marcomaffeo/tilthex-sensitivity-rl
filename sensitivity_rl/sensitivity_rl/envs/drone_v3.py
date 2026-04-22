@@ -88,6 +88,10 @@ class DroneV3(environment.Environment):
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
 
+        self.sens_weights = jnp.zeros((self.state_dim, self.state_dim))
+        self.sens_weights = self.sens_weights.at[0:3, 0:3].set(5.0)  # position sensitivity
+        self.sens_weights = self.sens_weights.at[3:7, 3:7].set(0.5)  # attitude sensitivity
+
         # Hovering input corresponds to the input required to counteract gravity at the default mass, with zero torques
         self.hovering_input = jnp.array(
             [self.default_params.m * self.default_params.g, 0.0, 0.0, 0.0]

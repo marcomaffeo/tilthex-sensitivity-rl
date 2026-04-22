@@ -28,22 +28,38 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # Environment setup before JAX import
 # os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
+# XLA determinism mode:
+#
+# REPRODUCIBLE (slow) — autotune_level=0, no kernel benchmarking.
+#   Use for experiments where exact reproducibility across runs is required.
+#
+# FAST+REPRODUCIBLE (recommended) — autotune_level=4 + per-fusion autotune cache.
+#   The first run benchmarks kernels and writes the cache; all subsequent runs
+#   load the cached selections, so the same kernel is always chosen → same
+#   floating-point op order → reproducible results with full autotuning speed.
+#   Cache is stored at XLA_AUTOTUNE_CACHE_DIR (default /tmp/xla_autotune_cache).
+#   To reset the cache (e.g. after a GPU/driver change), delete that directory.
+#
+#   NOTE: --xla_cpu_enable_fast_math and --xla_gpu_enable_fast_min_max allow FP
+#   reassociation and can introduce tiny numerical differences on the CPU path
+#   and min/max ops respectively; disable them if you need bit-exact results.
+#
+_XLA_AUTOTUNE_CACHE = os.environ.get("XLA_AUTOTUNE_CACHE_DIR", "/tmp/xla_autotune_cache")
+
+# Fast + reproducible: full autotuning with persistent kernel-selection cache.
+# The first run populates the cache; all subsequent runs reuse it.
 os.environ["XLA_FLAGS"] = (
-    "--xla_gpu_autotune_level=2 "
+    f"--xla_gpu_autotune_level=4 "
+    f"--xla_gpu_per_fusion_autotune_cache_dir={_XLA_AUTOTUNE_CACHE} "
     "--xla_gpu_force_compilation_parallelism=8 "
     "--xla_cpu_enable_fast_math=true "
     "--xla_gpu_enable_fast_min_max=true "
     "--xla_gpu_enable_triton_gemm=true "
     "--xla_gpu_triton_gemm_any=true "
 )
+
 os.environ["PYTHONHASHSEED"] = "0"
 os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
-# Note that setting xla_gpu_autotune_level=1 greatly improves performance, but causes non-determinism even when seeding the rng.
-# For reproducibility in experiments, we set it to 0 (no autotuning).
-# For final training runs where speed is more important than exact reproducibility, setting it to 1 is recommended.
-# os.environ["XLA_FLAGS"] = (
-#     "--xla_gpu_autotune_level=1 --xla_gpu_force_compilation_parallelism=8 --xla_cpu_enable_fast_math=true --xla_gpu_enable_fast_min_max=true "
-# )
 # os.environ["JAX_PLATFORMS"] = "cuda,cpu"
 
 import jax

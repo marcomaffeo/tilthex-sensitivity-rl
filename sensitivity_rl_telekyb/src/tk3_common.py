@@ -8,15 +8,31 @@ from scipy.spatial.transform import Rotation
 # Auto-detect target
 IS_REAL_ROBOT = (platform.machine() == "aarch64")
 
-def get_plugin_path():
-    base_path = os.environ.get('ROBOTPKG_BASE', os.environ.get('CONDA_PREFIX', '/opt/openrobots'))
-    return base_path + '/lib/genom/pocolibs/plugins'
+def setup_plugin_paths(g):
+    """Dynamically configure genomix search paths based on environment and target."""
+    paths = []
+    
+    if 'ROBOTPKG_BASE' in os.environ:
+        paths.append(os.path.join(os.environ['ROBOTPKG_BASE'], 'lib/genom/pocolibs/plugins'))
+    if 'CONDA_PREFIX' in os.environ:
+        paths.append(os.path.join(os.environ['CONDA_PREFIX'], 'lib/genom/pocolibs/plugins'))
+        
+    paths.append('/opt/openrobots/lib/genom/pocolibs/plugins')
+
+    # Fallback paths for the real hardware workspace
+    if IS_REAL_ROBOT:
+        paths.append('/home/onepiece/openrobots/lib/genom/pocolibs/plugins')
+        paths.append('/home/onepiece/devel/lib/genom/pocolibs/plugins')
+        
+    for p in paths:
+        if os.path.exists(p):
+            g.rpath(p)
 
 class TK3Components:
     """Standard Quadrotor (Simulation mostly)"""
     def __init__(self, log_dir: Path):
         g = genomix.connect()
-        g.rpath(get_plugin_path())
+        setup_plugin_paths(g)
 
         self.optitrack = g.load('optitrack')
         self.rotorcraft = g.load('rotorcraft')
@@ -80,7 +96,7 @@ class TK3Components_tilthex:
     """TiltHex Platform (Sim and Real hardware auto-switching)"""
     def __init__(self, log_dir: Path):
         g = genomix.connect()
-        g.rpath(get_plugin_path())
+        setup_plugin_paths(g)
 
         self.rotorcraft = g.load('rotorcraft')
         self.pom = g.load('pom')
@@ -95,7 +111,6 @@ class TK3Components_tilthex:
             self.mocap = g.load('optitrack')
 
     def setup(self):
-        # Hardware specific serial and MoCap routing
         if IS_REAL_ROBOT:
             self.mocap.connect('10.135.2.40')
             self.rotorcraft.connect({'serial': '/dev/ttyACM0', 'baud': 0})
@@ -107,7 +122,6 @@ class TK3Components_tilthex:
         self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
         self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
-        # nhfc geometry and parameters for TiltHex
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
             'cx': 0, 'cy': 0, 'cz': 0,
@@ -130,7 +144,6 @@ class TK3Components_tilthex:
         self.nhfc.connect_port({'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'})
         self.nhfc.connect_port({'local': 'state', 'remote': 'pom/frame/robot'})
 
-        # pom
         self.pom.set_prediction_model('::pom::constant_acceleration')
         self.pom.set_process_noise({'max_jerk': 100, 'max_dw': 50})
         self.pom.set_history_length({'history_length': 0.25})
@@ -171,14 +184,17 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
     pom = components.pom
     body = pom.frame('robot')['frame']
     pos_dict = body['pos']
-    pos = np.array([pos_dict['x'], pos_dict['y'], pos_dict['z']],dtype=NP_DTYPE)
+    pos = np.array([pos_dict['x'], pos_dict['y'], pos_dict['z']], dtype=NP_DTYPE)
+    
     att_dict = body['att']
-    quat = np.array([att_dict['qw'], att_dict['qx'], att_dict['qy'], att_dict['qz']],dtype=NP_DTYPE)
+    quat = np.array([att_dict['qw'], att_dict['qx'], att_dict['qy'], att_dict['qz']], dtype=NP_DTYPE)
     att_rotation = (Rotation.from_quat(quat, scalar_first=True)).as_matrix()
+    
     vel_dict = body['vel']
-    vel = np.array([vel_dict['vx'], vel_dict['vy'], vel_dict['vz']],dtype=NP_DTYPE)
+    vel = np.array([vel_dict['vx'], vel_dict['vy'], vel_dict['vz']], dtype=NP_DTYPE)
+    
     avel_dict = body['avel']
-    avel_world = np.array([avel_dict['wx'], avel_dict['wy'], avel_dict['wz']],dtype=NP_DTYPE)
+    avel_world = np.array([avel_dict['wx'], avel_dict['wy'], avel_dict['wz']], dtype=NP_DTYPE)
     
     avel = att_rotation.T @ avel_world
     

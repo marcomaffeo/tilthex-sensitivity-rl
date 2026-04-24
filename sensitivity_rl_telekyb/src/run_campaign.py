@@ -11,7 +11,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 TASK_TYPE = "hovering"  # "point_to_point" or "hovering"                   
-POLICY_NAME = "SPPO"                               
+POLICY_NAME = "SPPO1"                               
 TARGET_POSE = [1.0, 0.5, 1.2, 0.0, 0.0, 15.0]      
 TEST_DURATION = 4.0
 

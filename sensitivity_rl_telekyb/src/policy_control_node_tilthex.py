@@ -51,10 +51,16 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO1') 
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO5') 
         self.declare_parameter('policy_duration', 8.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.5) 
+
+        #PPO1/SPPO1 Gain ref alto e gain smooth basso 
+        #PPO2/SPPO2 Gain ref basso e gain smooth alto
+        #PPO3/SPPO3 Gain ref basso e gain smooth basso (SPPO3 BEST PERTURBED)
+        #PPO4/SPPO4 Gain ref alto e gain smooth alto
+        #SPPO5 ALTO peso sensitivity (DEL SPPO3 BEST PERTURBED)
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
@@ -385,7 +391,15 @@ class PolicyControlNode(Node):
             
             state = read_state_and_rot_w(self.components) 
             if state is not None: 
-                self.components.nhfc.set_position(state[0], state[1], 0.05, 0.0) 
+                curr_x, curr_y = state[0], state[1]
+                curr_yaw = quat_to_euler_xyz(state[6:10])[2]
+                
+                self.hold_x = curr_x
+                self.hold_y = curr_y
+                self.target_hold_z = 0.05
+                self.init_yaw = curr_yaw
+
+                self.components.nhfc.set_position(curr_x, curr_y, 0.05, float(curr_yaw))
             
             self.is_flying = False 
             response.success = True 

@@ -51,10 +51,10 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO5') 
-        self.declare_parameter('policy_duration', 8.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO3') 
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
-        self.declare_parameter('takeoff_height', 0.5) 
+        self.declare_parameter('takeoff_height', 0.05) 
 
         #PPO1/SPPO1 Gain ref alto e gain smooth basso 
         #PPO2/SPPO2 Gain ref basso e gain smooth alto

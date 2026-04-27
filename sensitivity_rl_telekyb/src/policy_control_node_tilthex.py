@@ -51,14 +51,15 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO4') 
-        self.declare_parameter('policy_duration', 20.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_4') 
+        self.declare_parameter('policy_duration', 5.0)  
         self.declare_parameter('frequency_hz', 100.0) 
-        self.declare_parameter('takeoff_height', 0.05) 
+        self.declare_parameter('takeoff_height', 0.5) 
 
+        #SPPO_0 fail
         #PPO1/SPPO1 Gain ref alto e gain smooth basso 
         #PPO2/SPPO2 Gain ref basso e gain smooth alto
-        #PPO3/SPPO3 Gain ref basso e gain smooth basso (SPPO3 BEST PERTURBED)
+        #PPO3/SPPO3 Gain ref basso e gain smooth basso (SPPO3 BEST PERTURBED): SPPO3 fail
         #PPO4/SPPO4 Gain ref alto e gain smooth alto
         #SPPO5 ALTO peso sensitivity (DEL SPPO3 BEST PERTURBED)
 
@@ -523,10 +524,10 @@ class PolicyControlNode(Node):
             'lines.linewidth': 2.0
         })
 
-        c_act = '#1f77b4' # Blu
-        c_ref = '#000000' # Nero
-        c_att = '#d62728' # Rosso
-        c_mot = '#ff7f0e' # Arancione
+        c_act = '#1f77b4' 
+        c_ref = '#000000' 
+        c_att = '#d62728' 
+        c_mot = '#ff7f0e' 
 
         fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
         fig1.suptitle(f'TiltHex State Tracking ({times[-1]:.1f}s)', fontsize=16, fontweight='bold') 
@@ -585,11 +586,39 @@ class PolicyControlNode(Node):
         ax4.legend(loc='best')
         fig4.tight_layout()
 
+        # Wrap angle to [-pi, pi] for Euler errors
+        err_pos_split = pos_act - pos_ref
+        err_euler_split = euler_act - euler_ref
+        err_euler_split = (err_euler_split + np.pi) % (2 * np.pi) - np.pi
+
+        fig5, axs5 = plt.subplots(2, 3, figsize=(18, 10))
+        fig5.suptitle('Individual States Tracking Error', fontsize=16, fontweight='bold')
+        err_titles_pos = ['Error X [m]', 'Error Y [m]', 'Error Z [m]']
+        err_titles_euler = ['Error Roll [rad]', 'Error Pitch [rad]', 'Error Yaw [rad]']
+
+        for i in range(3):
+            mae_pos = np.mean(np.abs(err_pos_split[:, i]))
+            axs5[0, i].plot(times, err_pos_split[:, i], color=c_act, label=f'MAE: {mae_pos:.4f}')
+            axs5[0, i].set_title(err_titles_pos[i])
+            axs5[0, i].set_xlabel('Time [s]')
+            axs5[0, i].axhline(y=0, color='k', linestyle='--', alpha=0.5)
+            axs5[0, i].legend(loc='best')
+
+            mae_euler = np.mean(np.abs(err_euler_split[:, i]))
+            axs5[1, i].plot(times, err_euler_split[:, i], color=c_att, label=f'MAE: {mae_euler:.4f}')
+            axs5[1, i].set_title(err_titles_euler[i])
+            axs5[1, i].set_xlabel('Time [s]')
+            axs5[1, i].axhline(y=0, color='k', linestyle='--', alpha=0.5)
+            axs5[1, i].legend(loc='best')
+
+        fig5.tight_layout(rect=[0, 0.03, 1, 0.95])
+
         export_map = {
-            'positions': fig1,
+            'states': fig1,
             'inputs': fig2,
             'tracking_errors': fig3,
-            'inference_latency': fig4
+            'inference_latency': fig4,
+            'tracking_states': fig5
         }
 
         for name, fig in export_map.items():

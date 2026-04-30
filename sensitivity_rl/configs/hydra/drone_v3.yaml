@@ -8,7 +8,8 @@ ENV_NAME: drone_v3
 
 # Environment-specific parameters
 NUM_ENVS: 2048
-NUM_STEPS: 200
+NUM_STEPS: 200          # Steps collected per training update (used as episode length during training)
+EVAL_MAX_STEPS_IN_EPISODE: 300  # Episode length used during testing/rollouts
 SENSITIVITY_NUM_STEPS: 50
 TOTAL_TIMESTEPS: 1e8
 NUM_MINIBATCHES: 128
@@ -26,7 +27,7 @@ ENT_COEF: 0.001
 ACTOR_LAYER_SIZES: [128, 128, 128]
 CRITIC_LAYER_SIZES: [128, 128, 128]
 
-SENSITIVITY_REGULARIZATION_WEIGHT: 0.1
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
 DOMAIN_RANDOMIZATION: false
 
 ALGORITHM: ppo

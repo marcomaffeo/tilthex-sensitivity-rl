@@ -173,7 +173,7 @@ def build_mjcf(
 
     # Top-down near-orthographic: high position + narrow fov
     td_height = float(min(max(dist * 8, 20.0), 150.0))
-    td_half_fov_rad = np.arctan((dist * 0.6) / td_height)
+    td_half_fov_rad = np.arctan((dist * 0.4) / td_height)
     td_fovy = float(np.degrees(td_half_fov_rad) * 2.0)
 
     tree = ET.parse(_SCENE_XML)

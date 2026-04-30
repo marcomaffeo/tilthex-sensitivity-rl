@@ -56,6 +56,27 @@ def load_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
     return trajs
 
 
+def load_nominal_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
+    """Return only nominal trajectory dicts from <exp_dir>/rollouts/.
+
+    Nominal trajectories are:
+      - traj_XXXXX.msgpack          (single-sample runs, all nominal)
+      - traj_XXXXX_sample_00.msgpack (multi-sample runs, sample index 0)
+    """
+    rollouts_dir = exp_dir / "rollouts"
+    if not rollouts_dir.exists():
+        return []
+    trajs = []
+    for f in sorted(rollouts_dir.glob("*.msgpack")):
+        name = f.stem  # strip .msgpack
+        if "_sample_" in name and not name.endswith("_sample_00"):
+            continue  # skip non-nominal perturbed samples
+        data = _load_traj(f)
+        if data is not None:
+            trajs.append(data)
+    return trajs
+
+
 # ─── Directory-name parsing ──────────────────────────────────────────────────
 
 # Known environment base names and version tokens
@@ -158,6 +179,23 @@ _METHOD_SHORT: Dict[str, str] = {
     "ddpg": "DDPG",
 }
 
+# Physical input limits (min_input, max_input) for known environments.
+# Used to normalise actions before computing total-variation / jerk so that
+# all input dimensions are on the same [0, 1] scale.
+_DRONE_INPUT_LIMITS: Tuple[np.ndarray, np.ndarray] = (
+    np.array([4.0, -3.0, -3.0, -1.0]),   # min_input
+    np.array([25.0,  3.0,  3.0,  1.0]),   # max_input
+)
+_ENV_INPUT_LIMITS: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
+    "drone_v0":       _DRONE_INPUT_LIMITS,
+    "drone_v1":       _DRONE_INPUT_LIMITS,
+    "drone_v2":       _DRONE_INPUT_LIMITS,
+    "drone_v3":       _DRONE_INPUT_LIMITS,
+    "drone_v4":       _DRONE_INPUT_LIMITS,
+    "drone_obstacle": _DRONE_INPUT_LIMITS,
+    "drone_flip":     _DRONE_INPUT_LIMITS,
+}
+
 
 def make_label(param_key: Tuple) -> str:
     """Human-readable label for a parameter group."""
@@ -228,6 +266,18 @@ def _rmse_with_std(stacked: np.ndarray):
     return rmse, std
 
 
+# ─── Plot helpers ───────────────────────────────────────────────────────────
+
+def _savefig(fig: plt.Figure, output_path: Path) -> None:
+    """Save `fig` as both PNG (raster) and PDF (vector)."""
+    png_path = output_path.with_suffix(".png")
+    pdf_path = output_path.with_suffix(".pdf")
+    fig.savefig(png_path, dpi=200, bbox_inches="tight")
+    fig.savefig(pdf_path, bbox_inches="tight")
+    print(f"Saved: {png_path}")
+    print(f"Saved: {pdf_path}")
+
+
 # ─── Plots ───────────────────────────────────────────────────────────────────
 
 _COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
@@ -294,11 +344,12 @@ def _per_seed_action_mean(seed_trajs_list: List[List[Dict]], dim: int) -> Option
 
 def plot_error_comparison(
     groups: Dict[Tuple, List[Path]],
-    output_path: Path,
+    output_dir: Path,
     dt: float = 0.02,
 ) -> None:
-    """Position error and yaw error: mean ± std across seeds, one line per condition."""
-    fig, (ax_pos, ax_yaw) = plt.subplots(1, 2, figsize=(13, 5))
+    """Position error and yaw error: separate figures, mean ± std across seeds."""
+    fig_pos, ax_pos = plt.subplots(figsize=(7, 5))
+    fig_yaw, ax_yaw = plt.subplots(figsize=(7, 5))
 
     _pos_inset_data: List[Tuple] = []  # (t, mean, std, color) for inset zoom
 
@@ -314,9 +365,10 @@ def plot_error_comparison(
             continue
         print(f"  [{label}]: {len(exp_dirs)} seed(s), {n_trajs} trajectories total")
 
+        all_trajs = [t for trajs in seed_trajs_list for t in trajs]
+
         # ── Position error ────────────────────────────────────────────────
         per_seed_dist = _per_seed_mean(seed_trajs_list, "distance_to_target")
-        all_trajs = [t for trajs in seed_trajs_list for t in trajs]
         dist_series_all = _collect_metric(all_trajs, "distance_to_target")
         stacked_dist_all = _pad_stack(dist_series_all)
         if per_seed_dist is not None and stacked_dist_all is not None:
@@ -357,21 +409,29 @@ def plot_error_comparison(
         axins.grid(True, alpha=0.3)
         ax_pos.indicate_inset_zoom(axins, edgecolor="gray", alpha=0.5)
 
-    for ax, title, ylabel in [
-        (ax_pos, "Position Error (Mean \u00b1 Std across seeds)", "Position error [m]"),
-        (ax_yaw, "Yaw Error (Mean \u00b1 Std across seeds)", "Yaw error [rad]"),
-    ]:
-        ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=8, title=f"Algorithm [final mean \u00b1 std across seeds]",
+    # ── Finalise position figure ──────────────────────────────────────────
+    ax_pos.set_xlabel("Time [s]")
+    ax_pos.set_ylabel("Position error [m]")
+    ax_pos.set_title("Position Error (Mean \u00b1 Std across seeds)")
+    ax_pos.legend(fontsize=8, title="Algorithm [final mean \u00b1 std across seeds]",
                   title_fontsize=8)
-        ax.grid(True, alpha=0.3)
+    ax_pos.grid(True, alpha=0.3)
+    fig_pos.tight_layout()
+    _savefig(fig_pos, output_dir / "sweep_position_error")
+    plt.close(fig_pos)
 
-    plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {output_path}")
+    # ── Finalise yaw figure ───────────────────────────────────────────────
+    ax_yaw.set_xlabel("Time [s]")
+    ax_yaw.set_ylabel("Yaw error [rad]")
+    ax_yaw.set_title("Yaw Error (Mean \u00b1 Std across seeds)")
+    ax_yaw.legend(fontsize=8, title="Algorithm [final mean \u00b1 std across seeds]",
+                  title_fontsize=8)
+    ax_yaw.grid(True, alpha=0.3)
+    ymin, ymax = ax_yaw.get_ylim()
+    ax_yaw.set_ylim(bottom=min(ymin, 0.2), top=ymax)
+    fig_yaw.tight_layout()
+    _savefig(fig_yaw, output_dir / "sweep_yaw_error")
+    plt.close(fig_yaw)
 
 
 def plot_input_trajectories(
@@ -455,9 +515,246 @@ def plot_input_trajectories(
 
     plt.suptitle("Input Trajectories (Mean ± Std)", fontsize=13, fontweight="bold", y=1.06)
     plt.tight_layout()
-    plt.savefig(output_path, dpi=200, bbox_inches="tight")
-    plt.close()
-    print(f"Saved: {output_path}")
+    fig = plt.gcf()
+    _savefig(fig, output_path)
+    plt.close(fig)
+
+
+# ─── Metrics summary (terminal) ──────────────────────────────────────────────
+
+def _action_jerk_stats(
+    trajs: List[Dict],
+    action_limits: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+) -> Optional[Dict]:
+    """Compute per-trajectory action jerk / total-variation statistics.
+
+    Jerk at each step is the L2-norm of the per-step action difference,
+    optionally normalised by the input span so that all dimensions are
+    comparable on a [0, 1] scale:
+
+        span   = max_input - min_input          (element-wise)
+        Δa_n   = (a[t+1] - a[t]) / span        (normalised diff, shape (n_act,))
+        jerk[t] = ||Δa_n[t]||_2                (combined, scalar)
+
+    When `action_limits` is None the raw (unnormalised) differences are used.
+
+    Parameters
+    ----------
+    trajs         : list of trajectory dicts (from msgpack files)
+    action_limits : optional (min_input, max_input) arrays of shape (n_act,)
+                    used to normalise each dimension before computing the norm.
+
+    Returns a dict with keys:
+        normalised      : bool – whether normalisation was applied
+        span            : normalisation span per dim (or None)
+        mean_jerk       : mean jerk per step (averaged over time then over trajs)
+        std_jerk        : std of per-traj mean-jerk across trajectories
+        integral_jerk   : total variation = sum_t jerk[t] per traj, then mean
+        std_integral    : std of total variation across trajectories
+        per_dim_span    : span per dimension (for display)
+        per_dim_mean_jerk   : mean |Δa_i / span_i| per step, per dimension
+        per_dim_std_jerk    : std across trajectories
+        per_dim_integral    : total variation per dimension (normalised)
+        per_dim_std_integral: std across trajectories
+        n_trajs         : number of trajectories used
+    """
+    actions_list = _collect_actions(trajs)
+    if not actions_list:
+        return None
+
+    n_dims = actions_list[0].shape[1]
+
+    # Build normalisation span
+    if action_limits is not None:
+        min_a, max_a = action_limits
+        span = (max_a - min_a).astype(float)  # shape (n_act,)
+        span = np.where(span == 0, 1.0, span)  # guard division by zero
+    else:
+        span = None
+
+    per_traj_mean_jerk: List[float] = []
+    per_traj_integral: List[float] = []
+    per_dim_mean: List[List[float]] = [[] for _ in range(n_dims)]
+    per_dim_integral: List[List[float]] = [[] for _ in range(n_dims)]
+
+    for act in actions_list:  # act: (T, n_act)
+        if act.shape[0] < 2:
+            continue
+        diff = np.diff(act, axis=0)  # (T-1, n_act)
+        if span is not None:
+            diff_norm = diff / span[np.newaxis, :]
+        else:
+            diff_norm = diff
+        jerk = np.linalg.norm(diff_norm, axis=1)  # (T-1,)
+        per_traj_mean_jerk.append(float(np.mean(jerk)))
+        per_traj_integral.append(float(np.sum(jerk)))
+        for d in range(n_dims):
+            abs_diff_d = np.abs(diff_norm[:, d])
+            per_dim_mean[d].append(float(np.mean(abs_diff_d)))
+            per_dim_integral[d].append(float(np.sum(abs_diff_d)))
+
+    if not per_traj_mean_jerk:
+        return None
+
+    def _agg(vals: List[float]) -> Tuple[float, float]:
+        return (
+            float(np.mean(vals)),
+            float(np.std(vals, ddof=min(1, len(vals) - 1))),
+        )
+
+    result: Dict = {
+        "normalised": span is not None,
+        "span": span.tolist() if span is not None else None,
+        "n_trajs": len(per_traj_mean_jerk),
+        "mean_jerk": _agg(per_traj_mean_jerk)[0],
+        "std_jerk":  _agg(per_traj_mean_jerk)[1],
+        "integral_jerk": _agg(per_traj_integral)[0],
+        "std_integral":  _agg(per_traj_integral)[1],
+        "per_dim_mean_jerk":    [_agg(v)[0] for v in per_dim_mean],
+        "per_dim_std_jerk":     [_agg(v)[1] for v in per_dim_mean],
+        "per_dim_integral":     [_agg(v)[0] for v in per_dim_integral],
+        "per_dim_std_integral": [_agg(v)[1] for v in per_dim_integral],
+    }
+    return result
+
+
+def _get_action_limits(param_key: Tuple) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+    """Return (min_input, max_input) for the env in param_key, or None if unknown."""
+    params = dict(param_key)
+    env = params.get("env", "")
+    return _ENV_INPUT_LIMITS.get(env, None)
+
+
+def _time_to_goal(
+    dist_series: List[np.ndarray],
+    goal_radius: float = 0.05,
+    dt: float = 0.02,
+) -> Dict:
+    """Compute time-to-goal statistics across trajectories.
+
+    For each trajectory, finds the first timestep where distance_to_target
+    drops below `goal_radius`.  Returns a dict with:
+        n_reached   : number of trajectories that reached the goal
+        mean_time   : mean time-to-goal [s] over reaching trajectories
+        std_time    : std of time-to-goal [s]
+        min_time    : fastest trajectory
+        max_time    : slowest trajectory that still reached the goal
+    """
+    times: List[float] = []
+    for s in dist_series:
+        idx = np.argmax(s <= goal_radius)  # first True, or 0 if never
+        if s[idx] <= goal_radius:
+            times.append(float(idx) * dt)
+    n = len(times)
+    if n == 0:
+        return {"n_reached": 0, "mean_time": float("nan"), "std_time": float("nan"),
+                "min_time": float("nan"), "max_time": float("nan")}
+    return {
+        "n_reached": n,
+        "mean_time": float(np.mean(times)),
+        "std_time": float(np.std(times, ddof=min(1, n - 1))),
+        "min_time": float(np.min(times)),
+        "max_time": float(np.max(times)),
+    }
+
+
+def print_metrics_summary(
+    groups: Dict[Tuple, List[Path]],
+    action_labels: Optional[List[str]] = None,
+    action_limits_override: Optional[Tuple[np.ndarray, np.ndarray]] = None,
+    last_n: int = _LAST_N,
+    dt: float = 0.02,
+) -> None:
+    """Print accuracy and action-jerk statistics to stdout for each condition group."""
+    args_dt = dt  # alias used inside the loop
+    sep = "=" * 80
+    thin = "-" * 80
+
+    print(f"\n{sep}")
+    print("METRICS SUMMARY")
+    print(sep)
+
+    for idx, (param_key, exp_dirs) in enumerate(
+        sorted(groups.items(), key=lambda kv: _sort_key(kv[0]))
+    ):
+        label = make_label(param_key)
+        all_trajs = [t for d in exp_dirs for t in load_rollouts_for_exp(d)]
+
+        print(f"\n  Condition: {label}  ({len(exp_dirs)} seeds, {len(all_trajs)} trajs)")
+        print(thin)
+
+        # ── Accuracy ─────────────────────────────────────────────────────────
+        dist_series = _collect_metric(all_trajs, "distance_to_target")
+        yaw_series = _collect_metric(all_trajs, "yaw_error")
+
+        if dist_series:
+            # Final-value stats (last `last_n` timesteps of each trajectory)
+            m_final, s_final = _end_stats(dist_series, last_n)
+            # RMSE over full trajectory (per rollout → mean ± std across rollouts)
+            per_traj_rmse = [float(np.sqrt(np.mean(s ** 2))) for s in dist_series]
+            rmse_mean = float(np.mean(per_traj_rmse))
+            rmse_std = float(np.std(per_traj_rmse, ddof=min(1, len(per_traj_rmse) - 1)))
+            print(f"  Position error:")
+            print(f"    Final (last {last_n} steps): {m_final:.4f} ± {s_final:.4f} m")
+            print(f"    RMSE over trajectory:        {rmse_mean:.4f} ± {rmse_std:.4f} m")
+        else:
+            print("  Position error: no data")
+
+        # ── Time to goal ──────────────────────────────────────────────────────
+        _ttg = _time_to_goal(dist_series, goal_radius=0.05, dt=args_dt)
+        if _ttg["n_reached"] > 0:
+            n_tot = len(dist_series)
+            print(
+                f"  Time to goal (r=5 cm):  "
+                f"{_ttg['mean_time']:.3f} ± {_ttg['std_time']:.3f} s  "
+                f"[{_ttg['n_reached']}/{n_tot} trajs reached goal  "
+                f"({100 * _ttg['n_reached'] / n_tot:.1f}%)]"
+            )
+        else:
+            print(f"  Time to goal (r=5 cm):  goal never reached in any trajectory")
+
+        if yaw_series:
+            m_final, s_final = _end_stats(yaw_series, last_n)
+            per_traj_rmse = [float(np.sqrt(np.mean(s ** 2))) for s in yaw_series]
+            rmse_mean = float(np.mean(per_traj_rmse))
+            rmse_std = float(np.std(per_traj_rmse, ddof=min(1, len(per_traj_rmse) - 1)))
+            print(f"  Yaw error:")
+            print(f"    Final (last {last_n} steps): {m_final:.4f} ± {s_final:.4f} rad")
+            print(f"    RMSE over trajectory:        {rmse_mean:.4f} ± {rmse_std:.4f} rad")
+        else:
+            print("  Yaw error: no data")
+
+        # ── Action jerk ───────────────────────────────────────────────────────
+        limits = action_limits_override or _get_action_limits(param_key)
+        jerk = _action_jerk_stats(all_trajs, action_limits=limits)
+        nominal_trajs = [t for d in exp_dirs for t in load_nominal_rollouts_for_exp(d)]
+        has_perturbed = len(nominal_trajs) < len(all_trajs)
+        jerk_nom = _action_jerk_stats(nominal_trajs, action_limits=limits) if has_perturbed else None
+        if jerk is not None:
+            al = action_labels or [f"Action {i}" for i in range(len(jerk["per_dim_mean_jerk"]))]
+            norm_tag = "normalised by input span" if jerk["normalised"] else "raw (no normalisation)"
+            print(f"  Action jerk (||Δa_norm||₂, {norm_tag}):  ({jerk['n_trajs']} trajs, all)")
+            print(f"    Mean jerk per step:    {jerk['mean_jerk']:.6f} ± {jerk['std_jerk']:.6f}")
+            print(f"    Integrated jerk (TV):  {jerk['integral_jerk']:.4f} ± {jerk['std_integral']:.4f}")
+            if jerk_nom is not None:
+                print(f"  Action jerk (nominal only, {jerk_nom['n_trajs']} trajs):")
+                print(f"    Mean jerk per step:    {jerk_nom['mean_jerk']:.6f} ± {jerk_nom['std_jerk']:.6f}")
+                print(f"    Integrated jerk (TV):  {jerk_nom['integral_jerk']:.4f} ± {jerk_nom['std_integral']:.4f}")
+            span = jerk["span"]
+            print(f"  Per-dimension mean jerk per step (|Δa_i / span_i|):")
+            for d, (dm, ds) in enumerate(
+                zip(jerk["per_dim_mean_jerk"], jerk["per_dim_std_jerk"])
+            ):
+                dim_label = al[d] if d < len(al) else f"dim {d}"
+                span_str = f"span={span[d]:.2g}" if span is not None else "no span"
+                nom_str = ""
+                if jerk_nom is not None and d < len(jerk_nom["per_dim_mean_jerk"]):
+                    nom_str = f"  (nominal: {jerk_nom['per_dim_mean_jerk'][d]:.6f} ± {jerk_nom['per_dim_std_jerk'][d]:.6f})"
+                print(f"    [{dim_label:>12s}]  {span_str:>12s}  |  mean/step: {dm:.6f} ± {ds:.6f}{nom_str}")
+        else:
+            print("  Action jerk: no action data found")
+
+    print(f"\n{sep}\n")
 
 
 # ─── Main ────────────────────────────────────────────────────────────────────
@@ -494,6 +791,28 @@ def main() -> None:
             "[Thrust, Torque X, Torque Y, Torque Z])"
         ),
     )
+    parser.add_argument(
+        "--action_min",
+        nargs="+",
+        type=float,
+        default=None,
+        metavar="VAL",
+        help=(
+            "Override minimum physical input limits for jerk normalisation, "
+            "one value per action dimension. Inferred from ENV_NAME otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--action_max",
+        nargs="+",
+        type=float,
+        default=None,
+        metavar="VAL",
+        help=(
+            "Override maximum physical input limits for jerk normalisation, "
+            "one value per action dimension. Inferred from ENV_NAME otherwise."
+        ),
+    )
     args = parser.parse_args()
 
     sweeps_dir = args.sweeps_dir.resolve()
@@ -516,10 +835,10 @@ def main() -> None:
         seeds = sorted(parse_exp_dir_name(d.name).get("seed", "?") for d in exp_dirs)
         print(f"  [{lbl}]  seeds={seeds}  ({len(exp_dirs)} dir(s))")
 
-    print("\n--- Error comparison plot ---")
+    print("\n--- Error comparison plots ---")
     plot_error_comparison(
         groups,
-        output_dir / "sweep_error_comparison.png",
+        output_dir,
         dt=args.dt,
     )
 
@@ -527,11 +846,20 @@ def main() -> None:
     action_labels = args.action_labels or ["Thrust", "Torque X", "Torque Y", "Torque Z"]
     plot_input_trajectories(
         groups,
-        output_dir / "sweep_input_trajectories.png",
+        output_dir / "sweep_input_trajectories",
         action_labels=action_labels,
     )
 
-    print("\nDone.")
+    print("\n--- Metrics summary ---")
+    # Build optional limits override from CLI args
+    limits_override: Optional[Tuple[np.ndarray, np.ndarray]] = None
+    if args.action_min is not None and args.action_max is not None:
+        limits_override = (np.array(args.action_min), np.array(args.action_max))
+    elif args.action_min is not None or args.action_max is not None:
+        print("  Warning: both --action_min and --action_max must be specified together. Ignoring.")
+    print_metrics_summary(groups, action_labels=action_labels, action_limits_override=limits_override, dt=args.dt)
+
+    print("Done.")
 
 
 if __name__ == "__main__":

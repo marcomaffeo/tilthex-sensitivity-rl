@@ -40,7 +40,7 @@ warp-lang = "*"
 [feature.cuda13]
 platforms = ["linux-64"]
 [feature.cuda13.pypi-dependencies]
-jax = { version = "<=0.9.1", extras = ["cuda13"] }
+jax = { version = "<=0.10.0", extras = ["cuda13"] }
 
 # JAX variant install options
 # CPU-only JAX wheel (works on Linux/macOS CPU)

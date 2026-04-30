@@ -64,6 +64,12 @@ def build_env_from_config(
     env_cls = ENV_REGISTRY[env_name]
     env = env_cls()
     env_params = env.default_params
+    # Apply EVAL_MAX_STEPS_IN_EPISODE from config if explicitly set (allows using a
+    # longer episode for testing/rollouts than the NUM_STEPS used during training).
+    if "EVAL_MAX_STEPS_IN_EPISODE" in config:
+        env_params = env_params.replace(
+            max_steps_in_episode=int(config["EVAL_MAX_STEPS_IN_EPISODE"])
+        )
     env_params = env_params.replace(is_testing=True)
 
     wrapped_env = GymnaxWrapper(env)
@@ -144,7 +150,7 @@ def rollout_episode(
         obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
         # Record action after environment step (matches previous semantics)
-        actions_buf = actions_buf.at[i].set(env_state.last_u)
+        actions_buf = actions_buf.at[i].set(env_state.last_commanded_action)
 
         # Record selected state fields at index i+1
         for key in env_state.__dataclass_fields__.keys():
@@ -153,6 +159,96 @@ def rollout_episode(
             logs_buf[key] = logs_buf[key].at[i + 1].set(flat)
 
         # Record eval_metrics at index i+1
+        if hasattr(env, "eval_metrics"):
+            metrics = env.eval_metrics(env_state, env_params)
+            for key, val in metrics.items():
+                flat = _flatten_value(val)
+                eval_metrics_buf[key] = eval_metrics_buf[key].at[i + 1].set(flat)
+
+        return (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf)
+
+    rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = jax.lax.fori_loop(
+        0,
+        horizon,
+        body_fun,
+        (rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf),
+    )
+
+    return actions_buf, logs_buf, eval_metrics_buf
+
+
+@partial(
+    jax.jit,
+    static_argnames=("env", "graphdef", "max_steps", "deterministic"),
+)
+def rollout_episode_from_state(
+    env,
+    env_params,
+    graphdef,
+    params,
+    initial_obs: jax.Array,
+    initial_state,
+    rng_key: jax.Array,
+    max_steps: int,
+    deterministic: bool,
+) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
+    """Like rollout_episode but starts from an explicitly provided initial state,
+    so multiple env_params samples can share the same starting position."""
+
+    rng = rng_key
+    obs = initial_obs
+    env_state = initial_state
+
+    # Determine horizon
+    horizon = (
+        max_steps
+        if max_steps > 0
+        else int(getattr(env_params, "max_steps_in_episode", 200))
+    )
+    # Preallocate action buffer
+    act_shape = env.action_space(env_params).shape
+    actions_buf = jnp.zeros((horizon,) + act_shape, dtype=jnp.float32)
+
+    # Preallocate log buffers for requested keys and write initial state at index 0
+    logs_buf: Dict[str, jnp.ndarray] = {}
+    for key in env_state.__dataclass_fields__.keys():
+        val0 = getattr(env_state, key)
+        flat0 = _flatten_value(val0)
+        logs_buf[key] = jnp.zeros((horizon + 1, flat0.shape[0]), dtype=flat0.dtype)
+        logs_buf[key] = logs_buf[key].at[0].set(flat0)
+
+    # Preallocate eval_metrics buffers if the environment supports it
+    eval_metrics_buf: Dict[str, jnp.ndarray] = {}
+    if hasattr(env, "eval_metrics"):
+        initial_metrics = env.eval_metrics(env_state, env_params)
+        for key, val0 in initial_metrics.items():
+            flat0 = _flatten_value(val0)
+            eval_metrics_buf[key] = jnp.zeros(
+                (horizon + 1, flat0.shape[0]), dtype=flat0.dtype
+            )
+            eval_metrics_buf[key] = eval_metrics_buf[key].at[0].set(flat0)
+
+    def body_fun(i, carry):
+        rng, obs, env_state, actions_buf, logs_buf, eval_metrics_buf = carry
+
+        model = nnx.merge(graphdef, params)
+        pi = model.actor(obs)
+        if deterministic:
+            action = pi.mean()
+        else:
+            rng, act_key = jax.random.split(rng)
+            action = pi.sample(seed=act_key)
+
+        rng, step_key = jax.random.split(rng)
+        obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
+
+        actions_buf = actions_buf.at[i].set(env_state.last_commanded_action)
+
+        for key in env_state.__dataclass_fields__.keys():
+            val = getattr(env_state, key)
+            flat = _flatten_value(val)
+            logs_buf[key] = logs_buf[key].at[i + 1].set(flat)
+
         if hasattr(env, "eval_metrics"):
             metrics = env.eval_metrics(env_state, env_params)
             for key, val in metrics.items():
@@ -269,6 +365,12 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     config, params_bytes = load_run_artifacts(run_dir)
     env, env_params, env_name, env_cls = build_env_from_config(config)
 
+    # If an explicit --max_steps was given on the CLI, it overrides both the
+    # rollout horizon AND the env terminal condition so the episode runs for the
+    # full requested length without auto-resetting early.
+    if rcfg.max_steps > 0:
+        env_params = env_params.replace(max_steps_in_episode=rcfg.max_steps)
+
     graphdef, params = init_model_and_params(config, env, env_params, params_bytes)
 
     rollouts_dir = run_dir / "rollouts"
@@ -277,30 +379,25 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     rng = jax.random.PRNGKey(rcfg.seed)
     param_sample_count = max(1, rcfg.param_samples)
 
-    env_param_sets = [env_params]
-    if param_sample_count > 1:
-        rng, sample_key = jax.random.split(rng)
-        lows, highs = env.params_min, env.params_max
-        sampled_params = sample_env_params(
-            env=env,
-            base_params=env_params,
-            lows=lows,
-            highs=highs,
-            num_samples=param_sample_count - 1,
-            rng_key=sample_key,
+    # When using multiple param samples, all perturbed rollouts share the same
+    # initial state as the nominal rollout (reset once with nominal params).
+    # This isolates the effect of parameter perturbations from initial-condition
+    # variability. For a single param set we keep the original per-episode reset.
+    use_shared_reset = param_sample_count > 1
+
+    if use_shared_reset:
+        batched_rollout = jax.vmap(
+            rollout_episode_from_state,
+            # env, env_params, graphdef, params, initial_obs, initial_state, rng_key, max_steps, deterministic
+            in_axes=(None, 0, None, None, None, None, None, None, None),
+            out_axes=(0, 0, 0),
         )
-        env_param_sets.extend(sampled_params)
-
-    env_params_batched = jax.tree_util.tree_map(
-        lambda *vals: jnp.stack([jnp.asarray(v) for v in vals], axis=0),
-        *env_param_sets,
-    )
-
-    batched_rollout = jax.vmap(
-        rollout_episode,
-        in_axes=(None, 0, None, None, 0, None, None),
-        out_axes=(0, 0, 0),
-    )
+    else:
+        batched_rollout = jax.vmap(
+            rollout_episode,
+            in_axes=(None, 0, None, None, 0, None, None),
+            out_axes=(0, 0, 0),
+        )
 
     print(
         f"[rollouts] Using {param_sample_count} environment parameter set(s)"
@@ -311,16 +408,57 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     for idx in range(rcfg.num_rollouts):
         rng, episode_key = jax.random.split(rng)
-        episode_keys = jax.random.split(episode_key, param_sample_count)
-        actions_batch, state_batch, eval_metrics_batch = batched_rollout(
-            env,
-            env_params_batched,
-            graphdef,
-            params,
-            episode_keys,
-            rcfg.max_steps,
-            rcfg.deterministic,
+
+        # Resample perturbed parameters independently for each episode so that
+        # parameter variability is not confounded with initial-state variability.
+        if param_sample_count > 1:
+            rng, sample_key = jax.random.split(rng)
+            lows, highs = env.params_min, env.params_max
+            sampled_params = sample_env_params(
+                env=env,
+                base_params=env_params,
+                lows=lows,
+                highs=highs,
+                num_samples=param_sample_count - 1,
+                rng_key=sample_key,
+            )
+            env_param_sets = [env_params] + sampled_params
+        else:
+            env_param_sets = [env_params]
+
+        env_params_batched = jax.tree_util.tree_map(
+            lambda *vals: jnp.stack([jnp.asarray(v) for v in vals], axis=0),
+            *env_param_sets,
         )
+        nominal_env_params = env_param_sets[0]
+
+        if use_shared_reset:
+            # Reset with nominal params to get the shared initial state; all
+            # perturbed param samples will start from the same position.
+            rng_reset, rng_step = jax.random.split(episode_key)
+            nominal_obs, nominal_state = env.reset(rng_reset, nominal_env_params)
+            actions_batch, state_batch, eval_metrics_batch = batched_rollout(
+                env,
+                env_params_batched,
+                graphdef,
+                params,
+                nominal_obs,
+                nominal_state,
+                rng_step,
+                rcfg.max_steps,
+                rcfg.deterministic,
+            )
+        else:
+            episode_keys = jax.random.split(episode_key, param_sample_count)
+            actions_batch, state_batch, eval_metrics_batch = batched_rollout(
+                env,
+                env_params_batched,
+                graphdef,
+                params,
+                episode_keys,
+                rcfg.max_steps,
+                rcfg.deterministic,
+            )
 
         actions_batch = np.asarray(actions_batch)
         state_batch_np = {key: np.asarray(val) for key, val in state_batch.items()}

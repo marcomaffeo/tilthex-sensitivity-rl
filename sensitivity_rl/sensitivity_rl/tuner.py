@@ -87,7 +87,7 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["sppo_aug_grad_param", "sppo_grad", "ppo"]
+METHODS = ["sppo_grad_param_dual"]
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
@@ -102,11 +102,10 @@ ENVIRONMENTS = ["tilthex_v1"]
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
     "SEED": [30],
-    
     "GAIN_STAB": [0.2],          # Penalità velocità angolare
     "GAIN_ATT": [2.0],                 # Reward per allineamento
-    "GAIN_SM": [1, 1.5, 2 , 2.5],        # Penalità variazione comandi
-    "GAIN_REF": [0.1, 0.5, 1, 1.5, 2],       # Penalità distanza target
+    "GAIN_SM": [2],        # Penalità variazione comandi
+    "GAIN_REF": [1],       # Penalità distanza target
     "REWARD_POS_TOLERANCE": [0.04], # Tolleranza per reward di posizione
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
@@ -114,8 +113,8 @@ SWEEP_PARAMS = {
     #"NUM_ENVS": [2048, 4096],
     # "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2],
-    "UPDATE_EPOCHS": [1, 3, 5],
+    #"CLIP_EPS": [0.1, 0.2],
+    #"UPDATE_EPOCHS": [1, 3, 5],
     # "ENT_COEF": [0.001],
     # "DOMAIN_RANDOMIZATION": [True, False],
     # "TOTAL_TIMESTEPS": [5_000_000],
@@ -126,7 +125,7 @@ SWEEP_PARAMS = {
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
     "ppo": {
-        "DOMAIN_RANDOMIZATION": [False, True],
+        "DOMAIN_RANDOMIZATION": [False],
     },
     "rappo": {
         "DOMAIN_RANDOMIZATION": [False],
@@ -146,17 +145,16 @@ METHOD_SPECIFIC_SWEEPS = {
         "DOMAIN_RANDOMIZATION": [False],
     },
     "sppo_aug_grad_param": {
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.3, 0.2],
         "XI": [0.08],
-        "RHO": [0.0, 0.1],
+        "RHO": [0.1],
         "TAU": [1e-5],
         "DOMAIN_RANDOMIZATION": [False],
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.05, 0.1],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.05],
     },
-    # "sac": {
-    #     "SEED": [0, 1],
-    #     "LR": [0.001, 0.0005],
-    # },
+    "sac": {
+        "SEED": [0, 1],
+        "LR": [0.001, 0.0005],
+    },
 }
 
 # If True, methods not in METHOD_SPECIFIC_SWEEPS will use SWEEP_PARAMS as fallback
@@ -509,12 +507,16 @@ def run_sweep_experiments():
 
             # Load base config with defaults for this method and environment
             config_path = (
-                Path(__file__).parent.parent / "configs" / "hydra" / "base_config.yaml"
+                Path(__file__).parent.parent / "configs" / "hydra" / "config.yaml"
             )
 
             if not config_path.exists():
-                print(f"ERROR: Base config not found: {config_path}")
-                continue
+                config_path = (
+                    Path(__file__).parent.parent / "configs" / "hydra" / "base_config.yaml"
+                )
+                if not config_path.exists():
+                    print(f"ERROR: Base config not found: {config_path}")
+                    continue
 
             # Load base config and compose with method and env
             base_cfg = OmegaConf.load(config_path)

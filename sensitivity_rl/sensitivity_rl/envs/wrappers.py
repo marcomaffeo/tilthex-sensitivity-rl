@@ -478,11 +478,11 @@ class SensitivityWrapper(GymnaxWrapper):
 
     def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
         state = self.state_unravel(state_flat)
+        params = self.param_unravel(params_flat)
 
         if self._has_get_obs:
-            obs = self._env.get_obs(env_state.replace(state=state))
+            obs = self._env.get_obs(env_state.replace(state=state), key, params)
         else:
-            params = self.param_unravel(params_flat)
             env_state = env_state.replace(state=state)
             obs, env_state, _, _, _ = self._env.step(key, env_state, action, params)
         return jax.flatten_util.ravel_pytree(obs)[0]
@@ -505,7 +505,7 @@ class MujocoSensitivityWrapper(SensitivityWrapper):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         env_state = env_state.replace(state=state)
-        obs = self._env.get_obs(env_state)
+        obs = self._env.get_obs(env_state, key, params)
         return jax.flatten_util.ravel_pytree(obs)[0]
 
 
@@ -1017,12 +1017,10 @@ class MujocoSensitivityOffWrapper(SensitivityOffWrapper):
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
 
-        # Call dynamics and get_obs
         next_state = self._env._step_dynamics(key, state, action, params)
         dummy_env_state = env_state.replace(state=next_state)
-        obs = self._env.get_obs(dummy_env_state)
+        obs = self._env.get_obs(dummy_env_state, key, params)
 
-        # Return flattened results
         next_state_flat = jax.flatten_util.ravel_pytree(next_state)[0]
         obs_flat = jax.flatten_util.ravel_pytree(obs)[0]
         return next_state_flat, obs_flat

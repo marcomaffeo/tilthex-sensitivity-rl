@@ -15,7 +15,7 @@ defaults:
 
 # Override any method/env settings below if needed
 # Random seed
-SEED: 1
+SEED: 30
 
 # Optional path to a saved policy_params.msgpack for actor warm-start
 LOAD_ACTOR_PARAMS_PATH: null

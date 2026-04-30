@@ -37,6 +37,7 @@ import os
 import re
 import sys
 import xml.etree.ElementTree as ET
+import copy
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -62,8 +63,9 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 _ASSETS_DIR = Path(__file__).resolve().parents[1] / "envs" / "assets"
-_MESH_PATH  = _ASSETS_DIR / "MKQuadro.stl"
-_SCENE_XML  = _ASSETS_DIR / "drone_scene.xml"
+_SCENE_XML  = _ASSETS_DIR / "scene.xml"
+_DRONE_XML  = _ASSETS_DIR / "tilthex_laas.xml"
+_MESH_PATH  = _ASSETS_DIR / "merged" / "tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl"
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +163,7 @@ def build_mjcf(
     cam_pos: Optional[np.ndarray] = None,
     cam_target: Optional[np.ndarray] = None,
 ) -> str:
-    """Build MJCF XML by modifying the base drone_scene.xml with runtime values."""
+    """Build MJCF XML by modifying the base scene with runtime values."""
     if cam_pos is None:
         cam_pos = np.array([0.0, -5.0, 3.0])
     if cam_target is None:
@@ -171,7 +173,6 @@ def build_mjcf(
     dist = float(np.linalg.norm(cam_pos - cam_target))
     cx, cy, cz = float(cam_target[0]), float(cam_target[1]), float(cam_target[2])
 
-    # Top-down near-orthographic: high position + narrow fov
     td_height = float(min(max(dist * 8, 20.0), 150.0))
     td_half_fov_rad = np.arctan((dist * 0.6) / td_height)
     td_fovy = float(np.degrees(td_half_fov_rad) * 2.0)
@@ -179,13 +180,30 @@ def build_mjcf(
     tree = ET.parse(_SCENE_XML)
     root = tree.getroot()
 
-    # Statistic (affects interactive viewer framing)
+    # Remove include tag to prevent duplicate static drone
+    include_tag = root.find("include")
+    if include_tag is not None:
+        root.remove(include_tag)
+
+    # Parse drone xml and inject assets/defaults
+    drone_tree = ET.parse(_DRONE_XML)
+    drone_root = drone_tree.getroot()
+    
+    scene_asset = root.find("asset")
+    for asset in drone_root.find("asset"):
+        scene_asset.append(asset)
+        
+    drone_default = drone_root.find("default")
+    if drone_default is not None:
+        root.insert(1, drone_default)
+
+    drone_template = drone_root.find(".//body[@name='tilthex_laas__26d05b7734899ce35f05c512c442e698']")
+
     stat = root.find("statistic")
     if stat is not None:
         stat.set("center", f"{cx:.2f} {cy:.2f} {cz:.2f}")
         stat.set("extent", f"{dist:.2f}")
 
-    # Offscreen resolution
     global_el = root.find("visual/global")
     if global_el is not None:
         global_el.set("offwidth", str(width))
@@ -193,49 +211,47 @@ def build_mjcf(
 
     worldbody = root.find("worldbody")
 
-    # Side camera
-    cam_side = worldbody.find("camera[@name='track_side']")
-    if cam_side is not None:
-        cam_side.set("pos", f"{cam_pos[0]:.3f} {cam_pos[1]:.3f} {cam_pos[2]:.3f}")
-        cam_side.set("xyaxes", xyaxes)
+    cam_side = ET.SubElement(worldbody, "camera", {"name": "track_side"})
+    cam_side.set("pos", f"{cam_pos[0]:.3f} {cam_pos[1]:.3f} {cam_pos[2]:.3f}")
+    cam_side.set("xyaxes", xyaxes)
 
-    # Top-down camera
-    cam_td = worldbody.find("camera[@name='top_down']")
-    if cam_td is not None:
-        cam_td.set("pos", f"{cx:.3f} {cy:.3f} {cz + td_height:.1f}")
-        cam_td.set("fovy", f"{td_fovy:.3f}")
+    cam_td = ET.SubElement(worldbody, "camera", {"name": "top_down"})
+    cam_td.set("pos", f"{cx:.3f} {cy:.3f} {cz + td_height:.1f}")
+    cam_td.set("fovy", f"{td_fovy:.3f}")
 
-    # Remove optional bodies when not present in the data
-    if not has_target:
-        tgt = worldbody.find("body[@name='target']")
-        if tgt is not None:
-            worldbody.remove(tgt)
+    if has_obstacle:
+        obs_body = ET.SubElement(worldbody, "body", {"name": "obstacle", "mocap": "true"})
+        ET.SubElement(obs_body, "geom", {"name": "obstacle_geom", "type": "box", "size": "0.5 0.5 1.5", "rgba": "0.5 0.5 0.5 1"})
 
-    if not has_obstacle:
-        obs = worldbody.find("body[@name='obstacle']")
-        if obs is not None:
-            worldbody.remove(obs)
+    if has_target:
+        tgt_body = ET.SubElement(worldbody, "body", {"name": "target", "mocap": "true"})
+        ET.SubElement(tgt_body, "geom", {"type": "sphere", "size": "0.1", "rgba": "1 0 0 1"})
 
-    # Add drone bodies (count depends on the rollout)
     perturbed_rgba = _DRONE_RGBA_TRANSPARENT.format(alpha=alpha)
+    
     for i in range(nominal_count):
-        body = ET.SubElement(worldbody, "body",
-                             name=f"drone_nominal_{i}", pos="0 0 1")
-        ET.SubElement(body, "freejoint", name=f"drone_nominal_{i}_joint")
-        ET.SubElement(body, "geom", type="mesh", mesh="quadrotor",
-                      pos="0 0 -0.06", rgba=_DRONE_RGBA_OPAQUE,
-                      contype="0", conaffinity="0")
+        body = copy.deepcopy(drone_template)
+        body.set("name", f"drone_nominal_{i}")
+        joint = body.find("freejoint")
+        joint.set("name", f"drone_nominal_{i}_joint")
+        for site in body.iter("site"):
+            site.set("name", f"{site.get('name')}_nominal_{i}")
+        for geom in body.iter("geom"):
+            geom.set("rgba", _DRONE_RGBA_OPAQUE)
+        worldbody.append(body)
 
     for i in range(perturbed_count):
-        body = ET.SubElement(worldbody, "body",
-                             name=f"drone_perturbed_{i}", pos="0 0 1")
-        ET.SubElement(body, "freejoint", name=f"drone_perturbed_{i}_joint")
-        ET.SubElement(body, "geom", type="mesh", mesh="quadrotor",
-                      pos="0 0 -0.06", rgba=perturbed_rgba,
-                      contype="0", conaffinity="0")
+        body = copy.deepcopy(drone_template)
+        body.set("name", f"drone_perturbed_{i}")
+        joint = body.find("freejoint")
+        joint.set("name", f"drone_perturbed_{i}_joint")
+        for site in body.iter("site"):
+            site.set("name", f"{site.get('name')}_perturbed_{i}")
+        for geom in body.iter("geom"):
+            geom.set("rgba", perturbed_rgba)
+        worldbody.append(body)
 
     return ET.tostring(root, encoding="unicode")
-
 
 # ---------------------------------------------------------------------------
 # Rendering
@@ -296,8 +312,15 @@ def render_trajectory_group(
     # Build model
     xml = build_mjcf(n_nominal, n_perturbed, has_obstacle, has_target, alpha,
                      width=width, height=height, cam_pos=cam_pos, cam_target=cam_target)
+    
+    # Must match the exact relative paths used in tilthex_laas.xml
+    model_assets = {
+        "merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl": (_ASSETS_DIR / "merged" / "tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl").read_bytes(),
+        "merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_collision.stl": (_ASSETS_DIR / "merged" / "tilthex_laas__26d05b7734899ce35f05c512c442e698_collision.stl").read_bytes()
+    }
+    
     model = mujoco.MjModel.from_xml_string(
-        xml, assets={"MKQuadro.stl": _MESH_PATH.read_bytes()}
+        xml, assets=model_assets
     )
     data = mujoco.MjData(model)
 

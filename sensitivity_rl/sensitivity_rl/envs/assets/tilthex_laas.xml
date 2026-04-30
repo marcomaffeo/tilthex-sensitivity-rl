@@ -1,0 +1,48 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape https://cad.onshape.com/documents/1ec8d2cd902b8e61882ef63c/w/f95c186669643e2c6d1a3171/e/d754230cf634517f82e75c92 -->
+<mujoco model="tilthex_laas">
+  <compiler angle="radian" meshdir="assets" autolimits="true"/>
+  <default>
+    <default class="tilthex_laas">
+      <joint frictionloss="0.1" armature="0.005"/>
+      <position kp="50" dampratio="1"/>
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2"/>
+      </default>
+      <default class="collision">
+        <geom group="3"/>
+      </default>
+    </default>
+  </default>
+  <worldbody>
+    <!-- Link tilthex_laas__26d05b7734899ce35f05c512c442e698 -->
+    <body name="tilthex_laas__26d05b7734899ce35f05c512c442e698" pos="0 0 0" quat="1 0 0 0" childclass="tilthex_laas">
+      <freejoint name="tilthex_laas__26d05b7734899ce35f05c512c442e698_freejoint"/>
+      <inertial pos="0.000122973 0.00013006 0.0248586" mass="2.91118" fullinertia="0.082529 0.0846092 0.154814 0.00175324 1.3135e-06 -5.1512e-05"/>
+      <!-- Part tilthex_laas__26d05b7734899ce35f05c512c442e698_parts -->
+      <geom type="mesh" class="visual" pos="0.000122973 0.00013006 0.0248586" quat="1 0 0 0" mesh="tilthex_laas__26d05b7734899ce35f05c512c442e698_visual" material="tilthex_laas__26d05b7734899ce35f05c512c442e698_visual_material"/>
+      <geom type="mesh" class="collision" pos="0.000122973 0.00013006 0.0248586" quat="1 0 0 0" mesh="tilthex_laas__26d05b7734899ce35f05c512c442e698_collision" material="tilthex_laas__26d05b7734899ce35f05c512c442e698_collision_material"/>
+      <!-- Frame motor1 -->
+      <site group="3" name="motor1" pos="0.39 0.00485669 0.0133436" quat="0.984808 -0.173648 8.88178e-16 6.5017e-15"/>
+      <!-- Frame motor2 -->
+      <site group="3" name="motor2" pos="0.199206 0.335322 0.0133436" quat="0.852869 0.150384 0.0868241 0.492404"/>
+      <!-- Frame motor3 -->
+      <site group="3" name="motor3" pos="-0.199206 0.335322 0.0133436" quat="0.492404 -0.0868241 -0.150384 0.852869"/>
+      <!-- Frame motor4 -->
+      <site group="3" name="motor4" pos="-0.39 0.00485669 0.0133436" quat="7.96585e-15 -4.30893e-16 -0.173648 -0.984808"/>
+      <!-- Frame motor5 -->
+      <site group="3" name="motor5" pos="-0.190794 -0.340178 0.0133436" quat="0.492404 -0.0868241 0.150384 -0.852869"/>
+      <!-- Frame motor6 -->
+      <site group="3" name="motor6" pos="0.190794 -0.340178 0.0133436" quat="0.852869 0.150384 -0.0868241 -0.492404"/>
+    </body>
+  </worldbody>
+  <asset>
+    <mesh file="merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl"/>
+    <mesh file="merged/tilthex_laas__26d05b7734899ce35f05c512c442e698_collision.stl"/>
+    <material name="tilthex_laas__26d05b7734899ce35f05c512c442e698_visual_material" rgba="0.558611 0.483785 0.395435 1"/>
+    <material name="tilthex_laas__26d05b7734899ce35f05c512c442e698_collision_material" rgba="0.558611 0.483785 0.395435 1"/>
+  </asset>
+  <actuator/>
+  <equality/>
+</mujoco>

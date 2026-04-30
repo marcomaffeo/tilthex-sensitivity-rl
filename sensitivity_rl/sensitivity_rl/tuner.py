@@ -105,8 +105,8 @@ SWEEP_PARAMS = {
     
     "GAIN_STAB": [0.2],          # Penalità velocità angolare
     "GAIN_ATT": [2.0],                 # Reward per allineamento
-    "GAIN_SM": [0.05, 0.01],        # Penalità variazione comandi
-    "GAIN_REF": [2],       # Penalità distanza target
+    "GAIN_SM": [1, 1.5, 2 , 2.5],        # Penalità variazione comandi
+    "GAIN_REF": [0.1, 0.5, 1, 1.5, 2],       # Penalità distanza target
     "REWARD_POS_TOLERANCE": [0.04], # Tolleranza per reward di posizione
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
@@ -114,8 +114,8 @@ SWEEP_PARAMS = {
     #"NUM_ENVS": [2048, 4096],
     # "GAMMA": [0.98],
     # "GAE_LAMBDA": [0.9, 0.95],
-    #"CLIP_EPS": [0.1, 0.2, 0.5],
-    #"UPDATE_EPOCHS": [1, 3, 5],
+    "CLIP_EPS": [0.1, 0.2],
+    "UPDATE_EPOCHS": [1, 3, 5],
     # "ENT_COEF": [0.001],
     # "DOMAIN_RANDOMIZATION": [True, False],
     # "TOTAL_TIMESTEPS": [5_000_000],
@@ -126,7 +126,7 @@ SWEEP_PARAMS = {
 # Methods not listed here will use SWEEP_PARAMS (if USE_SHARED_PARAMS_AS_FALLBACK is True)
 METHOD_SPECIFIC_SWEEPS = {
     "ppo": {
-        "DOMAIN_RANDOMIZATION": [False],
+        "DOMAIN_RANDOMIZATION": [False, True],
     },
     "rappo": {
         "DOMAIN_RANDOMIZATION": [False],

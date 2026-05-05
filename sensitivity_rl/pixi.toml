@@ -64,7 +64,7 @@ train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo"
 train_sppo_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug"
 train_sppo_grad = "python sensitivity_rl/train.py ALGORITHM=sppo_grad"
 train_sppo_grad_param = "python sensitivity_rl/train.py ALGORITHM=sppo_grad_param"
-train_aug_grad_param_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual"
+train_sppo_aug_grad_param_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual"
 
 # Legacy scripts (deprecated, use train.py instead)
 train_ppo_legacy = "python sensitivity_rl/ppo.py"

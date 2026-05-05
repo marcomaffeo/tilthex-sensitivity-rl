@@ -82,21 +82,31 @@ class EnvParams(environment.EnvParams):
     wmax: float = struct.field(pytree_node=False, default=100)                                                                                  # max prop rotation speed in Hz
     I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))           # inertia off-diagonal terms [kg*m^2]
     action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                                   # action noise scale for exploration
+    # obs_noise_stds: jax.Array = struct.field(
+    #     pytree_node=False, 
+    #     default_factory=lambda: jnp.array([
+    #         0.005, 0.005, 0.0025,               # Position (x, y, z) [m]
+    #         0.01, 0.01, 0.01,                   # Velocity (vx, vy, vz) [m/s]
+    #         0.0025, 0.0025, 0.0025, 0.0025,     # Quaternion (w, x, y, z)
+    #         0.2,  0.2,  0.2,                    # Angular Vel (wx, wy, wz) [rad/s]
+    #         0.0025, 0.0025, 0.0025, 0.0025      # Quaternion Target Error
+    #     ]) / 3.0                                # Sigma values for observation noise 
+    # )   
     obs_noise_stds: jax.Array = struct.field(
         pytree_node=False, 
         default_factory=lambda: jnp.array([
-            0.007124, 0.006210, 0.001297,  # Position (x, y, z)
-            0.024369, 0.014837, 0.005416,  # Velocity (vx, vy, vz)
-            0.002755, 0.004249, 0.002538, 0.003132,  # Quaternion (w, x, y, z)
-            0.054904, 0.078569, 0.031948,  # Angular Vel (wx, wy, wz)
-            0.002755, 0.004249, 0.002538, 0.003132   # Quaternion Target Error
-        ])
-    )                                                                                   # observation noise standard deviations for each state component
+            0.00, 0.00, 0.00,               # Position (x, y, z) [m]
+            0.0, 0.0, 0.0,                   # Velocity (vx, vy, vz) [m/s]
+            0.00, 0.00, 0.0, 0.00,     # Quaternion (w, x, y, z)
+            0.0,  0.0,  0.0,                    # Angular Vel (wx, wy, wz) [rad/s]
+            0.00, 0.00, 0.00, 0.00      # Quaternion Target Error
+        ]) / 3.0                                # Sigma values for observation noise 
+    )                                                                                      
 
     gain_stab: float = struct.field(pytree_node=False, default=0.2)             # reward gain for angular velocity penalty to encourage stability
     gain_att: float = struct.field(pytree_node=False, default=2.0)              # reward gain for attitude error to encourage correct orientation
     gain_ref: float = struct.field(pytree_node=False, default=1.0)              # reward gain to encourage following the ideal action for hovering at target
-    gain_sm: float = struct.field(pytree_node=False, default=2.0)              # reward gain to encourage smoother actions and reduce chattering
+    gain_sm: float = struct.field(pytree_node=False, default=1.0)               # reward gain to encourage smoother actions and reduce chattering
     reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
 
     # Uncertain parameters

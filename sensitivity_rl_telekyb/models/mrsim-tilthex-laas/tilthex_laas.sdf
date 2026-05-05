@@ -166,9 +166,15 @@
 		<plugin name="mrsim" filename="mrsim-gazebo.so">
 			<link>tilthex_laas</link>
 			<rotors>
-				<noise>0.03</noise>
-				<cf>12.0e-4</cf>
-				<ct>2.4e-5</ct>
+				<noise>0.03</noise> <!-- Noise added to the rotor speed (Hz) -->
+				<cf>12.0e-4</cf> <!-- Rotor thrust coefficient (N/Hz²) -->
+				<ct>2.4e-5</ct> <!-- Rotor quadratic torque coefficient (N.m/Hz²) -->
+
+        <vfxy>1.2</vfxy>  <!-- Vibration force radial amplitude, (%cf) -->
+        <vfz>0.1</vfz>    <!-- Vibration force axial amplitude, (%cf) -->
+        <vtxy>7.0</vtxy>  <!-- Vibration torque radial amplitude, (%ct) -->
+        <vtz>3.5</vtz>    <!-- Vibration torque axial amplitude, (%ct) -->
+
 				<rotor><joint spin="cw">propeller-1-joint</joint></rotor>
 				<rotor><joint spin="ccw">propeller-2-joint</joint></rotor>
 				<rotor><joint spin="cw">propeller-3-joint</joint></rotor>

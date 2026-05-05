@@ -1,6 +1,6 @@
 #!/usr/bin/env python3 
 """ 
-Unified ROS2 node for TiltHex RL policy with direct hardware control. 
+Unified ROS2 node for TiltHex RL policy and PID testing with synchronized logging. 
 """ 
 import os 
 import threading 
@@ -30,10 +30,14 @@ class PolicyControlNode(Node):
         self.declare_parameter('custom_log_dir', '')
         self.custom_log_dir = self.get_parameter('custom_log_dir').value
 
-        self.log_path = Path("logs")
-        self.log_path.mkdir(parents=True, exist_ok=True)
+        # Separate directories for logs
+        self.log_policy_path = Path("logs_policy")
+        self.log_policy_path.mkdir(parents=True, exist_ok=True)
         
-        self.components = TK3Components_tilthex(self.log_path) 
+        self.log_pid_path = Path("logs_pid")
+        self.log_pid_path.mkdir(parents=True, exist_ok=True)
+        
+        self.components = TK3Components_tilthex(self.log_policy_path) 
         self.get_logger().info('Genomix components loaded') 
         
         self.cb_group = ReentrantCallbackGroup() 
@@ -41,27 +45,24 @@ class PolicyControlNode(Node):
         self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
+
         self.create_service(Trigger, '/policy/start', self.policy_start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/policy/stop', self.policy_stop_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
-        self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
+        
         self.create_service(Trigger, '/policy/pid_start', self.pid_start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/policy/pid_stop', self.pid_stop_callback, callback_group=self.cb_group)
+        # New service for timed PID logging
+        self.create_service(Trigger, '/control/pid_test', self.pid_test_callback, callback_group=self.cb_group)
 
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_4') 
-        self.declare_parameter('policy_duration', 5.0)  
-        self.declare_parameter('frequency_hz', 100.0) 
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_5') 
+        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('frequency_hz', 100.0)
         self.declare_parameter('takeoff_height', 0.5) 
-
-        #SPPO_0 fail
-        #PPO1/SPPO1 Gain ref alto e gain smooth basso 
-        #PPO2/SPPO2 Gain ref basso e gain smooth alto
-        #PPO3/SPPO3 Gain ref basso e gain smooth basso (SPPO3 BEST PERTURBED): SPPO3 fail
-        #PPO4/SPPO4 Gain ref alto e gain smooth alto
-        #SPPO5 ALTO peso sensitivity (DEL SPPO3 BEST PERTURBED)
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
@@ -81,6 +82,11 @@ class PolicyControlNode(Node):
         self.policy_thread: Optional[threading.Thread] = None 
         self.policy_stop_event = threading.Event() 
         self.policy_land_event = threading.Event() 
+        
+        # Thread elements for PID test
+        self.pid_test_thread: Optional[threading.Thread] = None
+        self.pid_test_stop_event = threading.Event()
+
         self.frequency_hz = self.get_parameter('frequency_hz').value 
         
         self.hardware_initialized = False 
@@ -189,7 +195,7 @@ class PolicyControlNode(Node):
             self.hold_y = start_y 
             
             euler = quat_to_euler_xyz(state[6:10])
-            self.init_yaw = euler[2] # Save for return-to-takeoff
+            self.init_yaw = euler[2] 
             current_yaw = euler[2] 
             
             target_quat_w = np.cos(current_yaw / 2.0)
@@ -243,7 +249,6 @@ class PolicyControlNode(Node):
             curr_x, curr_y, curr_z = state[0], state[1], state[2]
             curr_yaw = quat_to_euler_xyz(state[6:10])[2]
             
-            # Aggiorna i valori di hold per sicurezza
             self.hold_x = curr_x
             self.hold_y = curr_y
             self.target_hold_z = curr_z
@@ -257,14 +262,44 @@ class PolicyControlNode(Node):
             
         response.success = True
         return response
+
+    def pid_test_callback(self, request: Trigger.Request, response: Trigger.Response):
+        try:
+            if not self.motors_armed: 
+                raise RuntimeError('Motors not armed.')
+            if self.pid_test_thread and self.pid_test_thread.is_alive():
+                response.success = False
+                response.message = 'PID Test already running'
+                return response
+            
+            self.pid_test_stop_event.clear()
+            self.pid_active = True 
+            self.pid_test_thread = threading.Thread(target=self._pid_test_loop, daemon=True)
+            self.pid_test_thread.start()
+            
+            response.success = True
+            response.message = f'Timed PID Logging started ({self.get_parameter("policy_duration").value}s)'
+            self.get_logger().info(response.message)
+        except Exception as e:
+            response.success = False
+            response.message = f'PID Test start failed: {e}'
+            self.get_logger().error(response.message)
+        return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
+            self.pid_active = False
+            self.pid_test_stop_event.set()
+
             if self.policy_thread and self.policy_thread.is_alive(): 
                 self.policy_stop_event.set() 
                 self.policy_thread.join(timeout=2.0) 
                 self.policy_thread = None 
             
+            if self.pid_test_thread and self.pid_test_thread.is_alive():
+                self.pid_test_thread.join(timeout=2.0)
+                self.pid_test_thread = None
+
             self.components.stop() 
             self.motors_armed = False 
             self.is_flying = False 
@@ -290,10 +325,10 @@ class PolicyControlNode(Node):
                 msg.pose.position.x, 
                 msg.pose.position.y, 
                 msg.pose.position.z, 
-                q_target[3], # w
-                q_target[0], # x
-                q_target[1], # y
-                q_target[2]  # z
+                q_target[3], 
+                q_target[0], 
+                q_target[1], 
+                q_target[2]  
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
@@ -320,10 +355,10 @@ class PolicyControlNode(Node):
             
         with self.lock:
             self.setpoint[0:3] = state[0:3]
-            self.setpoint[3] = q_target[3] # w
-            self.setpoint[4] = q_target[0] # x
-            self.setpoint[5] = q_target[1] # y
-            self.setpoint[6] = q_target[2] # z
+            self.setpoint[3] = q_target[3] 
+            self.setpoint[4] = q_target[0] 
+            self.setpoint[5] = q_target[1] 
+            self.setpoint[6] = q_target[2] 
             
             self.custom_setpoint_active = True
             
@@ -470,11 +505,13 @@ class PolicyControlNode(Node):
         quats_ref = log_data['quat_ref']
         inf_times = log_data['inf_time']
 
+        # Determine path based on policy_name
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
             timestamp = strftime("%Y%m%d_%H%M%S") 
-            sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+            base_path = self.log_pid_path if policy_name == "PID" else self.log_policy_path
+            sim_folder = base_path / f'{policy_name}_{timestamp}'
             
         sim_folder.mkdir(parents=True, exist_ok=True)
 
@@ -497,6 +534,13 @@ class PolicyControlNode(Node):
         if skip_plots:
             self.get_logger().info("skip_plots=True: skipping image generation.")
             return  
+
+        err_pos_split = pos_act - pos_ref
+        err_euler_split = euler_act - euler_ref
+        err_euler_split = (err_euler_split + np.pi) % (2 * np.pi) - np.pi
+
+        err_vel_split = vel_act
+        err_avel_split = avel_act
 
         pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
         vel_err = np.linalg.norm(vel_act, axis=1)  
@@ -530,7 +574,7 @@ class PolicyControlNode(Node):
         c_mot = '#ff7f0e' 
 
         fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
-        fig1.suptitle(f'TiltHex State Tracking ({times[-1]:.1f}s)', fontsize=16, fontweight='bold') 
+        fig1.suptitle(f'{policy_name} Position Tracking ({times[-1]:.1f}s)', fontsize=16, fontweight='bold') 
         titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
         titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
         
@@ -568,8 +612,14 @@ class PolicyControlNode(Node):
         
         for i, (data, label, col) in enumerate(err_data):
             r, c = i // 2, i % 2
-            final_val = data[-1] if len(data) > 0 else 0.0
-            legend_label = f"Final Err: {final_val:.4f}"
+            if len(data) > 0:
+                final_val = data[-1]
+                mae_val = np.mean(np.abs(data))
+            else:
+                final_val = 0.0
+                mae_val = 0.0
+                
+            legend_label = f"MAE: {mae_val:.4f} | Final: {final_val:.4f}"
             axs3[r, c].plot(times, data, color=col, label=legend_label)
             axs3[r, c].set_title(label)
             axs3[r, c].set_xlabel('Time [s]')
@@ -586,11 +636,6 @@ class PolicyControlNode(Node):
         ax4.legend(loc='best')
         fig4.tight_layout()
 
-        # Wrap angle to [-pi, pi] for Euler errors
-        err_pos_split = pos_act - pos_ref
-        err_euler_split = euler_act - euler_ref
-        err_euler_split = (err_euler_split + np.pi) % (2 * np.pi) - np.pi
-
         fig5, axs5 = plt.subplots(2, 3, figsize=(18, 10))
         fig5.suptitle('Individual States Tracking Error', fontsize=16, fontweight='bold')
         err_titles_pos = ['Error X [m]', 'Error Y [m]', 'Error Z [m]']
@@ -601,24 +646,63 @@ class PolicyControlNode(Node):
             axs5[0, i].plot(times, err_pos_split[:, i], color=c_act, label=f'MAE: {mae_pos:.4f}')
             axs5[0, i].set_title(err_titles_pos[i])
             axs5[0, i].set_xlabel('Time [s]')
-            axs5[0, i].axhline(y=0, color='k', linestyle='--', alpha=0.5)
             axs5[0, i].legend(loc='best')
 
             mae_euler = np.mean(np.abs(err_euler_split[:, i]))
             axs5[1, i].plot(times, err_euler_split[:, i], color=c_att, label=f'MAE: {mae_euler:.4f}')
             axs5[1, i].set_title(err_titles_euler[i])
             axs5[1, i].set_xlabel('Time [s]')
-            axs5[1, i].axhline(y=0, color='k', linestyle='--', alpha=0.5)
             axs5[1, i].legend(loc='best')
 
         fig5.tight_layout(rect=[0, 0.03, 1, 0.95])
 
+        fig6, axs6 = plt.subplots(2, 3, figsize=(18, 10))
+        fig6.suptitle('Pose Velocity components', fontsize=16, fontweight='bold')
+        titles_vel = ['Vx [m/s]', 'Vy [m/s]', 'Vz [m/s]']
+        titles_avel = ['wx [rad/s]', 'wy [rad/s]', 'wz [rad/s]']
+        
+        des_vel = np.zeros_like(times)
+        
+        for i in range(3):
+            axs6[0, i].plot(times, vel_act[:, i], color=c_act, label='Actual')
+            axs6[0, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+            axs6[0, i].set_title(titles_vel[i])
+            axs6[0, i].set_xlabel('Time [s]')
+            if i == 0: axs6[0, i].legend(loc='best')
+
+            axs6[1, i].plot(times, avel_act[:, i], color=c_att, label='Actual')
+            axs6[1, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+            axs6[1, i].set_title(titles_avel[i])
+            axs6[1, i].set_xlabel('Time [s]')
+            if i == 0: axs6[1, i].legend(loc='best')
+        fig6.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        fig7, axs7 = plt.subplots(2, 3, figsize=(18, 10))
+        fig7.suptitle('Velocity Error component', fontsize=16, fontweight='bold')
+        err_titles_vel = ['Error Vx [m/s]', 'Error Vy [m/s]', 'Error Vz [m/s]']
+        err_titles_avel = ['Error wx [rad/s]', 'Error wy [rad/s]', 'Error wz [rad/s]']
+        for i in range(3):
+            mae_vel = np.mean(np.abs(err_vel_split[:, i]))
+            axs7[0, i].plot(times, err_vel_split[:, i], color=c_act, label=f'MAE: {mae_vel:.4f}')
+            axs7[0, i].set_title(err_titles_vel[i])
+            axs7[0, i].set_xlabel('Time [s]')
+            axs7[0, i].legend(loc='best')
+
+            mae_avel = np.mean(np.abs(err_avel_split[:, i]))
+            axs7[1, i].plot(times, err_avel_split[:, i], color=c_att, label=f'MAE: {mae_avel:.4f}')
+            axs7[1, i].set_title(err_titles_avel[i])
+            axs7[1, i].set_xlabel('Time [s]')
+            axs7[1, i].legend(loc='best')
+        fig7.tight_layout(rect=[0, 0.03, 1, 0.95])
+
         export_map = {
-            'states': fig1,
+            'position': fig1,
             'inputs': fig2,
             'tracking_errors': fig3,
             'inference_latency': fig4,
-            'tracking_states': fig5
+            'position_errors': fig5,
+            'velocities': fig6,
+            'velocity_error': fig7
         }
 
         for name, fig in export_map.items():
@@ -633,6 +717,90 @@ class PolicyControlNode(Node):
 
         self.get_logger().info(f"Plots successfully exported in {formats} to: {sim_folder}")
     
+    def _pid_test_loop(self):
+        frequency = self.get_parameter('frequency_hz').value
+        duration = self.get_parameter('policy_duration').value
+        rate = self.create_rate(frequency)
+        
+        self.get_logger().info(f'--- TIMED PID TEST ACTIVE ({duration}s) ---')
+
+        max_steps = int(duration * frequency * 1.1) + 10
+        
+        log_inf_time = np.zeros(max_steps)
+        log_t = np.zeros(max_steps)
+        log_pos = np.zeros((max_steps, 3))
+        log_vel = np.zeros((max_steps, 3))
+        log_euler = np.zeros((max_steps, 3))
+        log_avel = np.zeros((max_steps, 3))
+        log_pos_ref = np.zeros((max_steps, 3))
+        log_euler_ref = np.zeros((max_steps, 3))
+        log_action = np.zeros((max_steps, 6)) # Dummy actions for PID
+        log_quat = np.zeros((max_steps, 4))
+        log_quat_ref = np.zeros((max_steps, 4))
+
+        start_time = perf_counter()
+        step_idx = 0
+
+        while not self.pid_test_stop_event.is_set() and step_idx < max_steps:
+            current_time = perf_counter() - start_time
+            if current_time > duration:
+                self.get_logger().info("PID Test duration exceeded.")
+                break
+
+            try:
+                raw_state = read_state_and_rot_w(self.components)
+                if raw_state is None: continue
+
+                euler = quat_to_euler_xyz(raw_state[6:10])
+
+                with self.lock:
+                    target_pos = self.setpoint[0:3].copy()
+                    target_quat = self.setpoint[3:7].copy()
+
+                log_t[step_idx] = current_time
+                log_pos[step_idx] = raw_state[0:3]
+                log_vel[step_idx] = raw_state[3:6]
+                log_euler[step_idx] = euler
+                log_avel[step_idx] = raw_state[10:13]
+                log_pos_ref[step_idx] = target_pos
+                log_euler_ref[step_idx] = quat_to_euler_xyz(target_quat)
+                log_quat[step_idx] = raw_state[6:10]
+                log_quat_ref[step_idx] = target_quat
+
+                step_idx += 1
+                
+                if step_idx % 50 == 0:
+                    self.get_logger().info(f"PID T: {current_time:.1f}s | Z: {raw_state[2]:.2f}m")
+
+            except Exception as exc:
+                self.get_logger().error(f'PID test loop error: {exc}')
+                break
+            
+            rate.sleep()
+
+        self.get_logger().info("PID Test logging finished.")
+
+        log_data = {
+            't': log_t[:step_idx],
+            'pos': log_pos[:step_idx],
+            'vel': log_vel[:step_idx],
+            'euler': log_euler[:step_idx],
+            'avel': log_avel[:step_idx],
+            'pos_ref': log_pos_ref[:step_idx],
+            'euler_ref': log_euler_ref[:step_idx],
+            'action': log_action[:step_idx],
+            'quat': log_quat[:step_idx],
+            'quat_ref': log_quat_ref[:step_idx],
+            'inf_time': log_inf_time[:step_idx]
+        }
+
+        if step_idx > 10:
+            try:
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, "PID"))
+                plot_thread.start()
+            except Exception as e:
+                self.get_logger().error(f"Plotting thread failed to start: {e}")
+
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
@@ -789,7 +957,6 @@ class PolicyControlNode(Node):
             self.get_logger().warn("Not enough data to plot.")
 
 def publish_setpoint_cli(args):
-    import math
     import sys
     from scipy.spatial.transform import Rotation
     if len(args) < 6:
@@ -826,7 +993,6 @@ def publish_setpoint_cli(args):
 def publish_attitude_cli(args):
     import sys
     from scipy.spatial.transform import Rotation
-    from geometry_msgs.msg import Quaternion
     
     if len(args) < 3:
         print("Error: missing arguments. Usage: --setattitude roll_deg pitch_deg yaw_deg")
@@ -850,6 +1016,29 @@ def publish_attitude_cli(args):
     pub.publish(msg)
     node.get_logger().info(f"Attitude target sent: RPY=[{r_deg}°, {p_deg}°, {y_deg}°]")
     time.sleep(0.1)
+    
+    node.destroy_node()
+    rclpy.shutdown()
+
+def trigger_pid_test_cli():
+    import sys
+    from std_srvs.srv import Trigger
+    rclpy.init()
+    node = rclpy.create_node('cli_pid_test_trigger')
+    client = node.create_client(Trigger, '/control/pid_test')
+    
+    if not client.wait_for_service(timeout_sec=3.0):
+        node.get_logger().error('Service /control/pid_test not available.')
+        return
+
+    req = Trigger.Request()
+    future = client.call_async(req)
+    rclpy.spin_until_future_complete(node, future)
+    
+    if future.result() is not None:
+        node.get_logger().info(f"Response: {future.result().message}")
+    else:
+        node.get_logger().error("Exception while calling service.")
     
     node.destroy_node()
     rclpy.shutdown()
@@ -917,5 +1106,7 @@ if __name__ == '__main__':
         check_battery_cli()
     elif len(sys.argv) > 1 and sys.argv[1] == '--telemetry':
         check_telemetry_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--pid-test':
+        trigger_pid_test_cli()
     else:
         main()

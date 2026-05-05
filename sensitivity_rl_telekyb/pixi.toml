@@ -30,8 +30,10 @@ policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/Trigge
 policy-loop-stop = { cmd = "ros2 service call /policy/stop std_srvs/srv/Trigger" }
 policy-pid-start = { cmd = "ros2 service call /policy/pid_start std_srvs/srv/Trigger" }
 policy-pid-stop = { cmd = "ros2 service call /policy/pid_stop std_srvs/srv/Trigger" }
+policy-pid-test = { cmd = "ros2 service call /control/pid_test std_srvs/srv/Trigger" }
 policy-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
 policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
+
 
 [tasks.policy-setpoint]
 args = [

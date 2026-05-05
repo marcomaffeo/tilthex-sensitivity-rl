@@ -197,13 +197,14 @@ def debug_callback(config, metric):
     """Debug callback for printing training progress."""
 
     def callback(info):
-        return_values = info["returned_episode_returns"][info["returned_episode"]]
-        timesteps = info["timestep"][info["returned_episode"]] * config["NUM_ENVS"]
-        
-        if len(timesteps) > 0:
-            print(
-                f"global step={timesteps[-1]}, mean episodic return={return_values.mean()}"
-            )
+        returned = info["returned_episode"]
+        if not returned.any():
+            return
+        return_values = info["returned_episode_returns"][returned]
+        timesteps = info["timestep"][returned] * config["NUM_ENVS"]
+        print(
+            f"global step={timesteps[-1]}, mean episodic return={return_values.mean()}"
+        )
 
     jax.debug.callback(callback, metric)
 
@@ -301,12 +302,22 @@ def make_train(
     if override_kwargs:
         env_params = env_params.replace(**override_kwargs)
 
+    
+    # Use the environment's true max_steps length for training (where it learns).
+    # This decouples the episode length from NUM_STEPS (which only controls buffer unrolls).
+    train_max_steps = config.get("TRAINING_MAX_STEPS_IN_EPISODE", env.default_params.max_steps_in_episode)
+    
+    env_params = env_params.replace(max_steps_in_episode=train_max_steps)
     env = spec.wrap_env(env, config)
 
     eval_config = config.copy()
     eval_config["DOMAIN_RANDOMIZATION"] = False
     eval_env = ENV_REGISTRY[eval_config["ENV_NAME"]]()
     eval_env_params = eval_env.default_params
+    
+    # Testing can use a larger horizon if EVAL_MAX_STEPS_IN_EPISODE is provided
+    eval_max_steps = config.get("EVAL_MAX_STEPS_IN_EPISODE", train_max_steps)
+    eval_env_params = eval_env_params.replace(max_steps_in_episode=eval_max_steps)
     eval_env = spec.wrap_env(eval_env, eval_config)
 
     # INIT NETWORKS outside JIT (NNX needs concrete rngs)

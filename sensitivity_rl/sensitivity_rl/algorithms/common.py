@@ -84,7 +84,7 @@ def gae_sensitivity_dual(config, traj_batch, last_val, last_val_s):
 
         delta_s = (
             transition.extras["reward_s"]
-            + config["GAMMA"] * next_value_s
+            + config["GAMMA"] * next_value_s * (1 - done_sens)
             - transition.extras["value_s"]
         )
         gae_s = delta_s + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done_sens) * gae_s

@@ -30,7 +30,9 @@ class EnvState(environment.EnvState):
     state: ModelState
     target_pos: jax.Array
     target_yaw: jax.Array  # Desired yaw angle (rotation around z-axis)
-    last_u: jax.Array
+    last_input: jax.Array # This is the actual input applied to the system after low-pass filtering, which is what affects the next state
+    last_commanded_action: jax.Array # This is the commanded action
+
     time: int
 
     # provide proxy access to regular attributes of wrapped object
@@ -66,7 +68,7 @@ class EnvParams(environment.EnvParams):
     m: float = 1.4
     I: jax.Array = struct.field(
         pytree_node=True,
-        default_factory=lambda: jnp.array([0.022, 0.022, 0.020]),
+        default_factory=lambda: jnp.array([0.012, 0.012, 0.020]),
     )
     com_pos: jax.Array = struct.field(
         pytree_node=True, default_factory=lambda: jnp.array([0.0, 0.0, 0.0])
@@ -100,13 +102,13 @@ class DroneV3(environment.Environment):
         self.params_min = [
             1.0,  # mass
             jnp.array([0.01, 0.01, 0.01]),  # inertia
-            jnp.array([-0.02, -0.02, -0.02]),  # com_pos
+            jnp.array([-0.025, -0.025, -0.02]),  # com_pos
             0.01,  # actuator_tau
         ]
         self.params_max = [
             1.8,  # mass
             jnp.array([0.05, 0.05, 0.05]),  # inertia
-            jnp.array([0.02, 0.02, 0.02]),  # com_pos
+            jnp.array([0.025, 0.025, 0.02]),  # com_pos
             0.08,  # actuator_tau
         ]
         super().__init__()
@@ -159,7 +161,7 @@ class DroneV3(environment.Environment):
 
         # Compute the filtered actuator input (must match step_dynamics)
         alpha = jnp.clip(params.dt / params.actuator_tau, 0.0, 1.0)
-        u_actual = env_state.last_u + alpha * (action_rescaled - env_state.last_u)
+        u_actual = env_state.last_input + alpha * (action_rescaled - env_state.last_input)
 
         pos_diff_norm = jnp.linalg.norm(state_next.pos - env_state.target_pos)
         vel_norm = jnp.linalg.norm(state_next.vel)
@@ -200,7 +202,7 @@ class DroneV3(environment.Environment):
                 )
             )
             - 0.2
-            * (jnp.linalg.norm((action_rescaled - env_state.last_u) / params.max_input))
+            * (jnp.linalg.norm((action_rescaled - env_state.last_input) / params.max_input))
         )
 
         reward = reward.squeeze()
@@ -209,7 +211,8 @@ class DroneV3(environment.Environment):
             state=state_next,
             target_pos=env_state.target_pos,
             target_yaw=env_state.target_yaw,
-            last_u=u_actual.reshape(-1),
+            last_input=u_actual.reshape(-1),
+            last_commanded_action=action_rescaled.reshape(-1),
             time=env_state.time + 1,
         )
 
@@ -232,15 +235,15 @@ class DroneV3(environment.Environment):
         """Step dynamics with first-order actuator low-pass filter.
 
         The actuator output is filtered as:
-            u_actual = last_u + alpha * (u_commanded - last_u)
+            u_actual = last_input + alpha * (u_commanded - last_input)
         where alpha = dt / tau  (clamped to [0, 1]).
         """
         state = env_state.state
-        last_u = env_state.last_u
+        last_input = env_state.last_input
 
         # First-order low-pass filter coefficient
         alpha = jnp.clip(params.dt / params.actuator_tau, 0.0, 1.0)
-        u_actual = last_u + alpha * (action - last_u)
+        u_actual = last_input + alpha * (action - last_input)
 
         return self._step_dynamics(key, state, u_actual, params)
 
@@ -342,7 +345,8 @@ class DroneV3(environment.Environment):
             state=state,
             target_pos=target_pos,
             target_yaw=target_yaw,
-            last_u=self.hovering_input,
+            last_input=self.hovering_input,
+            last_commanded_action=self.hovering_input,
             time=0,
         )
         return self.get_obs(env_state), env_state
@@ -473,7 +477,7 @@ class DroneV3(environment.Environment):
                     (3,),
                     jnp.float32,
                 ),
-                "last_u": spaces.Box(
+                "last_input": spaces.Box(
                     -jnp.finfo(jnp.float32).max,
                     jnp.finfo(jnp.float32).max,
                     (),

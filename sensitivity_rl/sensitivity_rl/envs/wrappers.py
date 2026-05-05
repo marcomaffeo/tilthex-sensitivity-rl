@@ -347,7 +347,8 @@ class SensitivityWrapper(GymnaxWrapper):
     ):
         """Compute the next environment state and update sensitivities."""
         state = jax.flatten_util.ravel_pytree(sens_state.env_state.state)[0]
-        params_flat = self._nominal_params_flat
+        params_flat = jax.flatten_util.ravel_pytree(params)[0]
+        # params_flat = self._nominal_params_flat
         # Compute Jacobians (at nominal params)
         df_dx = self.df_dx(key, sens_state.env_state, state, action, params_flat)
         df_du = self.df_du(key, sens_state.env_state, state, action, params_flat)

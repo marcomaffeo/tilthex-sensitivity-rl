@@ -5,11 +5,13 @@ defaults:
 
 # Override environment
 ENV_NAME: drone_obstacle
-NUM_STEPS: 200
+NUM_STEPS: 200          # Steps collected per training update (used as episode length during training)
+EVAL_MAX_STEPS_IN_EPISODE: 300  # Episode length used during rollout/testing
+SENSITIVITY_NUM_STEPS: 25
 
 TOTAL_TIMESTEPS: 2e8
 
-SENSITIVITY_REGULARIZATION_WEIGHT: 0.1
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.05
 
 
 # Enable constraint penalty wrapper

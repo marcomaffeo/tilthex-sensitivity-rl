@@ -59,10 +59,18 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_5') 
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_6') 
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.5) 
+        self.declare_parameter('takeoff_height', 0.5) #0.05 for exp
+
+        #SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
+        #Policy_5 same of Policy_4 but with noise distrubation
+        #Policy_6 best PPO last sweep nominal 
+        #Policy_7 best SPPO last sweep perturbed 
+        #Policy_8 best SPPO last sweep nominal
+        #Policy_9 same of Policy_4 but with tilthex mass = 2.75 and range [2.5, 3.0]
+        #Policy_10 same of Policy_9 but with noise disturbation
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])

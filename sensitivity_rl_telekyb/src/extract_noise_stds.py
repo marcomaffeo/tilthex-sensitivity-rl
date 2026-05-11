@@ -88,7 +88,7 @@ def analyze_multiple_hovering_logs(file_paths, plot=True):
 if __name__ == '__main__':
     # Add your file paths here
     file_paths = [
-        "logs/SPPO_noise/data.npz",
+        "logs_policy/SPPO_noise/data.npz",
     ]
     
     analyze_multiple_hovering_logs(file_paths, plot=True)

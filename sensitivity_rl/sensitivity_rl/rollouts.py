@@ -153,7 +153,7 @@ def rollout_episode(
         obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
         # Record action after environment step (matches previous semantics)
-        actions_buf = actions_buf.at[i].set(env_state.last_commanded_action)
+        actions_buf = actions_buf.at[i].set(getattr(env_state, "last_commanded_action", action))
 
         # Record selected state fields at index i+1
         for key in env_state.__dataclass_fields__.keys():
@@ -245,7 +245,7 @@ def rollout_episode_from_state(
         rng, step_key = jax.random.split(rng)
         obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
-        actions_buf = actions_buf.at[i].set(env_state.last_commanded_action)
+        actions_buf = actions_buf.at[i].set(getattr(env_state, "last_commanded_action", action))
 
         for key in env_state.__dataclass_fields__.keys():
             val = getattr(env_state, key)

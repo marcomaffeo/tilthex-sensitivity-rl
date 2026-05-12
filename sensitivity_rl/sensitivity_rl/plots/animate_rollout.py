@@ -29,9 +29,7 @@ Options
 --height   frame height (default: 720)
 --alpha    transparency for perturbed drones (default: 0.1)
 """
-
 from __future__ import annotations
-
 import argparse
 import os
 import re
@@ -57,6 +55,25 @@ try:
     _HAS_IMAGEIO = True
 except ImportError:
     _HAS_IMAGEIO = False
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    _HAS_PIL = True
+except ImportError:
+    _HAS_PIL = False
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as patches
+    import matplotlib.lines as mlines
+    _HAS_MATPLOTLIB = True
+except ImportError:
+    _HAS_MATPLOTLIB = False
 
 # ---------------------------------------------------------------------------
 # Mesh path
@@ -67,11 +84,140 @@ _SCENE_XML  = _ASSETS_DIR / "scene.xml"
 _DRONE_XML  = _ASSETS_DIR / "tilthex_laas.xml"
 _MESH_PATH  = _ASSETS_DIR / "merged" / "tilthex_laas__26d05b7734899ce35f05c512c442e698_visual.stl"
 
+# ---------------------------------------------------------------------------
+# Legend rendering
+# ---------------------------------------------------------------------------
+
+_LEGEND_CACHE = None
+
+def _get_legend_overlay(width: int, height: int, alpha: float) -> Optional[np.ndarray]:
+    """Pre-renders a LaTeX-style legend overlay using Matplotlib."""
+    global _LEGEND_CACHE
+    if _LEGEND_CACHE is not None:
+        return _LEGEND_CACHE
+
+    if not _HAS_MATPLOTLIB:
+        return None
+
+    dpi = 100
+    fig = plt.figure(figsize=(width / dpi, height / dpi), dpi=dpi)
+    fig.patch.set_alpha(0.0)
+    ax = fig.add_axes([0, 0, 1, 1])
+    ax.axis('off')
+    ax.set_xlim(0, width)
+    ax.set_ylim(height, 0)
+
+    box_x, box_y = 40, 40
+    box_w, box_h = 550, 280
+
+    rect = patches.Rectangle((box_x, box_y), box_w, box_h, linewidth=3, edgecolor='black', facecolor='white', alpha=0.85)
+    ax.add_patch(rect)
+
+    plt.rcParams.update({
+        "text.usetex": False,
+        "mathtext.fontset": "cm",
+        "font.family": "serif"
+    })
+    font_props = {'size': 26}
+
+    ax.add_patch(patches.Circle((box_x + 60, box_y + 60), 14, facecolor='#00FF00', edgecolor='black', linewidth=2, zorder=3))
+    ax.text(box_x + 100, box_y + 65, r"$\mathrm{Initial\ State}$", fontdict=font_props, verticalalignment='center')
+
+    ax.add_patch(patches.Circle((box_x + 60, box_y + 120), 14, facecolor='#FF0000', edgecolor='black', linewidth=2, zorder=3))
+    ax.text(box_x + 100, box_y + 125, r"$\mathrm{Target}$", fontdict=font_props, verticalalignment='center')
+
+    ax.add_line(mlines.Line2D([box_x + 35, box_x + 85], [box_y + 180, box_y + 180], color='#400000', linewidth=8))
+    ax.text(box_x + 100, box_y + 185, r"$\mathrm{Nominal\ Trajectory}$", fontdict=font_props, verticalalignment='center')
+
+    pert_alpha = max(alpha, 0.15)
+    ax.add_line(mlines.Line2D([box_x + 35, box_x + 85], [box_y + 240, box_y + 240], color='#969696', linewidth=8, alpha=pert_alpha))
+    ax.text(box_x + 100, box_y + 245, r"$\mathrm{Perturbed\ Trajectories}$", fontdict=font_props, verticalalignment='center')
+
+    fig.canvas.draw()
+    rgba = np.array(fig.canvas.buffer_rgba())
+    plt.close(fig)
+    
+    _LEGEND_CACHE = rgba
+    return rgba
+
+
+def _add_legend(frame: np.ndarray, alpha: float) -> np.ndarray:
+    """Overlays a legend on the rendered frame."""
+    overlay_rgba = _get_legend_overlay(frame.shape[1], frame.shape[0], alpha)
+    
+    if overlay_rgba is not None:
+        blended = frame.copy()
+        alpha_channel = overlay_rgba[:, :, 3] / 255.0
+        for c in range(3):
+            blended[:, :, c] = blended[:, :, c] * (1 - alpha_channel) + overlay_rgba[:, :, c] * alpha_channel
+        return blended.astype(np.uint8)
+
+    # Fallback to OpenCV if matplotlib is unavailable
+    if _HAS_CV2:
+        overlay = frame.copy()
+        box_x, box_y = 40, 40
+        box_w, box_h = 550, 280
+        
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (255, 255, 255), -1)
+        cv2.rectangle(overlay, (box_x, box_y), (box_x + box_w, box_y + box_h), (0, 0, 0), 3)
+        
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.2
+        thickness = 2
+        
+        cv2.circle(overlay, (box_x + 60, box_y + 60), 14, (0, 255, 0), -1)
+        cv2.circle(overlay, (box_x + 60, box_y + 60), 14, (0, 0, 0), 2)
+        cv2.putText(overlay, "Initial State", (box_x + 100, box_y + 70), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        
+        cv2.circle(overlay, (box_x + 60, box_y + 120), 14, (255, 0, 0), -1)
+        cv2.circle(overlay, (box_x + 60, box_y + 120), 14, (0, 0, 0), 2)
+        cv2.putText(overlay, "Target", (box_x + 100, box_y + 130), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        
+        cv2.line(overlay, (box_x + 35, box_y + 180), (box_x + 85, box_y + 180), (64, 0, 0), 8)
+        cv2.putText(overlay, "Nominal Trajectory", (box_x + 100, box_y + 190), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        
+        blended = cv2.addWeighted(overlay, 0.85, frame, 0.15, 0)
+        
+        cv2.line(blended, (box_x + 35, box_y + 240), (box_x + 85, box_y + 240), (150, 150, 150), 8)
+        cv2.putText(blended, "Perturbed Trajectories", (box_x + 100, box_y + 250), font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA)
+        
+        return blended
+    # Fallback to PIL if CV2 is unavailable
+    elif _HAS_PIL:
+        img = Image.fromarray(frame).convert("RGBA")
+        overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
+        draw = ImageDraw.Draw(overlay)
+        
+        box_x, box_y = 40, 40
+        box_w, box_h = 500, 280
+        draw.rectangle([box_x, box_y, box_x + box_w, box_y + box_h], fill=(255, 255, 255, 220), outline=(0, 0, 0, 255), width=3)
+        
+        try:
+            font = ImageFont.truetype("DejaVuSans.ttf", 32)
+        except Exception:
+            font = ImageFont.load_default()
+
+        draw.ellipse([box_x + 40, box_y + 45, box_x + 70, box_y + 75], fill=(0, 255, 0, 255), outline=(0,0,0,255))
+        draw.text((box_x + 100, box_y + 40), "Initial State", fill=(0, 0, 0, 255), font=font)
+        
+        draw.ellipse([box_x + 40, box_y + 105, box_x + 70, box_y + 135], fill=(255, 0, 0, 255), outline=(0,0,0,255))
+        draw.text((box_x + 100, box_y + 100), "Target", fill=(0, 0, 0, 255), font=font)
+        
+        draw.line([box_x + 30, box_y + 180, box_x + 80, box_y + 180], fill=(64, 0, 0, 255), width=8)
+        draw.text((box_x + 100, box_y + 160), "Nominal Trajectory", fill=(0, 0, 0, 255), font=font)
+        
+        pert_alpha = int(max(alpha, 0.15) * 255)
+        draw.line([box_x + 30, box_y + 240, box_x + 80, box_y + 240], fill=(64, 64, 64, pert_alpha), width=8)
+        draw.text((box_x + 100, box_y + 220), "Perturbed Trajectories", fill=(0, 0, 0, 255), font=font)
+        
+        img = Image.alpha_composite(img, overlay)
+        return np.array(img.convert("RGB"))
+    else:
+        return frame
 
 # ---------------------------------------------------------------------------
 # Rollout loading
 # ---------------------------------------------------------------------------
-
 def load_rollout(path: Path) -> Dict[str, np.ndarray]:
     """Load a msgpack rollout file and return a dict of numpy arrays."""
     raw = serialization.msgpack_restore(path.read_bytes())
@@ -83,17 +229,14 @@ def load_rollout(path: Path) -> Dict[str, np.ndarray]:
 
     return {k: _to_numpy(v) for k, v in raw.items()}
 
-
 # ---------------------------------------------------------------------------
 # File grouping
 # ---------------------------------------------------------------------------
 
 _TRAJ_RE = re.compile(r"^traj_(\d+)(?:_sample_(\d+))?\.msgpack$")
 
-
 def group_rollout_files(
-    rollout_dir: Path,
-) -> Dict[int, List[Tuple[Path, bool]]]:
+    rollout_dir: Path,) -> Dict[int, List[Tuple[Path, bool]]]:
     """Return {traj_id: [(path, is_nominal), ...]}.
 
     is_nominal=True  → traj_NNNNN_sample_00.msgpack
@@ -124,7 +267,6 @@ def group_rollout_files(
 
     return dict(groups)
 
-
 # ---------------------------------------------------------------------------
 # MuJoCo XML builder
 # ---------------------------------------------------------------------------
@@ -135,7 +277,6 @@ _DRONE_RGBA_TRANSPARENT = "0.25 0.25 0.25 {alpha}"
 
 _TRAIL_STEP = 4       # sample every N sim steps for trail connectors
 _TRAIL_RADIUS = 0.008
-
 
 def _camera_xyaxes(cam_pos: np.ndarray, cam_target: np.ndarray) -> str:
     """Compute MuJoCo xyaxes string for a camera at cam_pos looking at cam_target."""
@@ -151,7 +292,6 @@ def _camera_xyaxes(cam_pos: np.ndarray, cam_target: np.ndarray) -> str:
     y = y / np.linalg.norm(y)
     return f"{x[0]:.4f} {x[1]:.4f} {x[2]:.4f} {y[0]:.4f} {y[1]:.4f} {y[2]:.4f}"
 
-
 def build_mjcf(
     nominal_count: int,
     perturbed_count: int,
@@ -162,7 +302,7 @@ def build_mjcf(
     height: int = 1080,
     cam_pos: Optional[np.ndarray] = None,
     cam_target: Optional[np.ndarray] = None,
-) -> str:
+    start_positions: Optional[List[np.ndarray]] = None,) -> str:
     """Build MJCF XML by modifying the base scene with runtime values."""
     if cam_pos is None:
         cam_pos = np.array([0.0, -5.0, 3.0])
@@ -209,6 +349,27 @@ def build_mjcf(
         global_el.set("offwidth", str(width))
         global_el.set("offheight", str(height))
 
+    # Replace skybox with a flat white texture
+    if scene_asset is not None:
+        for tex in scene_asset.findall("texture"):
+            if tex.get("type") == "skybox":
+                scene_asset.remove(tex)
+                
+        ET.SubElement(scene_asset, "texture", {
+            "type": "skybox",
+            "builtin": "flat",
+            "rgb1": "1 1 1",
+            "rgb2": "1 1 1",
+            "width": "512",
+            "height": "512"
+        })
+
+    # Set floor to solid white
+    floor_geom = root.find(".//geom[@name='floor']")
+    if floor_geom is not None:
+        floor_geom.set("rgba", "1 1 1 1")
+        floor_geom.attrib.pop("material", None)
+
     worldbody = root.find("worldbody")
 
     cam_side = ET.SubElement(worldbody, "camera", {"name": "track_side"})
@@ -226,6 +387,16 @@ def build_mjcf(
     if has_target:
         tgt_body = ET.SubElement(worldbody, "body", {"name": "target", "mocap": "true"})
         ET.SubElement(tgt_body, "geom", {"type": "sphere", "size": "0.1", "rgba": "1 0 0 1"})
+
+    if start_positions is not None:
+        for i, p in enumerate(start_positions):
+            ET.SubElement(worldbody, "geom", {
+                "name": f"start_point_{i}",
+                "type": "sphere",
+                "size": "0.05",
+                "rgba": "0 1 0 1",
+                "pos": f"{p[0]:.4f} {p[1]:.4f} {p[2]:.4f}"
+            })
 
     perturbed_rgba = _DRONE_RGBA_TRANSPARENT.format(alpha=alpha)
     
@@ -262,15 +433,13 @@ def _set_drone_qpos(
     model: mujoco.MjModel,
     joint_name: str,
     pos: np.ndarray,
-    quat_wxyz: np.ndarray,
-) -> None:
+    quat_wxyz: np.ndarray,) -> None:
     """Set the freejoint qpos for a single drone body."""
     joint_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, joint_name)
     addr = model.jnt_qposadr[joint_id]
     data.qpos[addr : addr + 3] = pos
     # MuJoCo freejoint quaternion order is [w, x, y, z] — same as our saved attitude
     data.qpos[addr + 3 : addr + 7] = quat_wxyz
-
 
 def render_trajectory_group(
     group: List[Tuple[Path, bool]],
@@ -280,8 +449,7 @@ def render_trajectory_group(
     width: int,
     height: int,
     alpha: float,
-    env_dt: float = 0.02,
-) -> np.ndarray:
+    env_dt: float = 0.02,) -> np.ndarray:
     """Render all trajectories in a group; return (T, H, W, 3) uint8 array."""
     # Load all rollouts
     rollouts = [(load_rollout(p), is_nominal) for p, is_nominal in group]
@@ -302,16 +470,20 @@ def render_trajectory_group(
     centroid = nom_all_pos.mean(axis=0)
     spread = nom_all_pos.max(axis=0) - nom_all_pos.min(axis=0)
     dist = float(max(np.max(spread) * 1.25, 3.0))
-    cam_target = centroid + np.array([0.0, 0.0, 0.0])
+    
+    cam_target = centroid + np.array([0.0, 0.0, -0.2])
     cam_pos = centroid + np.array([0.0, -dist, dist * 0.4])
 
     # Collect trajectory positions for trail rendering
     nominal_pos = [np.array(d["state"])[:, :3] for d in nominal_rollouts]
     perturbed_pos = [np.array(d["state"])[:, :3] for d in perturbed_rollouts]
+    
+    start_positions = [p[0] for p in nominal_pos] + [p[0] for p in perturbed_pos]
 
     # Build model
     xml = build_mjcf(n_nominal, n_perturbed, has_obstacle, has_target, alpha,
-                     width=width, height=height, cam_pos=cam_pos, cam_target=cam_target)
+                     width=width, height=height, cam_pos=cam_pos, cam_target=cam_target,
+                     start_positions=start_positions)
     
     # Must match the exact relative paths used in tilthex_laas.xml
     model_assets = {
@@ -440,16 +612,16 @@ def render_trajectory_group(
                 )
                 scene.ngeom += 1
 
-        frames.append(renderer.render().copy())
+        frame_rendered = renderer.render().copy()
+        frame_rendered = _add_legend(frame_rendered, alpha)
+        frames.append(frame_rendered)
 
     renderer.close()
     return np.stack(frames, axis=0)
 
-
 # ---------------------------------------------------------------------------
 # Video writing
 # ---------------------------------------------------------------------------
-
 def write_video(frames: np.ndarray, output_path: Path, fps: int) -> None:
     """Write frames (T, H, W, 3) uint8 to an MP4 file using imageio."""
     if not _HAS_IMAGEIO:
@@ -465,11 +637,9 @@ def write_video(frames: np.ndarray, output_path: Path, fps: int) -> None:
         imageio.mimwrite(str(output_path), frames, fps=fps, format="FFMPEG",
                          codec="libx264", quality=7)
 
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
-
 def parse_args(argv=None):
     p = argparse.ArgumentParser(
         description="Animate drone rollout trajectories using MuJoCo renderer."
@@ -515,7 +685,6 @@ def parse_args(argv=None):
         help="Transparency of perturbed drone bodies (0=invisible, 1=opaque; default: 0.1).",
     )
     return p.parse_args(argv)
-
 
 def main(argv=None):
     args = parse_args(argv)
@@ -580,7 +749,6 @@ def main(argv=None):
     except Exception as e:
         print(f"  Error writing video: {e}", file=sys.stderr)
         sys.exit(1)
-
 
 if __name__ == "__main__":
     main()

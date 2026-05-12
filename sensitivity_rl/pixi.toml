@@ -10,7 +10,7 @@ platforms = ["osx-arm64", "linux-64"]
 python = ">=3.10,<3.13"
 tensorboard = "*"
 numpy = "*"
-matplotlib = "*"
+matplotlib = ">=3.10.9,<4"
 python-build = "*"
 pip = "*"
 pytest = ">=8.4.2,<9"

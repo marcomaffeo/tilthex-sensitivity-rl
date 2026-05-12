@@ -87,7 +87,7 @@ except ImportError:
 
 # List of methods to sweep over. Each method uses its corresponding script.
 # Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["ppo", "sppo_aug_grad_param"]  # Add or remove methods as needed
+METHODS = ["ppo","sppo_aug_grad_param_dual"]  # Add or remove methods as needed
 
 # List of environments to sweep over. Each needs a corresponding config file.
 # Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
@@ -101,23 +101,23 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [30],
+    "SEED": [7, 89, 14, 55, 123],  # Random seeds for reproducibility
     "GAIN_STAB": [0.2],          # Penalità velocità angolare
     "GAIN_ATT": [2.0],                 # Reward per allineamento
-    "GAIN_SM": [1,1.5,2,2.5,5,10],        # Penalità variazione comandi
-    "GAIN_REF": [1,1.5,2,2.5,5,10],       # Penalità distanza target
+    "GAIN_SM": [1],        # Penalità variazione comandi
+    "GAIN_REF": [1],       # Penalità distanza target
     "REWARD_POS_TOLERANCE": [0.04], # Tolleranza per reward di posizione
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     #"LR": [0.001, 0.0005, 0.0001],
     #"NUM_ENVS": [2048, 4096],
-    # "GAMMA": [0.98],
-    # "GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1, 0.2],
-    "UPDATE_EPOCHS": [3, 5],
-    # "ENT_COEF": [0.001],
-    # "DOMAIN_RANDOMIZATION": [True, False],
-    # "TOTAL_TIMESTEPS": [5_000_000],
+    #"GAMMA": [0.98],
+    #"GAE_LAMBDA": [0.9, 0.95],
+    "CLIP_EPS": [0.1],
+    #"UPDATE_EPOCHS": [5],
+    #"ENT_COEF": [0.001],
+    #"DOMAIN_RANDOMIZATION": [True, False],
+    "TOTAL_TIMESTEPS": [50_000_000],
 }
 
 # Method-specific parameter sweeps (optional)
@@ -144,12 +144,9 @@ METHOD_SPECIFIC_SWEEPS = {
         "TAU": [1e-3, 2e-3, 1e-4, 5e-4],
         "DOMAIN_RANDOMIZATION": [True, False],
     },
-    "sppo_aug_grad_param": {
-        "XI": [0.08],
-        "RHO": [0.1],
-        "TAU": [1e-5],
-        "DOMAIN_RANDOMIZATION": [False],
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.05, 0.1],
+    "sppo_aug_grad_param_dual": {
+        "DOMAIN_RANDOMIZATION": [True, False],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.05],
     },
     "sac": {
         "SEED": [0, 1],
@@ -306,9 +303,20 @@ def run_experiment_job(
     except Exception as e:
         print(f"Warning: Failed to inject physical env mapping. {e}")
 
+    
+    def _to_serializable(obj):
+        if isinstance(obj, dict):
+            return {k: _to_serializable(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [_to_serializable(v) for v in obj]
+        if hasattr(obj, "tolist"):  # Intercetta sia JAX (ArrayImpl) che Numpy
+            return obj.tolist()
+        return obj
+
+    clean_config.pop("SENS_W", None)
+
     with open(run_dir / "config.json", "w") as f:
-        json.dump(clean_config, f, indent=2)
-    # --- END MODIFICATION ---
+        json.dump(_to_serializable(clean_config), f, indent=2)
 
     hparam_dict = {
         k: v for k, v in config.items() if isinstance(v, (int, float, bool, str))

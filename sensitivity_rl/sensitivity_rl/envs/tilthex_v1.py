@@ -82,26 +82,26 @@ class EnvParams(environment.EnvParams):
     wmax: float = struct.field(pytree_node=False, default=100)                                                                                  # max prop rotation speed in Hz
     I_off_diag: jax.Array = struct.field(pytree_node=False, default_factory=lambda: jnp.array([0.00175324, 1.3135e-06, -5.1512e-05]))           # inertia off-diagonal terms [kg*m^2]
     action_noise_scale: float = struct.field(pytree_node=False, default=0.03)                                                                   # action noise scale for exploration
-    # obs_noise_stds: jax.Array = struct.field(
-    #     pytree_node=False, 
-    #     default_factory=lambda: jnp.array([
-    #         0.005, 0.005, 0.0025,               # Position (x, y, z) [m]
-    #         0.01, 0.01, 0.01,                   # Velocity (vx, vy, vz) [m/s]
-    #         0.0025, 0.0025, 0.0025, 0.0025,     # Quaternion (w, x, y, z)
-    #         0.2,  0.2,  0.2,                    # Angular Vel (wx, wy, wz) [rad/s]
-    #         0.0025, 0.0025, 0.0025, 0.0025      # Quaternion Target Error
-    #     ]) / 3.0                                # Sigma values for observation noise 
-    # )   
     obs_noise_stds: jax.Array = struct.field(
         pytree_node=False, 
         default_factory=lambda: jnp.array([
-            0.00, 0.00, 0.00,               # Position (x, y, z) [m]
-            0.0, 0.0, 0.0,                   # Velocity (vx, vy, vz) [m/s]
-            0.00, 0.00, 0.0, 0.00,     # Quaternion (w, x, y, z)
-            0.0,  0.0,  0.0,                    # Angular Vel (wx, wy, wz) [rad/s]
-            0.00, 0.00, 0.00, 0.00      # Quaternion Target Error
+            0.005, 0.005, 0.0025,               # Position (x, y, z) [m]
+            0.01, 0.01, 0.01,                   # Velocity (vx, vy, vz) [m/s]
+            0.0025, 0.0025, 0.0025, 0.0025,     # Quaternion (w, x, y, z)
+            0.2,  0.2,  0.2,                    # Angular Vel (wx, wy, wz) [rad/s]
+            0.0025, 0.0025, 0.0025, 0.0025      # Quaternion Target Error
         ]) / 3.0                                # Sigma values for observation noise 
-    )                                                                                      
+    )   
+    # obs_noise_stds: jax.Array = struct.field(
+    #     pytree_node=False, 
+    #     default_factory=lambda: jnp.array([
+    #         0.00, 0.00, 0.00,               # Position (x, y, z) [m]
+    #         0.0, 0.0, 0.0,                   # Velocity (vx, vy, vz) [m/s]
+    #         0.00, 0.00, 0.0, 0.00,     # Quaternion (w, x, y, z)
+    #         0.0,  0.0,  0.0,                    # Angular Vel (wx, wy, wz) [rad/s]
+    #         0.00, 0.00, 0.00, 0.00      # Quaternion Target Error
+    #     ]) / 3.0                                # Sigma values for observation noise 
+    # )                                                                                      
 
     gain_stab: float = struct.field(pytree_node=False, default=0.2)             # reward gain for angular velocity penalty to encourage stability
     gain_att: float = struct.field(pytree_node=False, default=2.0)              # reward gain for attitude error to encourage correct orientation
@@ -110,7 +110,7 @@ class EnvParams(environment.EnvParams):
     reward_pos_tolerance: float = struct.field(pytree_node=False, default=0.04)
 
     # Uncertain parameters
-    m: float = 2.936                                                                                                                            # mass [kg]
+    m: float = 2.9                                                                                                                            # mass [kg]
     I: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.082529, 0.0846092, 0.154814]),)                           # inertia diagonal [kg*m^2]
     com_default: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.array([0.000122973, 0.00013006, 0.0248586]),)            # center of mass offset from geometric center [m]
     alpha: jax.Array = struct.field(pytree_node=True,default_factory=lambda: jnp.full((6,), -20.0))                                             # tilt_angle [deg] radial inclination angle of rotors

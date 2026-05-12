@@ -59,13 +59,10 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_14') 
-        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_10') 
+        self.declare_parameter('policy_duration', 5.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.8) #0.05 for exp
-
-        self.declare_parameter('skip_plots', False)
-        self.declare_parameter('plot_formats', ['png'])
+        self.declare_parameter('takeoff_height', 0.08) #0.05 for exp
 
         # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
         # Policy_5 same of Policy_4 but with noise distrubation
@@ -77,6 +74,9 @@ class PolicyControlNode(Node):
         # Policy_11 best SPPO last sweep nominal and perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
         # Policy_12 best PPO last sweep with mass = 2.9 and range [2.6, 3.2] with noise disturbation
         # Policy_14 second best SPPO last sweep perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
+
+        self.declare_parameter('skip_plots', False)
+        self.declare_parameter('plot_formats', ['png'])
 
         self.lock = threading.Lock() 
 
@@ -325,6 +325,10 @@ class PolicyControlNode(Node):
     def setpoint_callback(self, msg: PoseStamped): 
         from scipy.spatial.transform import Rotation
         
+        if not self.hardware_initialized:
+            self.get_logger().warn("Hardware not initialized. Ignoring relative setpoint.")
+            return
+
         state = read_state_and_rot_w(self.components)
         if state is None:
             self.get_logger().error("Cannot read state to apply relative setpoint.")
@@ -334,16 +338,14 @@ class PolicyControlNode(Node):
         curr_quat_wxyz = state[6:10]
         curr_euler = quat_to_euler_xyz(curr_quat_wxyz) # [roll, pitch, yaw]
         
-        # I valori da CLI sono intesi come DELTA (x, y, z)
+        # Valori inviati interpretati come delta relativi (x = avanti, y = sinistra, z = su)
         delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         
-        # Ruotiamo il delta pos in base allo yaw corrente (X = avanti, Y = sinistra)
         yaw_rot = Rotation.from_euler('z', curr_euler[2])
         delta_pos_world = yaw_rot.apply(delta_pos)
         
         target_pos = curr_pos + delta_pos_world
 
-        # I quaternioni da CLI nascondono i delta Euleriani passati
         q_msg = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
         delta_euler = quat_to_euler_xyz(q_msg)
         
@@ -353,20 +355,20 @@ class PolicyControlNode(Node):
             curr_euler[2] + delta_euler[2]
         ]
         
-        # Evitiamo valori sballati forzando il wrap tra -pi e pi
+        # Wrap angolare per non sforare i -180/180
         target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
 
-        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() # Restituisce [x, y, z, w]
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() # [x, y, z, w]
         
         with self.lock: 
             self.setpoint = np.array([ 
                 target_pos[0], 
                 target_pos[1], 
                 target_pos[2], 
-                q_target[3], # w
-                q_target[0], # x
-                q_target[1], # y
-                q_target[2]  # z
+                q_target[3], 
+                q_target[0], 
+                q_target[1], 
+                q_target[2]  
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
@@ -384,6 +386,10 @@ class PolicyControlNode(Node):
 
     def attitude_callback(self, msg: Quaternion): 
         from scipy.spatial.transform import Rotation
+
+        if not self.hardware_initialized:
+            self.get_logger().warn("Hardware not initialized. Ignoring attitude setpoint.")
+            return
         
         state = read_state_and_rot_w(self.components)
         if state is None:
@@ -417,7 +423,6 @@ class PolicyControlNode(Node):
             self.custom_setpoint_active = True
             
         self.get_logger().info(f"Relative Attitude applied! Holding Pos, New Target Yaw: {np.degrees(target_rpy[2]):.2f}°")
-
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
 
@@ -885,7 +890,7 @@ class PolicyControlNode(Node):
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
-# _policy_loop
+        # _policy_loop
         target_info = ""
         try: 
             self.components.nhfc.stop()

@@ -59,22 +59,24 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_9') 
-        self.declare_parameter('policy_duration', 20.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_14') 
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.08) #0.05 for exp
+        self.declare_parameter('takeoff_height', 0.8) #0.05 for exp
 
-        #SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
-        #Policy_5 same of Policy_4 but with noise distrubation
-        #Policy_6 best PPO last sweep nominal 
-        #Policy_7 best SPPO last sweep perturbed 
-        #Policy_8 best SPPO last sweep nominal
-        #Policy_9 same of Policy_4 but with tilthex mass = 2.75 and range [2.5, 3.0]
-        #Policy_10 same of Policy_9 but with noise disturbation
-
-        
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
+
+        # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
+        # Policy_5 same of Policy_4 but with noise distrubation
+        # Policy_6 best PPO last sweep nominal with noise disturbation
+        # Policy_7 best SPPO last sweep perturbed with noise disturbation
+        # Policy_8 best SPPO last sweep nominal with noise disturbation
+        # Policy_9 same of Policy_4 but with tilthex mass = 2.75 and range [2.5, 3.0] 
+        # Policy_10 same of Policy_9 but with noise disturbation
+        # Policy_11 best SPPO last sweep nominal and perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
+        # Policy_12 best PPO last sweep with mass = 2.9 and range [2.6, 3.2] with noise disturbation
+        # Policy_14 second best SPPO last sweep perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
 
         self.lock = threading.Lock() 
 
@@ -323,31 +325,62 @@ class PolicyControlNode(Node):
     def setpoint_callback(self, msg: PoseStamped): 
         from scipy.spatial.transform import Rotation
         
-        q_msg = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
-        euler_cli = quat_to_euler_xyz(q_msg)
+        state = read_state_and_rot_w(self.components)
+        if state is None:
+            self.get_logger().error("Cannot read state to apply relative setpoint.")
+            return
+
+        curr_pos = state[0:3]
+        curr_quat_wxyz = state[6:10]
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz) # [roll, pitch, yaw]
         
-        target_rpy = [euler_cli[0], euler_cli[1], euler_cli[2] + self.init_yaw]
-        q_target = Rotation.from_euler('xyz', target_rpy).as_quat()
+        # I valori da CLI sono intesi come DELTA (x, y, z)
+        delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+        
+        # Ruotiamo il delta pos in base allo yaw corrente (X = avanti, Y = sinistra)
+        yaw_rot = Rotation.from_euler('z', curr_euler[2])
+        delta_pos_world = yaw_rot.apply(delta_pos)
+        
+        target_pos = curr_pos + delta_pos_world
+
+        # I quaternioni da CLI nascondono i delta Euleriani passati
+        q_msg = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
+        delta_euler = quat_to_euler_xyz(q_msg)
+        
+        target_rpy = [
+            curr_euler[0] + delta_euler[0],
+            curr_euler[1] + delta_euler[1],
+            curr_euler[2] + delta_euler[2]
+        ]
+        
+        # Evitiamo valori sballati forzando il wrap tra -pi e pi
+        target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
+
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() # Restituisce [x, y, z, w]
         
         with self.lock: 
             self.setpoint = np.array([ 
-                msg.pose.position.x, 
-                msg.pose.position.y, 
-                msg.pose.position.z, 
-                q_target[3], 
-                q_target[0], 
-                q_target[1], 
-                q_target[2]  
+                target_pos[0], 
+                target_pos[1], 
+                target_pos[2], 
+                q_target[3], # w
+                q_target[0], # x
+                q_target[1], # y
+                q_target[2]  # z
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
         if self.pid_active:
             self.components.nhfc.set_position(
-                msg.pose.position.x, 
-                msg.pose.position.y, 
-                msg.pose.position.z, 
+                target_pos[0], 
+                target_pos[1], 
+                target_pos[2], 
                 float(target_rpy[2])
             )
+            
+        self.get_logger().info(
+            f"Relative Setpoint applied! Target Pos: [{target_pos[0]:.2f}, {target_pos[1]:.2f}, {target_pos[2]:.2f}]m | Target Yaw: {np.degrees(target_rpy[2]):.2f}°"
+        )
 
     def attitude_callback(self, msg: Quaternion): 
         from scipy.spatial.transform import Rotation
@@ -357,13 +390,25 @@ class PolicyControlNode(Node):
             self.get_logger().error("Cannot read state to snap position.")
             return
             
+        curr_pos = state[0:3]
+        curr_quat_wxyz = state[6:10]
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz)
+        
         q_msg = [msg.w, msg.x, msg.y, msg.z]
-        euler_cli = quat_to_euler_xyz(q_msg)
-        target_rpy = [euler_cli[0], euler_cli[1], euler_cli[2] + self.init_yaw]
+        delta_euler = quat_to_euler_xyz(q_msg)
+        
+        target_rpy = [
+            curr_euler[0] + delta_euler[0],
+            curr_euler[1] + delta_euler[1],
+            curr_euler[2] + delta_euler[2]
+        ]
+        
+        target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
+        
         q_target = Rotation.from_euler('xyz', target_rpy).as_quat()
             
         with self.lock:
-            self.setpoint[0:3] = state[0:3]
+            self.setpoint[0:3] = curr_pos
             self.setpoint[3] = q_target[3] 
             self.setpoint[4] = q_target[0] 
             self.setpoint[5] = q_target[1] 
@@ -371,7 +416,8 @@ class PolicyControlNode(Node):
             
             self.custom_setpoint_active = True
             
-        self.get_logger().info(f"Attitude target set. Yaw offset applied: {target_rpy[2]:.2f} rad")
+        self.get_logger().info(f"Relative Attitude applied! Holding Pos, New Target Yaw: {np.degrees(target_rpy[2]):.2f}°")
+
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
 
@@ -492,7 +538,7 @@ class PolicyControlNode(Node):
         
         return jnp.array(obs)
 
-    def plot_results(self, log_data, policy_name): 
+    def plot_results(self, log_data, policy_name, target_info=""): 
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -583,7 +629,7 @@ class PolicyControlNode(Node):
         c_mot = '#ff7f0e' 
 
         fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
-        fig1.suptitle(f'{policy_name} Position Tracking ({times[-1]:.1f}s)', fontsize=16, fontweight='bold') 
+        fig1.suptitle(f'{policy_name} Position Tracking ({times[-1]:.1f}s){target_info}', fontsize=16, fontweight='bold') 
         titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
         titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
         
@@ -747,6 +793,12 @@ class PolicyControlNode(Node):
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
+        # _pid_test_loop
+        target_info = ""
+        if self.custom_setpoint_active:
+            with self.lock:
+                euler_tgt = quat_to_euler_xyz(self.setpoint[3:7])
+                target_info = f"\nTarget: Pos [{self.setpoint[0]:.2f}, {self.setpoint[1]:.2f}, {self.setpoint[2]:.2f}]m | RPY [{np.degrees(euler_tgt[0]):.2f}°, {np.degrees(euler_tgt[1]):.2f}°, {np.degrees(euler_tgt[2]):.2f}°]"
         start_time = perf_counter()
         step_idx = 0
 
@@ -805,7 +857,7 @@ class PolicyControlNode(Node):
 
         if step_idx > 10:
             try:
-                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, "PID"))
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, "PID", target_info))
                 plot_thread.start()
             except Exception as e:
                 self.get_logger().error(f"Plotting thread failed to start: {e}")
@@ -833,6 +885,8 @@ class PolicyControlNode(Node):
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
+# _policy_loop
+        target_info = ""
         try: 
             self.components.nhfc.stop()
             
@@ -844,6 +898,9 @@ class PolicyControlNode(Node):
                         self.setpoint[3:7] = switch_state[6:10]
                     self.get_logger().info(f"Setpoint snapped to actual POM state: Z={self.setpoint[2]:.3f}m")
             else:
+                with self.lock:
+                    euler_tgt = quat_to_euler_xyz(self.setpoint[3:7])
+                    target_info = f"\nTarget: Pos [{self.setpoint[0]:.2f}, {self.setpoint[1]:.2f}, {self.setpoint[2]:.2f}]m | RPY [{np.degrees(euler_tgt[0]):.2f}°, {np.degrees(euler_tgt[1]):.2f}°, {np.degrees(euler_tgt[2]):.2f}°]"
                 self.get_logger().info(f"Using custom CLI setpoint: Z={self.setpoint[2]:.3f}m")
                 self.custom_setpoint_active = False 
                 
@@ -958,7 +1015,7 @@ class PolicyControlNode(Node):
 
         if step_idx > 10: 
             try: 
-                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name)) 
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name, target_info)) 
                 plot_thread.start() 
             except Exception as e: 
                 self.get_logger().error(f"Plotting thread failed to start: {e}") 

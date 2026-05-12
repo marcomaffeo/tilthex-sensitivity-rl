@@ -1,0 +1,170 @@
+[
+  {
+    "trigger": "during_training_update_5",
+    "step": 1844224,
+    "episodic_return": -4208.037109375,
+    "sensitivity_state_mean": 5.10107421875,
+    "sensitivity_state_max": 7.383688926696777
+  },
+  {
+    "trigger": "during_training_update_10",
+    "step": 3892224,
+    "episodic_return": -2784.249267578125,
+    "sensitivity_state_mean": 4.940917015075684,
+    "sensitivity_state_max": 7.074642181396484
+  },
+  {
+    "trigger": "during_training_update_15",
+    "step": 5940224,
+    "episodic_return": -909.6483154296875,
+    "sensitivity_state_mean": 4.929362773895264,
+    "sensitivity_state_max": 7.069669723510742
+  },
+  {
+    "trigger": "during_training_update_20",
+    "step": 7988224,
+    "episodic_return": -526.988525390625,
+    "sensitivity_state_mean": 4.8761305809021,
+    "sensitivity_state_max": 6.984737396240234
+  },
+  {
+    "trigger": "during_training_update_25",
+    "step": 10036224,
+    "episodic_return": -210.28573608398438,
+    "sensitivity_state_mean": 4.7847161293029785,
+    "sensitivity_state_max": 6.868584156036377
+  },
+  {
+    "trigger": "during_training_update_30",
+    "step": 12084224,
+    "episodic_return": -175.6669921875,
+    "sensitivity_state_mean": 4.780081272125244,
+    "sensitivity_state_max": 6.869011402130127
+  },
+  {
+    "trigger": "during_training_update_35",
+    "step": 14132224,
+    "episodic_return": -169.73333740234375,
+    "sensitivity_state_mean": 4.791244983673096,
+    "sensitivity_state_max": 6.889044284820557
+  },
+  {
+    "trigger": "during_training_update_40",
+    "step": 16180224,
+    "episodic_return": -51.501243591308594,
+    "sensitivity_state_mean": 4.806739807128906,
+    "sensitivity_state_max": 6.888830661773682
+  },
+  {
+    "trigger": "during_training_update_45",
+    "step": 18228224,
+    "episodic_return": -0.13115572929382324,
+    "sensitivity_state_mean": 4.81669807434082,
+    "sensitivity_state_max": 6.88349723815918
+  },
+  {
+    "trigger": "during_training_update_50",
+    "step": 20276224,
+    "episodic_return": 39.213253021240234,
+    "sensitivity_state_mean": 4.824534893035889,
+    "sensitivity_state_max": 6.874558448791504
+  },
+  {
+    "trigger": "during_training_update_55",
+    "step": 22324224,
+    "episodic_return": 64.08644104003906,
+    "sensitivity_state_mean": 4.830481052398682,
+    "sensitivity_state_max": 6.869885444641113
+  },
+  {
+    "trigger": "during_training_update_60",
+    "step": 24372224,
+    "episodic_return": 79.0359115600586,
+    "sensitivity_state_mean": 4.83450174331665,
+    "sensitivity_state_max": 6.8707427978515625
+  },
+  {
+    "trigger": "during_training_update_65",
+    "step": 26420224,
+    "episodic_return": 94.79132843017578,
+    "sensitivity_state_mean": 4.836550712585449,
+    "sensitivity_state_max": 6.868908882141113
+  },
+  {
+    "trigger": "during_training_update_70",
+    "step": 28468224,
+    "episodic_return": 101.2522201538086,
+    "sensitivity_state_mean": 4.840517520904541,
+    "sensitivity_state_max": 6.86828088760376
+  },
+  {
+    "trigger": "during_training_update_75",
+    "step": 30516224,
+    "episodic_return": 115.81303405761719,
+    "sensitivity_state_mean": 4.84098482131958,
+    "sensitivity_state_max": 6.868532657623291
+  },
+  {
+    "trigger": "during_training_update_80",
+    "step": 32564224,
+    "episodic_return": 130.44314575195312,
+    "sensitivity_state_mean": 4.8423542976379395,
+    "sensitivity_state_max": 6.868078708648682
+  },
+  {
+    "trigger": "during_training_update_85",
+    "step": 34612224,
+    "episodic_return": 142.21717834472656,
+    "sensitivity_state_mean": 4.843448162078857,
+    "sensitivity_state_max": 6.869927883148193
+  },
+  {
+    "trigger": "during_training_update_90",
+    "step": 36660224,
+    "episodic_return": 170.92031860351562,
+    "sensitivity_state_mean": 4.84459114074707,
+    "sensitivity_state_max": 6.8690361976623535
+  },
+  {
+    "trigger": "during_training_update_95",
+    "step": 38708224,
+    "episodic_return": 203.19964599609375,
+    "sensitivity_state_mean": 4.8454413414001465,
+    "sensitivity_state_max": 6.866866111755371
+  },
+  {
+    "trigger": "during_training_update_100",
+    "step": 40756224,
+    "episodic_return": 232.76856994628906,
+    "sensitivity_state_mean": 4.845398902893066,
+    "sensitivity_state_max": 6.863230228424072
+  },
+  {
+    "trigger": "during_training_update_105",
+    "step": 42804224,
+    "episodic_return": 286.8354797363281,
+    "sensitivity_state_mean": 4.844432830810547,
+    "sensitivity_state_max": 6.868415832519531
+  },
+  {
+    "trigger": "during_training_update_110",
+    "step": 44852224,
+    "episodic_return": 383.65496826171875,
+    "sensitivity_state_mean": 4.847734451293945,
+    "sensitivity_state_max": 6.865403175354004
+  },
+  {
+    "trigger": "during_training_update_115",
+    "step": 46900224,
+    "episodic_return": 557.9267578125,
+    "sensitivity_state_mean": 4.848372459411621,
+    "sensitivity_state_max": 6.864945888519287
+  },
+  {
+    "trigger": "during_training_update_120",
+    "step": 48948224,
+    "episodic_return": 758.326416015625,
+    "sensitivity_state_mean": 4.849075794219971,
+    "sensitivity_state_max": 6.864311218261719
+  }
+]

@@ -1,14 +1,10 @@
 #!/usr/bin/env python3 
-""" 
-Unified ROS 2 node for TiltHex RL policy using PyTorch.
-""" 
 import os 
 import threading 
 from pathlib import Path 
 from time import perf_counter, sleep, strftime 
 from typing import Optional 
 
-from geometry_msgs import msg
 import numpy as np 
 import torch
 
@@ -24,16 +20,13 @@ from tk3_common import TK3Components_tilthex, read_state_and_rot_w, quat_multipl
 
 class ObsHistory:
     def __init__(self):
-        self.H = 5          # history window length
-        self.obs_len = 6     # single input length (6 rotori)
-        # FIFO order is: older to newer observation
+        self.H = 5          
+        self.obs_len = 6     
         self.obs_FIFO = np.zeros((self.H, self.obs_len), dtype=np.float32)
 
     def update_FIFO_obs_history(self, new_obs):
         obs_FIFO_cp = self.obs_FIFO.copy()
-        # Shift history: discards oldest, shifts all left
         self.obs_FIFO[:-1] = obs_FIFO_cp[1:]
-        # Insert newest at the end (most recent step)
         self.obs_FIFO[-1] = new_obs
         return self.obs_FIFO.reshape(self.H * self.obs_len)
 
@@ -44,10 +37,13 @@ class PolicyControlNodePyTorch(Node):
         self.declare_parameter('custom_log_dir', '')
         self.custom_log_dir = self.get_parameter('custom_log_dir').value
 
-        self.log_path = Path("logs")
-        self.log_path.mkdir(parents=True, exist_ok=True)
+        self.log_policy_path = Path("logs_policy")
+        self.log_policy_path.mkdir(parents=True, exist_ok=True)
         
-        self.components = TK3Components_tilthex(self.log_path) 
+        self.log_pid_path = Path("logs_pid")
+        self.log_pid_path.mkdir(parents=True, exist_ok=True)
+        
+        self.components = TK3Components_tilthex(self.log_policy_path) 
         self.get_logger().info('Genomix components loaded') 
         
         self.cb_group = ReentrantCallbackGroup() 
@@ -55,28 +51,37 @@ class PolicyControlNodePyTorch(Node):
         self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
+
         self.create_service(Trigger, '/policy/start', self.policy_start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/policy/stop', self.policy_stop_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
-        self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
         
+        self.create_service(Trigger, '/policy/pid_start', self.pid_start_callback, callback_group=self.cb_group) 
+        self.create_service(Trigger, '/policy/pid_stop', self.pid_stop_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/control/pid_test', self.pid_test_callback, callback_group=self.cb_group)
+
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
         self.declare_parameter('policy_path', 'configs/policy/policy114.pt') 
         self.declare_parameter('wmin', 16.0)
-        self.declare_parameter('wmax', 110.0) # Original policy training limit
-        self.declare_parameter('wmax_limit', 100.0) # Hard clip for comparison
+        self.declare_parameter('wmax', 110.0) 
+        self.declare_parameter('wmax_limit', 100.0) 
         self.declare_parameter('c_f', 12.0e-4)
 
-        self.declare_parameter('policy_duration', 4.0)  
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0) 
         self.declare_parameter('takeoff_height', 0.8) 
 
         self.declare_parameter('skip_plots', False)
-        self.declare_parameter('npz_filename', 'error_data.npz') 
+        self.declare_parameter('plot_formats', ['png'])
 
         self.lock = threading.Lock() 
+
+        self.pid_active = False 
+        self.init_yaw = 0.0
+        self.inference_times_buffer = []
         
         self.target_hold_z = 0.0  
         self.hold_x = 0.0 
@@ -87,6 +92,10 @@ class PolicyControlNodePyTorch(Node):
         self.policy_thread: Optional[threading.Thread] = None 
         self.policy_stop_event = threading.Event() 
         self.policy_land_event = threading.Event() 
+        
+        self.pid_test_thread: Optional[threading.Thread] = None
+        self.pid_test_stop_event = threading.Event()
+
         self.frequency_hz = self.get_parameter('frequency_hz').value 
         
         self.hardware_initialized = False 
@@ -95,7 +104,7 @@ class PolicyControlNodePyTorch(Node):
         self.custom_setpoint_active = False
 
         self.obs_history = ObsHistory()
-        self.INPUT_DIM = 3 + 6 + 6 + 3 + 3 + (self.obs_history.obs_len * self.obs_history.H) # 51
+        self.INPUT_DIM = 3 + 6 + 6 + 3 + 3 + (self.obs_history.obs_len * self.obs_history.H) 
         self.previous_actions = np.zeros(6, dtype=np.float32)
 
         policy_path = self.get_parameter('policy_path').value
@@ -107,10 +116,11 @@ class PolicyControlNodePyTorch(Node):
             
             self.get_logger().info("PyTorch Warm-up: Testing dimensions...")
             dummy_obs = torch.randn(1, self.INPUT_DIM, dtype=torch.float32)
-            _ = self.policy(dummy_obs)
+            for _ in range(5):
+                _ = self.policy(dummy_obs)
             
             activation_time = perf_counter() - activation_start_time
-            self.get_logger().info(f"PyTorch loading complete in {activation_time:.3f}s. Expected Input Dim: {self.INPUT_DIM}")
+            self.get_logger().info(f"PyTorch loading complete in {activation_time:.3f}s. Ready for real-time.")
         except Exception as e:
             self.get_logger().error(f"Failed to load PyTorch policy: {e}")
             self.policy = None
@@ -160,7 +170,14 @@ class PolicyControlNodePyTorch(Node):
                 self.hold_x = initial_state[0]
                 self.hold_y = initial_state[1]
                 self.target_hold_z = initial_state[2]
-                self.setpoint = np.array([self.hold_x, self.hold_y, self.target_hold_z, 1.0, 0.0, 0.0, 0.0])
+                
+                euler_init = quat_to_euler_xyz(initial_state[6:10])
+                self.init_yaw = euler_init[2]  
+                
+                self.setpoint = np.array([
+                    self.hold_x, self.hold_y, self.target_hold_z, 
+                    np.cos(self.init_yaw / 2.0), 0.0, 0.0, np.sin(self.init_yaw / 2.0)
+                ])
 
             self.motors_armed = True 
             response.success = True 
@@ -191,17 +208,28 @@ class PolicyControlNodePyTorch(Node):
             self.hold_x = start_x 
             self.hold_y = start_y 
             
+            euler = quat_to_euler_xyz(state[6:10])
+            self.init_yaw = euler[2] 
+            current_yaw = euler[2] 
+            
+            target_quat_w = np.cos(current_yaw / 2.0)
+            target_quat_z = np.sin(current_yaw / 2.0)
+
             with self.lock: 
-                self.setpoint = np.array([start_x, start_y, self.target_hold_z, 1.0, 0.0, 0.0, 0.0])
+                self.setpoint = np.array([
+                    start_x, start_y, self.target_hold_z, 
+                    target_quat_w, 0.0, 0.0, target_quat_z
+                ])
 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.rotorcraft.servo(ack=True) 
             self.components.nhfc.servo(ack=True) 
-            self.components.nhfc.set_position(start_x, start_y, self.target_hold_z, 0.0) 
+            
+            self.components.nhfc.set_position(start_x, start_y, self.target_hold_z, float(current_yaw)) 
             
             self.is_flying = True 
             response.success = True 
-            response.message = f'Takeoff PID initiated to {self.target_hold_z:.2f}m.' 
+            response.message = f'Takeoff PID initiated to {self.target_hold_z:.2f}m, Yaw lock: {current_yaw:.2f}rad.' 
             self.get_logger().info(response.message) 
             
         except Exception as e: 
@@ -209,14 +237,83 @@ class PolicyControlNodePyTorch(Node):
             response.message = f'Takeoff failed: {str(e)}' 
             self.get_logger().error(response.message) 
         return response 
+
+    def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
+        try:
+            if not self.motors_armed: raise RuntimeError('Motors not armed.')
+            self.pid_active = True
+            with self.lock:
+                target = self.setpoint.copy()
+            
+            yaw = quat_to_euler_xyz(target[3:7])[2]
+            self.components.nhfc.set_position(target[0], target[1], target[2], float(yaw))
+            
+            response.success = True
+            response.message = f'PID Navigation active. Target: {target[0:3]}'
+        except Exception as e:
+            response.success = False
+            response.message = f'PID Start failed: {e}'
+        return response
+
+    def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
+        self.pid_active = False
+
+        state = read_state_and_rot_w(self.components)
+        if state is not None:
+            curr_x, curr_y, curr_z = state[0], state[1], state[2]
+            curr_yaw = quat_to_euler_xyz(state[6:10])[2]
+            
+            self.hold_x = curr_x
+            self.hold_y = curr_y
+            self.target_hold_z = curr_z
+            self.init_yaw = curr_yaw
+            
+            self.components.nhfc.set_position(curr_x, curr_y, curr_z, float(curr_yaw))
+            response.message = f'PID Navigation stopped. Holding current pose Z:{curr_z:.2f}m.'
+        else:
+            self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
+            response.message = 'PID Navigation stopped. Returning to old pose (sensor read failed).'
+            
+        response.success = True
+        return response
+
+    def pid_test_callback(self, request: Trigger.Request, response: Trigger.Response):
+        try:
+            if not self.motors_armed: 
+                raise RuntimeError('Motors not armed.')
+            if self.pid_test_thread and self.pid_test_thread.is_alive():
+                response.success = False
+                response.message = 'PID Test already running'
+                return response
+            
+            self.pid_test_stop_event.clear()
+            self.pid_active = True 
+            self.pid_test_thread = threading.Thread(target=self._pid_test_loop, daemon=True)
+            self.pid_test_thread.start()
+            
+            response.success = True
+            response.message = f'Timed PID Logging started ({self.get_parameter("policy_duration").value}s)'
+            self.get_logger().info(response.message)
+        except Exception as e:
+            response.success = False
+            response.message = f'PID Test start failed: {e}'
+            self.get_logger().error(response.message)
+        return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
+            self.pid_active = False
+            self.pid_test_stop_event.set()
+
             if self.policy_thread and self.policy_thread.is_alive(): 
                 self.policy_stop_event.set() 
                 self.policy_thread.join(timeout=2.0) 
                 self.policy_thread = None 
             
+            if self.pid_test_thread and self.pid_test_thread.is_alive():
+                self.pid_test_thread.join(timeout=2.0)
+                self.pid_test_thread = None
+
             self.components.stop() 
             self.motors_armed = False 
             self.is_flying = False 
@@ -229,37 +326,98 @@ class PolicyControlNodePyTorch(Node):
         return response 
     
     def setpoint_callback(self, msg: PoseStamped): 
+        from scipy.spatial.transform import Rotation
+        
+        state = read_state_and_rot_w(self.components)
+        if state is None:
+            self.get_logger().error("Cannot read state to apply relative setpoint.")
+            return
+
+        curr_pos = state[0:3]
+        curr_quat_wxyz = state[6:10]
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz) 
+        
+        delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+        
+        yaw_rot = Rotation.from_euler('z', curr_euler[2])
+        delta_pos_world = yaw_rot.apply(delta_pos)
+        
+        target_pos = curr_pos + delta_pos_world
+
+        q_msg = [msg.pose.orientation.w, msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z]
+        delta_euler = quat_to_euler_xyz(q_msg)
+        
+        target_rpy = [
+            curr_euler[0] + delta_euler[0],
+            curr_euler[1] + delta_euler[1],
+            curr_euler[2] + delta_euler[2]
+        ]
+        
+        target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
+
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() 
+        
         with self.lock: 
             self.setpoint = np.array([ 
-                msg.pose.position.x, 
-                msg.pose.position.y, 
-                msg.pose.position.z, 
-                msg.pose.orientation.w,
-                msg.pose.orientation.x,
-                msg.pose.orientation.y,
-                msg.pose.orientation.z
+                target_pos[0], 
+                target_pos[1], 
+                target_pos[2], 
+                q_target[3], 
+                q_target[0], 
+                q_target[1], 
+                q_target[2]  
             ], dtype=np.float64)
             self.custom_setpoint_active = True
 
+        if self.pid_active:
+            self.components.nhfc.set_position(
+                target_pos[0], 
+                target_pos[1], 
+                target_pos[2], 
+                float(target_rpy[2])
+            )
+            
+        self.get_logger().info(
+            f"Relative Setpoint applied! Target Pos: [{target_pos[0]:.2f}, {target_pos[1]:.2f}, {target_pos[2]:.2f}]m | Target Yaw: {np.degrees(target_rpy[2]):.2f}°"
+        )
+
     def attitude_callback(self, msg: Quaternion): 
+        from scipy.spatial.transform import Rotation
+        
         state = read_state_and_rot_w(self.components)
         if state is None:
             self.get_logger().error("Cannot read state to snap position.")
             return
             
+        curr_pos = state[0:3]
+        curr_quat_wxyz = state[6:10]
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz)
+        
+        q_msg = [msg.w, msg.x, msg.y, msg.z]
+        delta_euler = quat_to_euler_xyz(q_msg)
+        
+        target_rpy = [
+            curr_euler[0] + delta_euler[0],
+            curr_euler[1] + delta_euler[1],
+            curr_euler[2] + delta_euler[2]
+        ]
+        
+        target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
+        
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat()
+            
         with self.lock:
-            self.setpoint[0:3] = state[0:3]
-            self.setpoint[3] = msg.w
-            self.setpoint[4] = msg.x
-            self.setpoint[5] = msg.y
-            self.setpoint[6] = msg.z
+            self.setpoint[0:3] = curr_pos
+            self.setpoint[3] = q_target[3] 
+            self.setpoint[4] = q_target[0] 
+            self.setpoint[5] = q_target[1] 
+            self.setpoint[6] = q_target[2] 
             
             self.custom_setpoint_active = True
             
-        self.get_logger().info(f"Hover+Attitude target set. Position snapped to: X={state[0]:.2f}, Y={state[1]:.2f}, Z={state[2]:.2f}m")
+        self.get_logger().info(f"Relative Attitude applied! Holding Pos, New Target Yaw: {np.degrees(target_rpy[2]):.2f}°")
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
-
         activation_start_time = perf_counter()
         
         try: 
@@ -321,7 +479,15 @@ class PolicyControlNodePyTorch(Node):
             
             state = read_state_and_rot_w(self.components) 
             if state is not None: 
-                self.components.nhfc.set_position(state[0], state[1], 0.05, 0.0) 
+                curr_x, curr_y = state[0], state[1]
+                curr_yaw = quat_to_euler_xyz(state[6:10])[2]
+                
+                self.hold_x = curr_x
+                self.hold_y = curr_y
+                self.target_hold_z = 0.05
+                self.init_yaw = curr_yaw
+
+                self.components.nhfc.set_position(curr_x, curr_y, 0.05, float(curr_yaw))
             
             self.is_flying = False 
             response.success = True 
@@ -368,161 +534,329 @@ class PolicyControlNodePyTorch(Node):
         
         return obs
 
-    def plot_results(self, log_data, policy_name): 
+    def plot_results(self, log_data, policy_name, target_info=""): 
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
 
-        self.get_logger().info("Processing log data...") 
+        self.get_logger().info("Processing log data for export...") 
         
         skip_plots = self.get_parameter('skip_plots').value
-        npz_filename = self.get_parameter('npz_filename').value
-        wmax_limit = self.get_parameter('wmax_limit').value
-        cf = self.get_parameter('c_f').value
-
-        times = np.array(log_data['t']) 
-        pos_act = np.array(log_data['pos']) 
-        vel_act = np.array(log_data['vel']) 
-        euler_act = np.array(log_data['euler']) 
-        pos_ref = np.array(log_data['pos_ref']) 
-        euler_ref = np.array(log_data['euler_ref']) 
-        actions = np.array(log_data['action'])
-        avel_act = np.array(log_data['avel'])
+        formats = self.get_parameter('plot_formats').value
         
-        quats_act = np.array(log_data['quat'])
-        quats_ref = np.array(log_data['quat_ref'])
-
-        pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
-        vel_err = np.linalg.norm(vel_act, axis=1)  
-        avel_err = np.linalg.norm(avel_act, axis=1) 
-
-        dot_prod = np.sum(quats_act * quats_ref, axis=1)
-        dot_prod = np.clip(np.abs(dot_prod), -1.0, 1.0)
-        total_error_rad = 2.0 * np.arccos(dot_prod)
+        times = log_data['t']
+        pos_act = log_data['pos']
+        vel_act = log_data['vel']
+        euler_act = log_data['euler']
+        pos_ref = log_data['pos_ref']
+        euler_ref = log_data['euler_ref']
+        actions = log_data['action']
+        avel_act = log_data['avel']
+        quats_act = log_data['quat']
+        quats_ref = log_data['quat_ref']
+        inf_times = log_data['inf_time']
 
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
             timestamp = strftime("%Y%m%d_%H%M%S") 
-            sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+            base_path = self.log_pid_path if policy_name == "PID" else self.log_policy_path
+            sim_folder = base_path / f'{policy_name}_{timestamp}'
             
         sim_folder.mkdir(parents=True, exist_ok=True)
 
+        data_filename = "data.npz"
         np.savez(
-            sim_folder / npz_filename,
+            sim_folder / data_filename,
             t=times,
-            pos_err=pos_err,
-            att_err=total_error_rad,
-            vel_err=vel_err,          
-            avel_err=avel_err,       
+            pos=pos_act,
+            vel=vel_act,
+            quat=quats_act,
+            avel=avel_act,
+            pos_ref=pos_ref,
+            quat_ref=quats_ref,
+            action=actions,
+            inf_time=inf_times,
             policy_name=policy_name
         )
-        self.get_logger().info(f"RAW data saved in: {sim_folder / npz_filename}")
+        self.get_logger().info(f"Full telemetry saved: {sim_folder / data_filename}")
 
         if skip_plots:
-            self.get_logger().info("skip_plots=True: Skipping PNG generation.")
+            self.get_logger().info("skip_plots=True: skipping image generation.")
             return  
 
-        self.get_logger().info("Generating professional PNG plots...")
-        plt.style.use("seaborn-v0_8")
+        err_pos_split = pos_act - pos_ref
+        err_euler_split = euler_act - euler_ref
+        err_euler_split = (err_euler_split + np.pi) % (2 * np.pi) - np.pi
+
+        err_vel_split = vel_act
+        err_avel_split = avel_act
+
+        pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
+        vel_err = np.linalg.norm(vel_act, axis=1)  
+        avel_err = np.linalg.norm(avel_act, axis=1) 
+        dot_prod = np.clip(np.abs(np.sum(quats_act * quats_ref, axis=1)), -1.0, 1.0)
+        total_error_rad = 2.0 * np.arccos(dot_prod)
+
+        plt.style.use('default')
+        plt.rcParams.update({
+            'figure.facecolor': 'white',
+            'axes.facecolor': 'white',
+            'axes.grid': True,
+            'grid.color': '#d3d3d3',
+            'grid.linestyle': '--',
+            'grid.alpha': 0.8,
+            'axes.edgecolor': 'black',
+            'axes.linewidth': 1.2,
+            'font.family': 'serif',
+            'font.size': 12,
+            'axes.titlesize': 14,
+            'axes.labelsize': 12,
+            'legend.fontsize': 11,
+            'legend.frameon': True,
+            'legend.edgecolor': 'black',
+            'lines.linewidth': 2.0
+        })
+
+        c_act = '#1f77b4' 
+        c_ref = '#000000' 
+        c_att = '#d62728' 
+        c_mot = '#ff7f0e' 
 
         fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
-        fig1.suptitle(f'TiltHex Positions & Attitude ({times[-1]:.1f}s)', fontsize=16) 
-
+        fig1.suptitle(f'TiltHex Positions & Attitude ({times[-1]:.1f}s){target_info}', fontsize=16, fontweight='bold') 
         titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
-        colors_pos = ['blue', 'green', 'cyan']
-        for i in range(3):
-            axs1[0, i].plot(times, pos_act[:, i], label='Actual', color=colors_pos[i], linewidth=2)
-            axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
-            axs1[0, i].set_title(titles_pos[i])
-            axs1[0, i].grid(True, alpha=0.3)
-            axs1[0, i].legend()
-
         titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
-        colors_euler = ['blue', 'green', 'red']
+        
         for i in range(3):
-            axs1[1, i].plot(times, euler_act[:, i], label='Actual', color=colors_euler[i], linewidth=2)
-            axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color='black', alpha=0.7)
-            axs1[1, i].set_title(titles_euler[i])
-            axs1[1, i].set_xlabel("Time [s]")
-            axs1[1, i].grid(True, alpha=0.3)
-            axs1[1, i].legend()
+            axs1[0, i].plot(times, pos_act[:, i], label='Actual', color=c_act)
+            axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
+            axs1[0, i].set_title(titles_pos[i])
+            axs1[0, i].set_xlabel('Time [s]')
+            if i == 0: axs1[0, i].legend(loc='best')
 
-        fig1.tight_layout() 
-        fig1.savefig(sim_folder / 'positions.png', dpi=100) 
-        plt.close(fig1)
+            axs1[1, i].plot(times, euler_act[:, i], label='Actual', color=c_att)
+            axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
+            axs1[1, i].set_title(titles_euler[i])
+            axs1[1, i].set_xlabel('Time [s]')
+            if i == 0: axs1[1, i].legend(loc='best')
+            
+        fig1.tight_layout(rect=[0, 0.03, 1, 0.95])
 
         fig2, axs2 = plt.subplots(2, 3, figsize=(18, 8)) 
-        fig2.suptitle(f'TiltHex Inputs - Rotor Commands ({times[-1]:.1f}s)', fontsize=16) 
+        fig2.suptitle('Rotor Forces [N]', fontsize=16, fontweight='bold') 
+        for i in range(min(6, actions.shape[1])):
+            row, col = i // 3, i % 3
+            axs2[row, col].plot(times, actions[:, i], color=c_mot)
+            axs2[row, col].set_title(f'Rotor {i+1}')
+            axs2[row, col].set_xlabel('Time [s]')
+            axs2[row, col].set_ylim(0, 12)
+        fig2.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        fig3, axs3 = plt.subplots(2, 2, figsize=(16, 10))
+        fig3.suptitle('Control Performance Metrics', fontsize=16, fontweight='bold')
+        err_data = [(pos_err, "Pos Error [m]", c_act), 
+                    (total_error_rad, "Attitude Error [rad]", c_att), 
+                    (vel_err, "Vel Error [m/s]", "#2ca02c"), 
+                    (avel_err, "AngVel Error [rad/s]", "#9467bd")]
         
-        max_thrust_n = cf * (wmax_limit ** 2)
-
-        for i in range(6):
-            row = i // 3  
-            col = i % 3   
-            if actions.shape[1] > i:
-                axs2[row, col].plot(times, actions[:, i], color='goldenrod', linewidth=2) 
-                axs2[row, col].set_title(f'Rotor {i+1} [N]') 
-                axs2[row, col].set_ylim(0, max_thrust_n + 1.0)
+        for i, (data, label, col) in enumerate(err_data):
+            r, c = i // 2, i % 2
+            if len(data) > 0:
+                final_val = data[-1]
+                mae_val = np.mean(np.abs(data))
+            else:
+                final_val = 0.0
+                mae_val = 0.0
                 
-                if row == 1: axs2[row, col].set_xlabel("Time [s]")
-                axs2[row, col].grid(True, alpha=0.3) 
+            legend_label = f"MAE: {mae_val:.4f} | Final: {final_val:.4f}"
+            axs3[r, c].plot(times, data, color=col, label=legend_label)
+            axs3[r, c].set_title(label)
+            axs3[r, c].set_xlabel('Time [s]')
+            axs3[r, c].legend(loc="upper right")
+            
+        fig3.tight_layout(rect=[0, 0.03, 1, 0.95])
 
-        fig2.tight_layout() 
-        fig2.savefig(sim_folder / 'inputs.png', dpi=100) 
-        plt.close(fig2)
-
-        fig3, axs3 = plt.subplots(2, 3, figsize=(18, 10)) 
-        fig3.suptitle(f'TiltHex Velocities (POM State) ({times[-1]:.1f}s)', fontsize=16) 
-
-        titles_vel = ['Linear Vel X [m/s]', 'Linear Vel Y [m/s]', 'Linear Vel Z [m/s]']
-        for i in range(3):
-            axs3[0, i].plot(times, vel_act[:, i], color=colors_pos[i], linewidth=2) 
-            axs3[0, i].set_title(titles_vel[i]) 
-            axs3[0, i].grid(True, alpha=0.3) 
-
-        titles_avel = ['Angular Rate X [rad/s]', 'Angular Rate Y [rad/s]', 'Angular Rate Z [rad/s]']
-        for i in range(3):
-            axs3[1, i].plot(times, avel_act[:, i], color=colors_euler[i], linewidth=2) 
-            axs3[1, i].set_title(titles_avel[i]) 
-            axs3[1, i].set_xlabel("Time [s]")
-            axs3[1, i].grid(True, alpha=0.3) 
-
-        fig3.tight_layout() 
-        fig3.savefig(sim_folder / 'velocities.png', dpi=100) 
-        plt.close(fig3)
-
-        fig4, axs4 = plt.subplots(2, 2, figsize=(16, 10))
-        fig4.suptitle(f'TiltHex Tracking Errors ({times[-1]:.1f}s)', fontsize=16)
-
-        axs4[0, 0].plot(times, pos_err, color="blue", linewidth=2, label="Pos Error")
-        axs4[0, 0].text(0.5, 0.9, f"Final: {pos_err[-1]:.3f} m", transform=axs4[0, 0].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightblue", alpha=0.5))
-        axs4[0, 0].set_title("Position Error [m]")
-        axs4[0, 0].grid(True, alpha=0.3)
-
-        axs4[1, 0].plot(times, total_error_rad, color="red", linewidth=2, label="Att Error")
-        axs4[1, 0].text(0.5, 0.9, f"Final: {total_error_rad[-1]:.3f} rad", transform=axs4[1, 0].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightsalmon", alpha=0.5))
-        axs4[1, 0].set_title("Attitude Error [rad]")
-        axs4[1, 0].set_xlabel("Time [s]")
-        axs4[1, 0].grid(True, alpha=0.3)
-
-        axs4[0, 1].plot(times, vel_err, color="green", linewidth=2, label="Vel Error")
-        axs4[0, 1].text(0.5, 0.9, f"Final: {vel_err[-1]:.3f} m/s", transform=axs4[0, 1].transAxes, ha="right", bbox=dict(boxstyle="round", fc="lightgreen", alpha=0.5))
-        axs4[0, 1].set_title("Velocity Error [m/s]")
-        axs4[0, 1].grid(True, alpha=0.3)
-
-        axs4[1, 1].plot(times, avel_err, color="purple", linewidth=2, label="Ang Vel Error")
-        axs4[1, 1].text(0.5, 0.9, f"Final: {avel_err[-1]:.3f} rad/s", transform=axs4[1, 1].transAxes, ha="right", bbox=dict(boxstyle="round", fc="thistle", alpha=0.5))
-        axs4[1, 1].set_title("Angular Velocity Error [rad/s]")
-        axs4[1, 1].set_xlabel("Time [s]")
-        axs4[1, 1].grid(True, alpha=0.3)
-
+        fig4, ax4 = plt.subplots(figsize=(10, 6))
+        ax4.plot(times, inf_times * 1000.0, color='#2ca02c')
+        ax4.axhline(y=(1.0/self.frequency_hz)*1000.0, color=c_att, linestyle='--', label='Loop Limit')
+        ax4.set_title('PyTorch Inference Latency', fontsize=14, fontweight='bold')
+        ax4.set_ylabel('Time [ms]')
+        ax4.set_xlabel('Time [s]')
+        ax4.legend(loc='best')
         fig4.tight_layout()
-        fig4.savefig(sim_folder / 'tracking_errors.png', dpi=100)
-        plt.close(fig4)
 
-        self.get_logger().info(f"Plots successfully saved in: {sim_folder}")
-    
+        fig5, axs5 = plt.subplots(2, 3, figsize=(18, 10))
+        fig5.suptitle('Individual States Tracking Error', fontsize=16, fontweight='bold')
+        err_titles_pos = ['Error X [m]', 'Error Y [m]', 'Error Z [m]']
+        err_titles_euler = ['Error Roll [rad]', 'Error Pitch [rad]', 'Error Yaw [rad]']
+
+        for i in range(3):
+            mae_pos = np.mean(np.abs(err_pos_split[:, i]))
+            axs5[0, i].plot(times, err_pos_split[:, i], color=c_act, label=f'MAE: {mae_pos:.4f}')
+            axs5[0, i].set_title(err_titles_pos[i])
+            axs5[0, i].set_xlabel('Time [s]')
+            axs5[0, i].legend(loc='best')
+
+            mae_euler = np.mean(np.abs(err_euler_split[:, i]))
+            axs5[1, i].plot(times, err_euler_split[:, i], color=c_att, label=f'MAE: {mae_euler:.4f}')
+            axs5[1, i].set_title(err_titles_euler[i])
+            axs5[1, i].set_xlabel('Time [s]')
+            axs5[1, i].legend(loc='best')
+
+        fig5.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        fig6, axs6 = plt.subplots(2, 3, figsize=(18, 10))
+        fig6.suptitle('Pose Velocity components', fontsize=16, fontweight='bold')
+        titles_vel = ['Vx [m/s]', 'Vy [m/s]', 'Vz [m/s]']
+        titles_avel = ['wx [rad/s]', 'wy [rad/s]', 'wz [rad/s]']
+        
+        des_vel = np.zeros_like(times)
+        
+        for i in range(3):
+            axs6[0, i].plot(times, vel_act[:, i], color=c_act, label='Actual')
+            axs6[0, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+            axs6[0, i].set_title(titles_vel[i])
+            axs6[0, i].set_xlabel('Time [s]')
+            if i == 0: axs6[0, i].legend(loc='best')
+
+            axs6[1, i].plot(times, avel_act[:, i], color=c_att, label='Actual')
+            axs6[1, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+            axs6[1, i].set_title(titles_avel[i])
+            axs6[1, i].set_xlabel('Time [s]')
+            if i == 0: axs6[1, i].legend(loc='best')
+        fig6.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        fig7, axs7 = plt.subplots(2, 3, figsize=(18, 10))
+        fig7.suptitle('Velocity Error component', fontsize=16, fontweight='bold')
+        err_titles_vel = ['Error Vx [m/s]', 'Error Vy [m/s]', 'Error Vz [m/s]']
+        err_titles_avel = ['Error wx [rad/s]', 'Error wy [rad/s]', 'Error wz [rad/s]']
+        for i in range(3):
+            mae_vel = np.mean(np.abs(err_vel_split[:, i]))
+            axs7[0, i].plot(times, err_vel_split[:, i], color=c_act, label=f'MAE: {mae_vel:.4f}')
+            axs7[0, i].set_title(err_titles_vel[i])
+            axs7[0, i].set_xlabel('Time [s]')
+            axs7[0, i].legend(loc='best')
+
+            mae_avel = np.mean(np.abs(err_avel_split[:, i]))
+            axs7[1, i].plot(times, err_avel_split[:, i], color=c_att, label=f'MAE: {mae_avel:.4f}')
+            axs7[1, i].set_title(err_titles_avel[i])
+            axs7[1, i].set_xlabel('Time [s]')
+            axs7[1, i].legend(loc='best')
+        fig7.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+        export_map = {
+            'position': fig1,
+            'inputs': fig2,
+            'tracking_errors': fig3,
+            'inference_latency': fig4,
+            'position_errors': fig5,
+            'velocities': fig6,
+            'velocity_error': fig7
+        }
+
+        for name, fig in export_map.items():
+            for fmt in formats:
+                ext = fmt.strip().lower()
+                save_path = sim_folder / f"{name}.{ext}"
+                kwargs = {'dpi': 300, 'bbox_inches': 'tight'} if ext == 'png' else {'bbox_inches': 'tight'}
+                fig.savefig(save_path, **kwargs)
+
+        for fig in export_map.values():
+            plt.close(fig)
+
+        self.get_logger().info(f"Plots successfully exported in {formats} to: {sim_folder}")
+
+    def _pid_test_loop(self):
+        frequency = self.get_parameter('frequency_hz').value
+        duration = self.get_parameter('policy_duration').value
+        rate = self.create_rate(frequency)
+        
+        self.get_logger().info(f'--- TIMED PID TEST ACTIVE ({duration}s) ---')
+
+        max_steps = int(duration * frequency * 1.1) + 10
+        
+        log_inf_time = np.zeros(max_steps)
+        log_t = np.zeros(max_steps)
+        log_pos = np.zeros((max_steps, 3))
+        log_vel = np.zeros((max_steps, 3))
+        log_euler = np.zeros((max_steps, 3))
+        log_avel = np.zeros((max_steps, 3))
+        log_pos_ref = np.zeros((max_steps, 3))
+        log_euler_ref = np.zeros((max_steps, 3))
+        log_action = np.zeros((max_steps, 6)) 
+        log_quat = np.zeros((max_steps, 4))
+        log_quat_ref = np.zeros((max_steps, 4))
+
+        target_info = ""
+        if self.custom_setpoint_active:
+            with self.lock:
+                euler_tgt = quat_to_euler_xyz(self.setpoint[3:7])
+                target_info = f"\nTarget: Pos [{self.setpoint[0]:.2f}, {self.setpoint[1]:.2f}, {self.setpoint[2]:.2f}]m | RPY [{np.degrees(euler_tgt[0]):.2f}°, {np.degrees(euler_tgt[1]):.2f}°, {np.degrees(euler_tgt[2]):.2f}°]"
+
+        start_time = perf_counter()
+        step_idx = 0
+
+        while not self.pid_test_stop_event.is_set() and step_idx < max_steps:
+            current_time = perf_counter() - start_time
+            if current_time > duration:
+                self.get_logger().info("PID Test duration exceeded.")
+                break
+
+            try:
+                raw_state = read_state_and_rot_w(self.components)
+                if raw_state is None: continue
+
+                euler = quat_to_euler_xyz(raw_state[6:10])
+
+                with self.lock:
+                    target_pos = self.setpoint[0:3].copy()
+                    target_quat = self.setpoint[3:7].copy()
+
+                log_t[step_idx] = current_time
+                log_pos[step_idx] = raw_state[0:3]
+                log_vel[step_idx] = raw_state[3:6]
+                log_euler[step_idx] = euler
+                log_avel[step_idx] = raw_state[10:13]
+                log_pos_ref[step_idx] = target_pos
+                log_euler_ref[step_idx] = quat_to_euler_xyz(target_quat)
+                log_quat[step_idx] = raw_state[6:10]
+                log_quat_ref[step_idx] = target_quat
+
+                step_idx += 1
+                
+                if step_idx % 50 == 0:
+                    self.get_logger().info(f"PID T: {current_time:.1f}s | Z: {raw_state[2]:.2f}m")
+
+            except Exception as exc:
+                self.get_logger().error(f'PID test loop error: {exc}')
+                break
+            
+            rate.sleep()
+
+        self.get_logger().info("PID Test logging finished.")
+
+        log_data = {
+            't': log_t[:step_idx],
+            'pos': log_pos[:step_idx],
+            'vel': log_vel[:step_idx],
+            'euler': log_euler[:step_idx],
+            'avel': log_avel[:step_idx],
+            'pos_ref': log_pos_ref[:step_idx],
+            'euler_ref': log_euler_ref[:step_idx],
+            'action': log_action[:step_idx],
+            'quat': log_quat[:step_idx],
+            'quat_ref': log_quat_ref[:step_idx],
+            'inf_time': log_inf_time[:step_idx]
+        }
+
+        if step_idx > 10:
+            try:
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, "PID", target_info))
+                plot_thread.start()
+            except Exception as e:
+                self.get_logger().error(f"Plotting thread failed to start: {e}")
+
     def _policy_loop(self): 
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
@@ -531,7 +865,7 @@ class PolicyControlNodePyTorch(Node):
         
         wmin = self.get_parameter('wmin').value
         wmax = self.get_parameter('wmax').value
-        wmax_limit = self.get_parameter('wmax_limit').value # Load limiting param
+        wmax_limit = self.get_parameter('wmax_limit').value 
         cf = self.get_parameter('c_f').value
         
         rate = self.create_rate(frequency)
@@ -540,6 +874,7 @@ class PolicyControlNodePyTorch(Node):
 
         max_steps = int(duration * frequency * 1.1) + 10 
         
+        log_inf_time = np.zeros(max_steps)
         log_t = np.zeros(max_steps)
         log_pos = np.zeros((max_steps, 3))
         log_vel = np.zeros((max_steps, 3))
@@ -554,6 +889,7 @@ class PolicyControlNodePyTorch(Node):
         self.obs_history = ObsHistory()
         self.previous_actions = np.zeros(6, dtype=np.float32)
 
+        target_info = ""
         try: 
             self.components.nhfc.stop()
             
@@ -565,6 +901,9 @@ class PolicyControlNodePyTorch(Node):
                         self.setpoint[3:7] = switch_state[6:10]
                     self.get_logger().info(f"Setpoint snapped to actual POM state: Z={self.setpoint[2]:.3f}m")
             else:
+                with self.lock:
+                    euler_tgt = quat_to_euler_xyz(self.setpoint[3:7])
+                    target_info = f"\nTarget: Pos [{self.setpoint[0]:.2f}, {self.setpoint[1]:.2f}, {self.setpoint[2]:.2f}]m | RPY [{np.degrees(euler_tgt[0]):.2f}°, {np.degrees(euler_tgt[1]):.2f}°, {np.degrees(euler_tgt[2]):.2f}°]"
                 self.get_logger().info(f"Using custom CLI setpoint: Z={self.setpoint[2]:.3f}m")
                 self.custom_setpoint_active = False 
                 
@@ -592,7 +931,10 @@ class PolicyControlNodePyTorch(Node):
                 obs_np = self._build_observation(raw_state)
                 input_tensor = torch.from_numpy(obs_np).unsqueeze(0)
                 
+                t_inf_start = perf_counter()
                 actions_torch = self.policy(input_tensor)
+                log_inf_time[step_idx] = perf_counter() - t_inf_start
+
                 actions = actions_torch.detach().numpy()[0] 
                 
                 if np.any(np.isnan(actions)): continue 
@@ -600,10 +942,7 @@ class PolicyControlNodePyTorch(Node):
                 self.previous_actions = actions
 
                 rotors_vel = (wmax - wmin) * ((np.clip(actions, -1.0, 1.0) + 1.0) / 2.0) + wmin
-                
-                # Apply hard limit clipping to normalize testing environment
                 rotors_vel = np.clip(rotors_vel, wmin, wmax_limit)
-                
                 rotor_speed_cmd = rotors_vel.tolist() + [0.0, 0.0]
 
                 self.components.rotorcraft.set_velocity(rotor_speed_cmd, ack=False)
@@ -652,8 +991,22 @@ class PolicyControlNodePyTorch(Node):
             self.components.rotorcraft.servo(ack=True) 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.nhfc.servo(ack=True) 
-            self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, 0.0) 
-            self.get_logger().info(f"PID engaged. Returning to original takeoff target Z:{self.target_hold_z:.2f}m") 
+            
+            end_state = read_state_and_rot_w(self.components)
+            if end_state is not None:
+                end_x, end_y, end_z = end_state[0], end_state[1], end_state[2]
+                end_yaw = quat_to_euler_xyz(end_state[6:10])[2]
+                
+                self.hold_x = end_x
+                self.hold_y = end_y
+                self.target_hold_z = end_z
+                self.init_yaw = end_yaw
+                
+                self.components.nhfc.set_position(end_x, end_y, end_z, float(end_yaw))
+                self.get_logger().info(f"PID engaged. Holding end pose: X={end_x:.2f}, Y={end_y:.2f}, Z={end_z:.2f}m") 
+            else:
+                self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
+                self.get_logger().info("PID engaged. Sensors unreadable, falling back to old pose.")
 
         except Exception as e: 
             self.get_logger().error(f"RECOVERY FAILED: {e}")
@@ -668,12 +1021,13 @@ class PolicyControlNodePyTorch(Node):
             'euler_ref': log_euler_ref[:step_idx],
             'action': log_action[:step_idx],
             'quat': log_quat[:step_idx],
-            'quat_ref': log_quat_ref[:step_idx]
+            'quat_ref': log_quat_ref[:step_idx],
+            'inf_time': log_inf_time[:step_idx]
         }
 
         if step_idx > 10: 
             try: 
-                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name)) 
+                plot_thread = threading.Thread(target=self.plot_results, args=(log_data, policy_name, target_info)) 
                 plot_thread.start() 
             except Exception as e: 
                 self.get_logger().error(f"Plotting thread failed to start: {e}") 
@@ -717,10 +1071,9 @@ def publish_setpoint_cli(args):
 def publish_attitude_cli(args):
     import sys
     from scipy.spatial.transform import Rotation
-    from geometry_msgs.msg import Quaternion
     
     if len(args) < 3:
-        print("Error: missing arguments. Usage: --attitude roll_deg pitch_deg yaw_deg")
+        print("Error: missing arguments. Usage: --setattitude roll_deg pitch_deg yaw_deg")
         return
 
     r_deg, p_deg, y_deg = map(float, args[:3])
@@ -745,11 +1098,70 @@ def publish_attitude_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 
+def trigger_pid_test_cli():
+    import sys
+    from std_srvs.srv import Trigger
+    rclpy.init()
+    node = rclpy.create_node('cli_pid_test_trigger')
+    client = node.create_client(Trigger, '/control/pid_test')
+    
+    if not client.wait_for_service(timeout_sec=3.0):
+        node.get_logger().error('Service /control/pid_test not available.')
+        return
+
+    req = Trigger.Request()
+    future = client.call_async(req)
+    rclpy.spin_until_future_complete(node, future)
+    
+    if future.result() is not None:
+        node.get_logger().info(f"Response: {future.result().message}")
+    else:
+        node.get_logger().error("Exception while calling service.")
+    
+    node.destroy_node()
+    rclpy.shutdown()
+
+def check_battery_cli():
+    print("Connecting to Genomix to check battery...")
+    try:
+        components = TK3Components_tilthex(Path("logs"))
+        bl = components.rotorcraft.get_battery()['battery']['level']
+        
+        if bl <= 14.8:
+            color = '\x1b[0;30;41m' 
+        elif bl <= 15.3:
+            color = '\x1b[0;30;43m' 
+        else:
+            color = '\x1b[0;30;42m' 
+            
+        print(f"{color}Battery: {bl}V\x1b[0m")
+    except Exception as e:
+        print(f"Failed to read battery. Are Genomix components active? Error: {e}")
+
+def check_telemetry_cli():
+    print("Connecting to Genomix to read telemetry...")
+    try:
+        components = TK3Components_tilthex(Path("logs"))
+        rates = components.rotorcraft.get_sensor_rate()
+        state = components.pom.frame('robot')['frame']
+        
+        print(f"--- Telemetry Snapshot ---")
+        print(f"Rates: {rates}")
+        print(f"Pos [m]: {state['pos']}")
+        print(f"Vel [m/s]: {state['vel']}")
+        print(f"AngVel [rad/s]: {state['avel']}")
+    except Exception as e:
+        print(f"Failed to read telemetry. Error: {e}")
+
 def main(args=None): 
     try:
         os.nice(-10)
-    except Exception:
-        pass
+    except PermissionError:
+        import sys
+        print("WARNING: os.nice(-10) failed due to lack of permissions. Run with elevated privileges for RT performance.", file=sys.stderr)
+    except Exception as e:
+        import sys
+        print(f"WARNING: os.nice failed: {e}", file=sys.stderr)
         
     rclpy.init(args=args) 
     node = PolicyControlNodePyTorch() 
@@ -760,13 +1172,19 @@ def main(args=None):
         pass 
     finally: 
         node.destroy_node() 
-        rclpy.shutdown() 
+        rclpy.shutdown()
 
 if __name__ == '__main__': 
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == '--setpoint':
         publish_setpoint_cli(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == '--attitude':
+    elif len(sys.argv) > 1 and sys.argv[1] == '--setattitude':
         publish_attitude_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--battery':
+        check_battery_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--telemetry':
+        check_telemetry_cli()
+    elif len(sys.argv) > 1 and sys.argv[1] == '--pid-test':
+        trigger_pid_test_cli()
     else:
         main()

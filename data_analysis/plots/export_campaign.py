@@ -57,7 +57,7 @@ def generate_comparison_plots(path1: Path, label1: str, path2: Path, label2: str
         "font.serif": ["Computer Modern Roman"],
         "font.size": 18,            
         "axes.labelsize": 22,       
-        "legend.fontsize": 24,      # Legenda ancora più grande
+        "legend.fontsize": 24, 
         "xtick.labelsize": 16,
         "ytick.labelsize": 16,
         "axes.grid": True,

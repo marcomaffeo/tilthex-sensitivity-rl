@@ -250,3 +250,227 @@ def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
     cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
     yaw = np.arctan2(siny_cosp, cosy_cosp)
     return np.array([roll, pitch, yaw], dtype=np.float64)
+
+def save_and_plot_telemetry(log_data, policy_name, sim_folder: Path, frequency_hz: float, target_info="", skip_plots=False, formats=['png'], logger=None):
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    if logger: logger.info("Processing log data for export...") 
+    
+    times = log_data['t']
+    pos_act = log_data['pos']
+    vel_act = log_data['vel']
+    euler_act = log_data['euler']
+    pos_ref = log_data['pos_ref']
+    euler_ref = log_data['euler_ref']
+    actions = log_data['action']
+    avel_act = log_data['avel']
+    quats_act = log_data['quat']
+    quats_ref = log_data['quat_ref']
+    inf_times = log_data['inf_time']
+
+    sim_folder.mkdir(parents=True, exist_ok=True)
+
+    data_filename = "data.npz"
+    np.savez(
+        sim_folder / data_filename,
+        t=times,
+        pos=pos_act,
+        vel=vel_act,
+        quat=quats_act,
+        avel=avel_act,
+        pos_ref=pos_ref,
+        quat_ref=quats_ref,
+        action=actions,
+        inf_time=inf_times,
+        policy_name=policy_name
+    )
+    if logger: logger.info(f"Full telemetry saved: {sim_folder / data_filename}")
+
+    if skip_plots:
+        if logger: logger.info("skip_plots=True: skipping image generation.")
+        return  
+
+    err_pos_split = pos_act - pos_ref
+    err_euler_split = euler_act - euler_ref
+    err_euler_split = (err_euler_split + np.pi) % (2 * np.pi) - np.pi
+
+    err_vel_split = vel_act
+    err_avel_split = avel_act
+
+    pos_err = np.linalg.norm(pos_act - pos_ref, axis=1) 
+    vel_err = np.linalg.norm(vel_act, axis=1)  
+    avel_err = np.linalg.norm(avel_act, axis=1) 
+    dot_prod = np.clip(np.abs(np.sum(quats_act * quats_ref, axis=1)), -1.0, 1.0)
+    total_error_rad = 2.0 * np.arccos(dot_prod)
+
+    plt.style.use('default')
+    plt.rcParams.update({
+        'figure.facecolor': 'white',
+        'axes.facecolor': 'white',
+        'axes.grid': True,
+        'grid.color': '#d3d3d3',
+        'grid.linestyle': '--',
+        'grid.alpha': 0.8,
+        'axes.edgecolor': 'black',
+        'axes.linewidth': 1.2,
+        'font.family': 'serif',
+        'font.size': 12,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'legend.fontsize': 11,
+        'legend.frameon': True,
+        'legend.edgecolor': 'black',
+        'lines.linewidth': 2.0
+    })
+
+    c_act = '#1f77b4' 
+    c_ref = '#000000' 
+    c_att = '#d62728' 
+    c_mot = '#ff7f0e' 
+
+    fig1, axs1 = plt.subplots(2, 3, figsize=(18, 10)) 
+    fig1.suptitle(f'{policy_name} Position Tracking ({times[-1]:.1f}s){target_info}', fontsize=16, fontweight='bold') 
+    titles_pos = ['X [m]', 'Y [m]', 'Height (Z) [m]']
+    titles_euler = ['Roll [rad]', 'Pitch [rad]', 'Yaw [rad]']
+    
+    for i in range(3):
+        axs1[0, i].plot(times, pos_act[:, i], label='Actual', color=c_act)
+        axs1[0, i].plot(times, pos_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
+        axs1[0, i].set_title(titles_pos[i])
+        axs1[0, i].set_xlabel('Time [s]')
+        if i == 0: axs1[0, i].legend(loc='best')
+
+        axs1[1, i].plot(times, euler_act[:, i], label='Actual', color=c_att)
+        axs1[1, i].plot(times, euler_ref[:, i], '--', label='Desired', color=c_ref, alpha=0.8)
+        axs1[1, i].set_title(titles_euler[i])
+        axs1[1, i].set_xlabel('Time [s]')
+        if i == 0: axs1[1, i].legend(loc='best')
+        
+    fig1.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    fig2, axs2 = plt.subplots(2, 3, figsize=(18, 8)) 
+    fig2.suptitle('Rotor Forces [N]', fontsize=16, fontweight='bold') 
+    for i in range(min(6, actions.shape[1])):
+        row, col = i // 3, i % 3
+        axs2[row, col].plot(times, actions[:, i], color=c_mot)
+        axs2[row, col].set_title(f'Rotor {i+1}')
+        axs2[row, col].set_xlabel('Time [s]')
+        axs2[row, col].set_ylim(0, 12)
+    fig2.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    fig3, axs3 = plt.subplots(2, 2, figsize=(16, 10))
+    fig3.suptitle('Control Performance Metrics', fontsize=16, fontweight='bold')
+    err_data = [(pos_err, "Pos Error [m]", c_act), 
+                (total_error_rad, "Attitude Error [rad]", c_att), 
+                (vel_err, "Vel Error [m/s]", "#2ca02c"), 
+                (avel_err, "AngVel Error [rad/s]", "#9467bd")]
+    
+    for i, (data, label, col) in enumerate(err_data):
+        r, c = i // 2, i % 2
+        if len(data) > 0:
+            final_val = data[-1]
+            mae_val = np.mean(np.abs(data))
+        else:
+            final_val = 0.0
+            mae_val = 0.0
+            
+        legend_label = f"MAE: {mae_val:.4f} | Final: {final_val:.4f}"
+        axs3[r, c].plot(times, data, color=col, label=legend_label)
+        axs3[r, c].set_title(label)
+        axs3[r, c].set_xlabel('Time [s]')
+        axs3[r, c].legend(loc="upper right")
+        
+    fig3.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    fig4, ax4 = plt.subplots(figsize=(10, 6))
+    ax4.plot(times, inf_times * 1000.0, color='#2ca02c')
+    ax4.axhline(y=(1.0/frequency_hz)*1000.0, color=c_att, linestyle='--', label='Loop Limit')
+    ax4.set_title('JAX Inference Latency', fontsize=14, fontweight='bold')
+    ax4.set_ylabel('Time [ms]')
+    ax4.set_xlabel('Time [s]')
+    ax4.legend(loc='best')
+    fig4.tight_layout()
+
+    fig5, axs5 = plt.subplots(2, 3, figsize=(18, 10))
+    fig5.suptitle('Individual States Tracking Error', fontsize=16, fontweight='bold')
+    err_titles_pos = ['Error X [m]', 'Error Y [m]', 'Error Z [m]']
+    err_titles_euler = ['Error Roll [rad]', 'Error Pitch [rad]', 'Error Yaw [rad]']
+
+    for i in range(3):
+        mae_pos = np.mean(np.abs(err_pos_split[:, i]))
+        axs5[0, i].plot(times, err_pos_split[:, i], color=c_act, label=f'MAE: {mae_pos:.4f}')
+        axs5[0, i].set_title(err_titles_pos[i])
+        axs5[0, i].set_xlabel('Time [s]')
+        axs5[0, i].legend(loc='best')
+
+        mae_euler = np.mean(np.abs(err_euler_split[:, i]))
+        axs5[1, i].plot(times, err_euler_split[:, i], color=c_att, label=f'MAE: {mae_euler:.4f}')
+        axs5[1, i].set_title(err_titles_euler[i])
+        axs5[1, i].set_xlabel('Time [s]')
+        axs5[1, i].legend(loc='best')
+
+    fig5.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    fig6, axs6 = plt.subplots(2, 3, figsize=(18, 10))
+    fig6.suptitle('Pose Velocity components', fontsize=16, fontweight='bold')
+    titles_vel = ['Vx [m/s]', 'Vy [m/s]', 'Vz [m/s]']
+    titles_avel = ['wx [rad/s]', 'wy [rad/s]', 'wz [rad/s]']
+    
+    des_vel = np.zeros_like(times)
+    
+    for i in range(3):
+        axs6[0, i].plot(times, vel_act[:, i], color=c_act, label='Actual')
+        axs6[0, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+        axs6[0, i].set_title(titles_vel[i])
+        axs6[0, i].set_xlabel('Time [s]')
+        if i == 0: axs6[0, i].legend(loc='best')
+
+        axs6[1, i].plot(times, avel_act[:, i], color=c_att, label='Actual')
+        axs6[1, i].plot(times, des_vel, '--', color=c_ref, alpha=0.8, label='Desired')
+        axs6[1, i].set_title(titles_avel[i])
+        axs6[1, i].set_xlabel('Time [s]')
+        if i == 0: axs6[1, i].legend(loc='best')
+    fig6.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    fig7, axs7 = plt.subplots(2, 3, figsize=(18, 10))
+    fig7.suptitle('Velocity Error component', fontsize=16, fontweight='bold')
+    err_titles_vel = ['Error Vx [m/s]', 'Error Vy [m/s]', 'Error Vz [m/s]']
+    err_titles_avel = ['Error wx [rad/s]', 'Error wy [rad/s]', 'Error wz [rad/s]']
+    for i in range(3):
+        mae_vel = np.mean(np.abs(err_vel_split[:, i]))
+        axs7[0, i].plot(times, err_vel_split[:, i], color=c_act, label=f'MAE: {mae_vel:.4f}')
+        axs7[0, i].set_title(err_titles_vel[i])
+        axs7[0, i].set_xlabel('Time [s]')
+        axs7[0, i].legend(loc='best')
+
+        mae_avel = np.mean(np.abs(err_avel_split[:, i]))
+        axs7[1, i].plot(times, err_avel_split[:, i], color=c_att, label=f'MAE: {mae_avel:.4f}')
+        axs7[1, i].set_title(err_titles_avel[i])
+        axs7[1, i].set_xlabel('Time [s]')
+        axs7[1, i].legend(loc='best')
+    fig7.tight_layout(rect=[0, 0.03, 1, 0.95])
+
+    export_map = {
+        'position': fig1,
+        'inputs': fig2,
+        'tracking_errors': fig3,
+        'inference_latency': fig4,
+        'position_errors': fig5,
+        'velocities': fig6,
+        'velocity_error': fig7
+    }
+
+    for name, fig in export_map.items():
+        for fmt in formats:
+            ext = fmt.strip().lower()
+            save_path = sim_folder / f"{name}.{ext}"
+            kwargs = {'dpi': 300, 'bbox_inches': 'tight'} if ext == 'png' else {'bbox_inches': 'tight'}
+            fig.savefig(save_path, **kwargs)
+
+    for fig in export_map.values():
+        plt.close(fig)
+
+    if logger: logger.info(f"Plots successfully exported in {formats} to: {sim_folder}")

@@ -101,7 +101,7 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [7, 89, 14, 55, 123],  # Random seeds for reproducibility
+    "SEED": [4, 66, 39, 87, 224, 44],  # Random seeds for reproducibility
     "GAIN_STAB": [0.2],          # Penalità velocità angolare
     "GAIN_ATT": [2.0],                 # Reward per allineamento
     "GAIN_SM": [1],        # Penalità variazione comandi

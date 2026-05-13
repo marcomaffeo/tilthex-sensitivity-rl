@@ -58,10 +58,10 @@ class EnvParams(environment.EnvParams):
         pytree_node=False, default_factory=lambda: jnp.array([12.0, 12.0, 12.0, 12.0, 12.0, 12.0]),             # F = c_f*wmax^2
     )
     env_max_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([2.0, 2.0, 2.0])
+        pytree_node=False, default_factory=lambda: jnp.array([3.0, 3.0, 3.0])
     )
     env_min_limits: jax.Array = struct.field(
-        pytree_node=False, default_factory=lambda: jnp.array([-2.0, -2.0, 0.0])
+        pytree_node=False, default_factory=lambda: jnp.array([-3.0, -3.0, 0.0])
     )
 
     min_target_roll: float = struct.field(pytree_node=False, default=-10.0)

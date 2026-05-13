@@ -530,27 +530,29 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     print(f"[rollouts] Completed {rcfg.num_rollouts} trajectories for {run_dir}")
 
-    def save_series_to_npz(series_list, filename):
-        if not series_list: return
-        savez_path = run_dir / filename
-        
-        save_dict = {
-            "state": np.stack([s["state"] for s in series_list]),
-            "actions": np.stack([s["actions"] for s in series_list])
-        }
-        if "target_pos" in series_list[0]:
-            save_dict["target_pos"] = np.stack([s["target_pos"] for s in series_list])
-        if "target_attitude" in series_list[0]:
-            save_dict["target_attitude"] = np.stack([s["target_attitude"] for s in series_list])
-            
-        np.savez(savez_path, **save_dict)
-        print(f"[rollouts] Dati salvati in -> {savez_path}")
-
-    save_series_to_npz(all_series_nominal, "rollout_data_nominal.npz")
+    save_dict = {}
     
+    if all_series_nominal:
+        save_dict["state_nom"] = np.stack([s["state"] for s in all_series_nominal])
+        save_dict["actions_nom"] = np.stack([s["actions"] for s in all_series_nominal])
+        if "target_pos" in all_series_nominal[0]:
+            save_dict["target_pos_nom"] = np.stack([s["target_pos"] for s in all_series_nominal])
+        if "target_attitude" in all_series_nominal[0]:
+            save_dict["target_att_nom"] = np.stack([s["target_attitude"] for s in all_series_nominal])
+            
     if all_series_perturbed:
-        save_series_to_npz(all_series_nominal + all_series_perturbed, "rollout_data_perturbed.npz")
+        save_dict["state_pert"] = np.stack([s["state"] for s in all_series_perturbed])
+        save_dict["actions_pert"] = np.stack([s["actions"] for s in all_series_perturbed])
+        if "target_pos" in all_series_perturbed[0]:
+            save_dict["target_pos_pert"] = np.stack([s["target_pos"] for s in all_series_perturbed])
+        if "target_attitude" in all_series_perturbed[0]:
+            save_dict["target_att_pert"] = np.stack([s["target_attitude"] for s in all_series_perturbed])
 
+    savez_path = run_dir / "rollout_data.npz"
+    np.savez(savez_path, **save_dict)
+    print(f"[rollouts] Dati unificati salvati in -> {savez_path}")
+
+    # (Opzionale) Plot rapido originale
     if rcfg.plot:
         if all_series_nominal:
             print(f"[rollouts] Generating plot -> {rollouts_dir.parent / 'rollouts_nominal.png'}")
@@ -562,7 +564,6 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
         if all_series_perturbed:
             print(f"[rollouts] Generating plot -> {rollouts_dir.parent / 'rollouts_perturbed.png'}")
             try:
-                # Plotta tutto insieme (nominal + perturbato) per far vedere la dispersione
                 env_cls.plot_rollouts(all_series_nominal + all_series_perturbed, rollouts_dir.parent / "rollouts_perturbed.png")
             except Exception as exc:
                 print(f"[rollouts] Plotting perturbed failed: {exc}")

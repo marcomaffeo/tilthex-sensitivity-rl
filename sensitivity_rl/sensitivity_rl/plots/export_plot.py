@@ -15,7 +15,7 @@ def process_error_data(errors):
     t = np.arange(max_len) 
     return t, mean, std 
 
-def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot", nominal_dict=None): 
+def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=None, ext="svg"): 
     # ========================================== 
     # PUBLICATION-READY LATEX STYLE SETTINGS 
     # ========================================== 
@@ -68,7 +68,7 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
 
     all_dist_errors, all_att_errors = [], [] 
 
-    # 1. OVERLAY DATI NOMINALI (Disegnati per primi in sottofondo per gli input, ma forzati in primo piano per il 3D tramite zorder)
+    # 1. OVERLAY DATI NOMINALI
     if is_comparison:
         nom_state = nominal_dict["state"]
         nom_act = nominal_dict["actions"]
@@ -77,10 +77,7 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
             actions = nom_act[i]
             
             lbl_nom = r'$\mathrm{Nominal}$' if i == 0 else None
-            # Linea in primo piano, arancione
             ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=nom_color, linewidth=2.5, zorder=10, label=lbl_nom)
-            
-            # Start nominale distinto (senza label in legenda)
             ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color=nom_color, s=50, zorder=12)
 
             if actions.size > 0:
@@ -89,7 +86,7 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
                     if idx < actions.shape[1]:
                         ax.plot(t_steps, actions[:, idx], color=nom_color, alpha=1.0, linewidth=2.0, zorder=10)
 
-    # 2. PLOT DATI PRINCIPALI (Perturbati se auto-detect abilitato, altrimenti comportamento classico)
+    # 2. PLOT DATI PRINCIPALI
     for i in range(num_series): 
         state = state_data[i] 
         pos = state[:, :3] 
@@ -116,8 +113,6 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
         label_target = r'$\mathrm{Target}$' if i == 0 else None 
 
         ax_path.plot(pos[:, 0], pos[:, 1], pos[:, 2], color=c_3d, linewidth=lw_3d, zorder=zo_3d, label=lbl_3d) 
-        
-        # Renderizza tutti gli start
         ax_path.scatter(pos[0, 0], pos[0, 1], pos[0, 2], marker="o", color=start_color, s=40, zorder=11, label=label_start)  
 
         if target_pos_data is not None: 
@@ -139,7 +134,6 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
                 if idx < actions.shape[1]: 
                     ax.plot(t_steps, actions[:, idx], color=c_act, alpha=alpha_act, linewidth=lw_act, zorder=zo_3d)
                     
-                    # Genera la legenda congiunta solo nel primo subplot
                     if is_comparison and i == 0 and idx == 0:
                         ax.plot([], [], color=nom_color, linewidth=2.0, label=r'$\mathrm{Nominal}$')
                         ax.plot([], [], color=c_act, alpha=0.5, linewidth=1.0, label=r'$\mathrm{Perturbed}$')
@@ -167,14 +161,12 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
     ax_dist_err.set_ylabel(r'$e_p$ [m]') 
     handles, labels = ax_dist_err.get_legend_handles_labels() 
     if labels: 
-        # Legenda ingrandita per tracking error
         ax_dist_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=26) 
     ax_dist_err.tick_params(labelbottom=False)  
 
     ax_att_err.set(ylabel=r'$e_a$ [rad]', xlabel=r'$t$ [steps]') 
     handles, labels = ax_att_err.get_legend_handles_labels() 
     if labels: 
-        # Legenda ingrandita per tracking error
         ax_att_err.legend(loc='upper right', frameon=True, edgecolor='black', fontsize=26) 
     fig_err.align_ylabels() 
     fig_err.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.1, hspace=0.2) 
@@ -190,20 +182,33 @@ def generate_svg_plots(data_dict, output_dir: Path, base_name="publication_plot"
     fig_act.align_ylabels() 
     fig_act.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.1, hspace=0.3, wspace=0.3) 
 
-    # Salvataggio 
+    # Salvataggio Dinamico in base al formato scelto
     output_dir.mkdir(parents=True, exist_ok=True) 
-    fig_3d.savefig(output_dir / f"{base_name}_3d.svg", format='svg', transparent=False) 
-    fig_err.savefig(output_dir / f"{base_name}_errors.svg", format='svg', transparent=True) 
-    fig_act.savefig(output_dir / f"{base_name}_inputs.svg", format='svg', transparent=True) 
+    fig_3d.savefig(output_dir / f"{base_name}_3d.{ext}", format=ext, transparent=False) 
+    fig_err.savefig(output_dir / f"{base_name}_errors.{ext}", format=ext, transparent=True) 
+    fig_act.savefig(output_dir / f"{base_name}_inputs.{ext}", format=ext, transparent=True) 
 
     plt.close('all') 
-    print(f"SVG plots salvati in: {output_dir}") 
+    print(f"[{base_name.upper()}] Plot salvati in: {output_dir}") 
+
+def extract_data_dict(data, suffix):
+    """Estrae i dizionari specifici (nom/pert) dal file unificato."""
+    if f"state_{suffix}" not in data:
+        return None
+    res = {
+        "state": data[f"state_{suffix}"],
+        "actions": data[f"actions_{suffix}"]
+    }
+    if f"target_pos_{suffix}" in data:
+        res["target_pos"] = data[f"target_pos_{suffix}"]
+    if f"target_att_{suffix}" in data:
+        res["target_attitude"] = data[f"target_att_{suffix}"]
+    return res
 
 if __name__ == "__main__": 
-    parser = argparse.ArgumentParser(description="Generate SVG plots da dati di rollout in formato .npz.") 
-    parser.add_argument("--data", type=str, required=True, help="Percorso del file .npz principale") 
-    parser.add_argument("--nominal", type=str, default=None, help="[Opzionale] Forza un overlay nominale") 
-    parser.add_argument("--outdir", type=str, default="logs/svg_plots", help="Cartella di output") 
+    parser = argparse.ArgumentParser(description="Generate PDF/SVG plots from unificated .npz rollout data.") 
+    parser.add_argument("--data", type=str, required=True, help="Percorso del file rollout_data.npz") 
+    parser.add_argument("--format", type=str, choices=['svg', 'pdf'], default='svg', help="Formato di esportazione dei grafici (default: svg)")
     args = parser.parse_args() 
 
     data_path = Path(args.data) 
@@ -211,22 +216,28 @@ if __name__ == "__main__":
         print(f"Errore: File {data_path} non trovato.") 
         exit(1) 
 
-    print(f"Caricamento dati principali da {data_path}...") 
+    print(f"Caricamento dati unificati da {data_path}...") 
     main_data = np.load(data_path, allow_pickle=True) 
-     
-    # AUTO-DETECT LOGIC: bypassa l'assenza del flag --nominal in pixi.toml
-    nom_path = None
-    if args.nominal:
-        nom_path = Path(args.nominal)
+    
+    base_outdir = data_path.parent / "exported_plots"
+    
+    # Estrai dati Nominali
+    nom_dict = extract_data_dict(main_data, "nom")
+    # Estrai dati Perturbati
+    pert_dict = extract_data_dict(main_data, "pert")
+    
+    if nom_dict is not None:
+        out_nom = base_outdir / "nominal"
+        print("Generazione plot nominali...")
+        generate_plots(nom_dict, out_nom, base_name="nominal", nominal_dict=None, ext=args.format)
     else:
-        if "perturbed" in data_path.name:
-            candidate = data_path.parent / data_path.name.replace("perturbed", "nominal")
-            if candidate.exists():
-                print(f"Auto-detect: Rilevato file perturbato. Carico overlay nominale automatico da {candidate.name}")
-                nom_path = candidate
-                
-    nom_data = None
-    if nom_path and nom_path.exists():
-        nom_data = np.load(nom_path, allow_pickle=True)
+        print("Dati nominali non trovati nel file .npz.")
 
-    generate_svg_plots(main_data, Path(args.outdir), base_name=data_path.stem, nominal_dict=nom_data)
+    if pert_dict is not None:
+        out_pert = base_outdir / "perturbed"
+        print("Generazione plot perturbati (con overlay nominale se presente)...")
+        # Passiamo il nom_dict per creare l'overlay arancione nei grafici perturbati
+        generate_plots(pert_dict, out_pert, base_name="perturbed", nominal_dict=nom_dict, ext=args.format)
+    else:
+        print("Dati perturbati non trovati nel file .npz.")
+        

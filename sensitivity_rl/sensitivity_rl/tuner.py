@@ -101,7 +101,7 @@ ENVIRONMENTS = ["tilthex_v1"]
 # Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
     # Example sweeps - uncomment and modify as needed
-    "SEED": [4, 66, 39, 87, 224, 44],  # Random seeds for reproducibility
+    "SEED": [12, 54, 99, 123, 80, 77, 14, 66, 39, 87, 224, 44],  # Random seeds for reproducibility
     "GAIN_STAB": [0.2],          # Penalità velocità angolare
     "GAIN_ATT": [2.0],                 # Reward per allineamento
     "GAIN_SM": [1],        # Penalità variazione comandi
@@ -113,7 +113,7 @@ SWEEP_PARAMS = {
     #"NUM_ENVS": [2048, 4096],
     #"GAMMA": [0.98],
     #"GAE_LAMBDA": [0.9, 0.95],
-    "CLIP_EPS": [0.1],
+    "CLIP_EPS": [0.1, 0.2],
     #"UPDATE_EPOCHS": [5],
     #"ENT_COEF": [0.001],
     #"DOMAIN_RANDOMIZATION": [True, False],
@@ -146,7 +146,7 @@ METHOD_SPECIFIC_SWEEPS = {
     },
     "sppo_aug_grad_param_dual": {
         "DOMAIN_RANDOMIZATION": [True, False],
-        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.05],
+        "SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.02, 0.03, 0.04, 0.05],
     },
     "sac": {
         "SEED": [0, 1],

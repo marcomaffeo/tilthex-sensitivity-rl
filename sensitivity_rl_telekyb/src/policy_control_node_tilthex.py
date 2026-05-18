@@ -55,7 +55,7 @@ class PolicyControlNode(Node):
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
         self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_10') 
-        self.declare_parameter('policy_duration', 5.0)  
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0)
         self.declare_parameter('takeoff_height', 0.08) #0.08 for exp
 

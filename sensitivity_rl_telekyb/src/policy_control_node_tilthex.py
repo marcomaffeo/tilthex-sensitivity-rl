@@ -57,7 +57,7 @@ class PolicyControlNode(Node):
         self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_10') 
         self.declare_parameter('policy_duration', 5.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.08) #0.05 for exp
+        self.declare_parameter('takeoff_height', 0.08) #0.08 for exp
 
         # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
         # Policy_5 same of Policy_4 but with noise distrubation
@@ -69,7 +69,11 @@ class PolicyControlNode(Node):
         # Policy_11 best SPPO last sweep nominal and perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
         # Policy_12 best PPO last sweep with mass = 2.9 and range [2.6, 3.2] with noise disturbation
         # Policy_14 second best SPPO last sweep perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
-        # Policy_15 same of Policy 14 but different seed
+        # Policy_15 same of Policy 14 but with different seed 
+        # Policy_16 best SPPO last sweep nominal augmented box size env 
+        # Policy_17 best PPO last sweep perturbed augmented box size env 
+        # Policy_18 second best SPPO last sweep nominal augmented box size env
+
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
@@ -547,6 +551,22 @@ class PolicyControlNode(Node):
         
         self.get_logger().info(f'--- TIMED PID TEST ACTIVE ({duration}s) ---')
 
+        # Determine output folder early so POM knows where to log
+        if self.custom_log_dir:
+            sim_folder = Path(self.custom_log_dir)
+        else:
+            timestamp = strftime("%Y%m%d_%H%M%S") 
+            sim_folder = self.log_path / f'PID_{timestamp}'
+        sim_folder.mkdir(parents=True, exist_ok=True)
+
+        # Start Genom3 POM Raw Logging
+        try:
+            self.components.pom.log_state(str(sim_folder / 'pom.log'))
+            self.components.pom.log_measurements(str(sim_folder / 'pom-measurements.log'))
+            self.get_logger().info(f"POM raw logging started in {sim_folder.name}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to start POM raw logging: {e}")
+
         max_steps = int(duration * frequency * 1.1) + 10
         
         log_inf_time = np.zeros(max_steps)
@@ -609,6 +629,12 @@ class PolicyControlNode(Node):
 
         self.get_logger().info("PID Test logging finished.")
 
+        # Stop Genom3 POM Raw Logging
+        try:
+            self.components.pom.log_stop()
+        except Exception:
+            pass
+
         log_data = {
             't': log_t[:step_idx],
             'pos': log_pos[:step_idx],
@@ -624,12 +650,6 @@ class PolicyControlNode(Node):
         }
 
         if step_idx > 10:
-            if self.custom_log_dir:
-                sim_folder = Path(self.custom_log_dir)
-            else:
-                timestamp = strftime("%Y%m%d_%H%M%S") 
-                sim_folder = self.log_path / f'PID_{timestamp}'
-                
             try:
                 plot_thread = threading.Thread(
                     target=save_and_plot_telemetry, 
@@ -650,6 +670,22 @@ class PolicyControlNode(Node):
         rate = self.create_rate(frequency)
 
         self.get_logger().info(f'--- POLICY ACTIVE ({duration}s) ---') 
+
+        # Determine output folder early so POM knows where to log
+        if self.custom_log_dir:
+            sim_folder = Path(self.custom_log_dir)
+        else:
+            timestamp = strftime("%Y%m%d_%H%M%S") 
+            sim_folder = self.log_path / f'{policy_name}_{timestamp}'
+        sim_folder.mkdir(parents=True, exist_ok=True)
+
+        # Start Genom3 POM Raw Logging
+        try:
+            self.components.pom.log_state(str(sim_folder / 'pom.log'))
+            self.components.pom.log_measurements(str(sim_folder / 'pom-measurements.log'))
+            self.get_logger().info(f"POM raw logging started in {sim_folder.name}")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to start POM raw logging: {e}")
 
         max_steps = int(duration * frequency * 1.1) + 10 
         
@@ -754,6 +790,12 @@ class PolicyControlNode(Node):
 
         self.get_logger().warn("Switching back to PID control") 
 
+        # Stop Genom3 POM Raw Logging
+        try:
+            self.components.pom.log_stop()
+        except Exception:
+            pass
+
         try: 
             self.components.rotorcraft.servo(ack=True) 
             self.components.rotorcraft.set_ramp(1e-3) 
@@ -794,12 +836,6 @@ class PolicyControlNode(Node):
         }
 
         if step_idx > 10: 
-            if self.custom_log_dir:
-                sim_folder = Path(self.custom_log_dir)
-            else:
-                timestamp = strftime("%Y%m%d_%H%M%S") 
-                sim_folder = self.log_path / f'{policy_name}_{timestamp}'
-                
             try: 
                 plot_thread = threading.Thread(
                     target=save_and_plot_telemetry, 

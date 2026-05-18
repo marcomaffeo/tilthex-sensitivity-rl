@@ -54,10 +54,10 @@ class PolicyControlNode(Node):
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_10') 
-        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_16') 
+        self.declare_parameter('policy_duration', 30.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.08) #0.08 for exp
+        self.declare_parameter('takeoff_height', 0.2) #0.08 for exp
 
         # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
         # Policy_5 same of Policy_4 but with noise distrubation

@@ -55,9 +55,9 @@ class PolicyControlNode(Node):
         self.create_subscription(Quaternion, '/policy/attitude_target', self.attitude_callback, 10, callback_group=self.cb_group)
 
         self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_16') 
-        self.declare_parameter('policy_duration', 30.0)  
+        self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.2) #0.08 for exp
+        self.declare_parameter('takeoff_height', 0.8) #0.08 for exp
 
         # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
         # Policy_5 same of Policy_4 but with noise distrubation
@@ -74,7 +74,8 @@ class PolicyControlNode(Node):
         # Policy_17 best PPO last sweep perturbed augmented box size env 
         # Policy_18 second best SPPO last sweep nominal augmented box size env
 
-
+        self.declare_parameter('enable_action_bias', False)
+        self.declare_parameter('nominal_hover_action', [0.0])
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
 
@@ -111,11 +112,27 @@ class PolicyControlNode(Node):
             activation_start_time = perf_counter()
             self.policy = Policy(Path(policy_dir))
             
-            self.get_logger().info("JAX Warm-up: Compiling policy...")
-            dummy_obs = jnp.zeros((17,), dtype=jnp.float32)
-            for _ in range(5):
-                _ = self.policy.get_action(dummy_obs)
+            self.get_logger().info("JAX Warm-up: Compiling policy and estimating bias...")
+            # [to_target_body(3), vel_body(3), quat_wxyz(4), avel(3), q_error_body(4)]
+            hover_obs = jnp.array([
+                0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                1.0, 0.0, 0.0, 0.0,
+                0.0, 0.0, 0.0,
+                1.0, 0.0, 0.0, 0.0
+            ], dtype=jnp.float32)
             
+            for _ in range(5):
+                u_rl_hover = np.asarray(self.policy.get_action(hover_obs), dtype=np.float64)
+            
+            self.action_bias = np.zeros_like(u_rl_hover)
+            if self.get_parameter('enable_action_bias').value:
+                u_nom = np.array(self.get_parameter('nominal_hover_action').value, dtype=np.float64)
+                if u_nom.size == 1:
+                    u_nom = np.full_like(u_rl_hover, u_nom.item())
+                self.action_bias = u_rl_hover - u_nom
+                self.get_logger().info(f"Action bias computed: {self.action_bias}")
+
             activation_time = perf_counter() - activation_start_time
             self.get_logger().info(f"JAX Compilation complete in {activation_time:.3f}s. Ready for real-time.")
         except Exception as e:
@@ -744,9 +761,13 @@ class PolicyControlNode(Node):
                 t_inf_start = perf_counter()
                 action = np.asarray(self.policy.get_action(obs), dtype=np.float64) 
                 log_inf_time[step_idx] = perf_counter() - t_inf_start
-                
-                if np.any(np.isnan(action)): continue 
 
+                # Apply steady-state action offset correction
+                if self.get_parameter('enable_action_bias').value:
+                    action -= self.action_bias
+        
+                if np.any(np.isnan(action)): continue
+                
                 rotor_speed = action_to_rotor_speed(self.components, action) 
                 if any(np.isnan(rotor_speed)): continue 
 

@@ -3,6 +3,10 @@
 Unified ROS2 node for TiltHex RL policy and PID testing with synchronized logging. 
 """ 
 import os 
+import sys
+
+os.environ["JAX_PLATFORMS"] = "cpu"
+
 import threading 
 from pathlib import Path 
 from time import perf_counter, sleep, strftime 
@@ -58,6 +62,12 @@ class PolicyControlNode(Node):
         self.declare_parameter('policy_duration', 10.0)  
         self.declare_parameter('frequency_hz', 100.0)
         self.declare_parameter('takeoff_height', 0.8) #0.08 for exp
+        self.declare_parameter('enable_action_bias', True)
+        self.declare_parameter('drone_mass_kg', 2.936)
+        self.declare_parameter('tilt_angle_deg', 20.0)
+
+        self.declare_parameter('skip_plots', False)
+        self.declare_parameter('plot_formats', ['png'])
 
         # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
         # Policy_5 same of Policy_4 but with noise distrubation
@@ -74,11 +84,6 @@ class PolicyControlNode(Node):
         # Policy_17 best PPO last sweep perturbed augmented box size env 
         # Policy_18 second best SPPO last sweep nominal augmented box size env
 
-        self.declare_parameter('enable_action_bias', False)
-        self.declare_parameter('nominal_hover_action', [0.0])
-        self.declare_parameter('skip_plots', False)
-        self.declare_parameter('plot_formats', ['png'])
-
         self.lock = threading.Lock() 
 
         self.pid_active = False 
@@ -88,7 +93,8 @@ class PolicyControlNode(Node):
         self.target_hold_z = 0.0  
         self.hold_x = 0.0 
         self.hold_y = 0.0 
-        self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)  
+        self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)
+        self.reference_setpoint = None  
 
         self.policy: Optional[Policy] = None 
         self.policy_thread: Optional[threading.Thread] = None 
@@ -113,7 +119,6 @@ class PolicyControlNode(Node):
             self.policy = Policy(Path(policy_dir))
             
             self.get_logger().info("JAX Warm-up: Compiling policy and estimating bias...")
-            # [to_target_body(3), vel_body(3), quat_wxyz(4), avel(3), q_error_body(4)]
             hover_obs = jnp.array([
                 0.0, 0.0, 0.0,
                 0.0, 0.0, 0.0,
@@ -127,10 +132,17 @@ class PolicyControlNode(Node):
             
             self.action_bias = np.zeros_like(u_rl_hover)
             if self.get_parameter('enable_action_bias').value:
-                u_nom = np.array(self.get_parameter('nominal_hover_action').value, dtype=np.float64)
-                if u_nom.size == 1:
-                    u_nom = np.full_like(u_rl_hover, u_nom.item())
-                self.action_bias = u_rl_hover - u_nom
+                mass = self.get_parameter('drone_mass_kg').value
+                tilt_rad = np.radians(self.get_parameter('tilt_angle_deg').value)
+                gravity = 9.81
+                f_nom = (mass * gravity) / (6.0 * np.cos(tilt_rad))
+
+                u_nom = np.full_like(u_rl_hover, f_nom)
+
+                mean_rl_thrust = float(np.mean(u_rl_hover))
+                collective_bias = mean_rl_thrust - f_nom
+
+                self.action_bias = np.full_like(u_rl_hover, collective_bias)
                 self.get_logger().info(f"Action bias computed: {self.action_bias}")
 
             activation_time = perf_counter() - activation_start_time
@@ -214,7 +226,7 @@ class PolicyControlNode(Node):
             state = read_state_and_rot_w(self.components) 
             if state is None: 
                 raise RuntimeError("Cannot read state for takeoff.") 
-
+            
             start_x, start_y, start_z = state[0], state[1], state[2] 
             takeoff_h = self.get_parameter('takeoff_height').value 
             
@@ -226,6 +238,12 @@ class PolicyControlNode(Node):
             self.init_yaw = euler[2] 
             current_yaw = euler[2] 
             
+            self.get_logger().info(
+                f"*** TAKEOFF TRIGGERED - CURRENT POM STATE: "
+                f"Pos [{start_x:.3f}, {start_y:.3f}, {start_z:.3f}]m | "
+                f"RPY [{np.degrees(euler[0]):.2f}°, {np.degrees(euler[1]):.2f}°, {np.degrees(euler[2]):.2f}°] ***"
+            )
+            
             target_quat_w = np.cos(current_yaw / 2.0)
             target_quat_z = np.sin(current_yaw / 2.0)
 
@@ -233,7 +251,8 @@ class PolicyControlNode(Node):
                 self.setpoint = np.array([
                     start_x, start_y, self.target_hold_z, 
                     target_quat_w, 0.0, 0.0, target_quat_z
-                ])
+                ], dtype=np.float64)
+                self.reference_setpoint = self.setpoint.copy()
 
             self.components.rotorcraft.set_ramp(1e-3) 
             self.components.rotorcraft.servo(ack=True) 
@@ -242,15 +261,45 @@ class PolicyControlNode(Node):
             self.components.nhfc.set_position(start_x, start_y, self.target_hold_z, float(current_yaw)) 
             
             self.is_flying = True 
+            
+            # Start continuous background monitoring thread for PID
+            threading.Thread(target=self._pid_monitor, daemon=True).start()
+
             response.success = True 
             response.message = f'Takeoff PID initiated to {self.target_hold_z:.2f}m, Yaw lock: {current_yaw:.2f}rad.' 
-            self.get_logger().info(response.message) 
             
         except Exception as e: 
             response.success = False 
             response.message = f'Takeoff failed: {str(e)}' 
             self.get_logger().error(response.message) 
         return response
+
+    def _pid_monitor(self):
+        self.get_logger().info("--- CONTINUOUS PID MONITOR ACTIVE ---")
+        start_time = perf_counter()
+        
+        while self.is_flying:
+            if (self.policy_thread is not None and self.policy_thread.is_alive()) or \
+               (self.pid_test_thread is not None and self.pid_test_thread.is_alive()):
+                sleep(0.5)
+                continue
+                
+            current_time = perf_counter() - start_time
+            state = read_state_and_rot_w(self.components)
+            if state is not None:
+                curr_z = state[2]
+                euler = quat_to_euler_xyz(state[6:10])
+                
+                with self.lock:
+                    target_z = self.target_hold_z
+                
+                self.get_logger().info(
+                    f"PID T: {current_time:.1f}s | "
+                    f"Z: {curr_z:.2f}m (Ref: {target_z:.2f}m) | "
+                    f"RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad"
+                )
+                
+            sleep(0.5)
     
     def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
         try:
@@ -355,7 +404,6 @@ class PolicyControlNode(Node):
         curr_quat_wxyz = state[6:10]
         curr_euler = quat_to_euler_xyz(curr_quat_wxyz) # [roll, pitch, yaw]
         
-        # Valori inviati interpretati come delta relativi (x = avanti, y = sinistra, z = su)
         delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         
         yaw_rot = Rotation.from_euler('z', curr_euler[2])
@@ -372,7 +420,6 @@ class PolicyControlNode(Node):
             curr_euler[2] + delta_euler[2]
         ]
         
-        # Wrap angolare per non sforare i -180/180
         target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
 
         q_target = Rotation.from_euler('xyz', target_rpy).as_quat() # [x, y, z, w]
@@ -387,6 +434,7 @@ class PolicyControlNode(Node):
                 q_target[1], 
                 q_target[2]  
             ], dtype=np.float64)
+            self.reference_setpoint = self.setpoint.copy()
             self.custom_setpoint_active = True
 
         if self.pid_active:
@@ -442,9 +490,7 @@ class PolicyControlNode(Node):
         self.get_logger().info(f"Relative Attitude applied! Holding Pos, New Target Yaw: {np.degrees(target_rpy[2]):.2f}°")
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
-
         activation_start_time = perf_counter()
-        
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed before starting policy.') 
@@ -560,7 +606,6 @@ class PolicyControlNode(Node):
         
         return jnp.array(obs)
     
-    
     def _pid_test_loop(self):
         frequency = self.get_parameter('frequency_hz').value
         duration = self.get_parameter('policy_duration').value
@@ -568,7 +613,6 @@ class PolicyControlNode(Node):
         
         self.get_logger().info(f'--- TIMED PID TEST ACTIVE ({duration}s) ---')
 
-        # Determine output folder early so POM knows where to log
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
@@ -576,7 +620,6 @@ class PolicyControlNode(Node):
             sim_folder = self.log_path / f'PID_{timestamp}'
         sim_folder.mkdir(parents=True, exist_ok=True)
 
-        # Start Genom3 POM Raw Logging
         try:
             self.components.pom.log_state(str(sim_folder / 'pom.log'))
             self.components.pom.log_measurements(str(sim_folder / 'pom-measurements.log'))
@@ -594,11 +637,10 @@ class PolicyControlNode(Node):
         log_avel = np.zeros((max_steps, 3))
         log_pos_ref = np.zeros((max_steps, 3))
         log_euler_ref = np.zeros((max_steps, 3))
-        log_action = np.zeros((max_steps, 6)) # Dummy actions for PID
+        log_action = np.zeros((max_steps, 6)) 
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
-        # _pid_test_loop
         target_info = ""
         if self.custom_setpoint_active:
             with self.lock:
@@ -646,7 +688,6 @@ class PolicyControlNode(Node):
 
         self.get_logger().info("PID Test logging finished.")
 
-        # Stop Genom3 POM Raw Logging
         try:
             self.components.pom.log_stop()
         except Exception:
@@ -688,7 +729,6 @@ class PolicyControlNode(Node):
 
         self.get_logger().info(f'--- POLICY ACTIVE ({duration}s) ---') 
 
-        # Determine output folder early so POM knows where to log
         if self.custom_log_dir:
             sim_folder = Path(self.custom_log_dir)
         else:
@@ -696,13 +736,15 @@ class PolicyControlNode(Node):
             sim_folder = self.log_path / f'{policy_name}_{timestamp}'
         sim_folder.mkdir(parents=True, exist_ok=True)
 
-        # Start Genom3 POM Raw Logging
         try:
             self.components.pom.log_state(str(sim_folder / 'pom.log'))
             self.components.pom.log_measurements(str(sim_folder / 'pom-measurements.log'))
             self.get_logger().info(f"POM raw logging started in {sim_folder.name}")
         except Exception as e:
             self.get_logger().warn(f"Failed to start POM raw logging: {e}")
+
+        with self.lock:
+            original_setpoint = self.setpoint.copy()
 
         max_steps = int(duration * frequency * 1.1) + 10 
         
@@ -718,7 +760,6 @@ class PolicyControlNode(Node):
         log_quat = np.zeros((max_steps, 4))
         log_quat_ref = np.zeros((max_steps, 4))
 
-        # _policy_loop
         target_info = ""
         try: 
             self.components.nhfc.stop()
@@ -736,16 +777,18 @@ class PolicyControlNode(Node):
                     target_info = f"\nTarget: Pos [{self.setpoint[0]:.2f}, {self.setpoint[1]:.2f}, {self.setpoint[2]:.2f}]m | RPY [{np.degrees(euler_tgt[0]):.2f}°, {np.degrees(euler_tgt[1]):.2f}°, {np.degrees(euler_tgt[2]):.2f}°]"
                 self.get_logger().info(f"Using custom CLI setpoint: Z={self.setpoint[2]:.3f}m")
                 self.custom_setpoint_active = False 
+            
+            with self.lock:
+                self.get_logger().info(f"*** POLICY STARTING Z REFERENCE: {self.setpoint[2]:.3f} m ***")
                 
         except Exception: 
-            pass 
+            pass
 
         start_time = perf_counter() 
         step_idx = 0
 
         while not self.policy_stop_event.is_set() and step_idx < max_steps: 
             current_time = perf_counter() - start_time 
-            
             if current_time > duration: 
                 self.get_logger().info("Duration exceeded.") 
                 break 
@@ -757,24 +800,20 @@ class PolicyControlNode(Node):
                 if raw_state is None: continue 
 
                 obs = self._build_observation(raw_state) 
-
                 t_inf_start = perf_counter()
                 action = np.asarray(self.policy.get_action(obs), dtype=np.float64) 
                 log_inf_time[step_idx] = perf_counter() - t_inf_start
 
-                # Apply steady-state action offset correction
                 if self.get_parameter('enable_action_bias').value:
                     action -= self.action_bias
         
                 if np.any(np.isnan(action)): continue
-                
                 rotor_speed = action_to_rotor_speed(self.components, action) 
                 if any(np.isnan(rotor_speed)): continue 
 
                 self.components.rotorcraft.set_velocity(rotor_speed, ack=False)
             
                 euler = quat_to_euler_xyz(raw_state[6:10])
-
                 with self.lock: 
                     target_pos = self.setpoint[0:3].copy()
                     target_quat = self.setpoint[3:7].copy()
@@ -789,56 +828,35 @@ class PolicyControlNode(Node):
                 log_action[step_idx] = action
                 log_quat[step_idx] = raw_state[6:10]
                 log_quat_ref[step_idx] = target_quat
-
                 step_idx += 1
 
                 if step_idx % 50 == 0:
-                    min_act = np.min(action)
-                    max_act = np.max(action)
-                    
-                    self.get_logger().info(
-                        f"T: {current_time:.1f}s | "
-                        f"Z: {raw_state[2]:.2f}m | "
-                        f"RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad | "
-                        f"Act[min,max]: [{min_act:+.2f}, {max_act:+.2f}]"
-                    )
-
+                    self.get_logger().info(f"T: {current_time:.1f}s | Z: {raw_state[2]:.2f}m | RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad")
             except Exception as exc: 
                 self.get_logger().error(f'Policy loop error: {exc}') 
                 break 
-
             rate.sleep()
 
         self.get_logger().warn("Switching back to PID control") 
-
-        # Stop Genom3 POM Raw Logging
-        try:
-            self.components.pom.log_stop()
-        except Exception:
-            pass
+        try: self.components.pom.log_stop()
+        except Exception: pass
 
         try: 
+            with self.lock:
+                if self.reference_setpoint is not None:
+                    target = self.reference_setpoint
+                else:
+                    target = self.setpoint 
+                
+                target_x, target_y, target_z = target[0], target[1], target[2]
+                target_yaw = quat_to_euler_xyz(target[3:7])[2]
+
+            self.components.nhfc.set_position(target_x, target_y, target_z, float(target_yaw))
+            self.get_logger().info(f"*** PID RESTORED Z: {target_z:.3f} m ***")
+            
+            self.components.nhfc.servo(ack=True) 
             self.components.rotorcraft.servo(ack=True) 
             self.components.rotorcraft.set_ramp(1e-3) 
-            self.components.nhfc.servo(ack=True) 
-            
-            end_state = read_state_and_rot_w(self.components)
-            if end_state is not None:
-                end_x, end_y, end_z = end_state[0], end_state[1], end_state[2]
-                end_yaw = quat_to_euler_xyz(end_state[6:10])[2]
-                
-                # Update hold variables
-                self.hold_x = end_x
-                self.hold_y = end_y
-                self.target_hold_z = end_z
-                self.init_yaw = end_yaw
-                
-                self.components.nhfc.set_position(end_x, end_y, end_z, float(end_yaw))
-                self.get_logger().info(f"PID engaged. Holding end pose: X={end_x:.2f}, Y={end_y:.2f}, Z={end_z:.2f}m") 
-            else:
-                self.components.nhfc.set_position(self.hold_x, self.hold_y, self.target_hold_z, float(self.init_yaw))
-                self.get_logger().info("PID engaged. Sensors unreadable, falling back to old pose.")
-
         except Exception as e: 
             self.get_logger().error(f"RECOVERY FAILED: {e}")
 
@@ -965,11 +983,11 @@ def check_battery_cli():
         bl = components.rotorcraft.get_battery()['battery']['level']
         
         if bl <= 14.8:
-            color = '\x1b[0;30;41m' # Red
+            color = '\x1b[0;30;41m' 
         elif bl <= 15.3:
-            color = '\x1b[0;30;43m' # Yellow
+            color = '\x1b[0;30;43m' 
         else:
-            color = '\x1b[0;30;42m' # Green
+            color = '\x1b[0;30;42m' 
             
         print(f"{color}Battery: {bl}V\x1b[0m")
     except Exception as e:

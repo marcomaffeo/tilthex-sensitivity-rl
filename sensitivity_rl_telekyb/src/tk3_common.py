@@ -131,13 +131,13 @@ class TK3Components_tilthex:
             'cf': 12.0e-4, 'ct': 2.4e-5
         })
         self.nhfc.set_emerg({'emerg': {'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3}})
-        self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 0.15}})
+        self.nhfc.set_saturation({'sat': {'x': 1.0, 'v': 1.0, 'ix': 1.0}})
         self.nhfc.set_servo_gain({ 'gain': {
             'Kpxy': 8.0, 'Kpz': 12.0,
             'Kqxy': 10.0, 'Kqz': 10.0,   
             'Kvxy': 8.0, 'Kvz': 8.0, 
             'Kwxy': 1.5, 'Kwz': 1.0, 
-            'Kixy': 0.0, 'Kiz': 0.3
+            'Kixy': 0.0, 'Kiz': 0.8
         }})
 
         self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'}) 

@@ -27,13 +27,14 @@ policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
 policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/Trigger" }
 policy-takeoff = { cmd = "ros2 service call /control/takeoff std_srvs/srv/Trigger" }
 policy-loop-start = { cmd = "ros2 service call /policy/start std_srvs/srv/Trigger" }
+policy-loop-takeoff = { cmd = "ros2 service call /policy/takeoff std_srvs/srv/Trigger" }
+policy-loop-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
 policy-loop-stop = { cmd = "ros2 service call /policy/stop std_srvs/srv/Trigger" }
 policy-pid-start = { cmd = "ros2 service call /policy/pid_start std_srvs/srv/Trigger" }
 policy-pid-stop = { cmd = "ros2 service call /policy/pid_stop std_srvs/srv/Trigger" }
 policy-pid-test = { cmd = "ros2 service call /control/pid_test std_srvs/srv/Trigger" }
-policy-land = { cmd = "ros2 service call /policy/land std_srvs/srv/Trigger" }
+policy-land = { cmd = "ros2 service call /control/land std_srvs/srv/Trigger" }
 policy-stop = { cmd = "ros2 service call /control/stop std_srvs/srv/Trigger" }
-
 
 [tasks.policy-setpoint]
 args = [
@@ -53,6 +54,20 @@ args = [
   { "arg" = "yaw", "default" = "0.0" },
 ]
 cmd = "python src/policy_control_node_tilthex.py --setattitude {{ roll }} {{ pitch }} {{ yaw }}"
+
+[tasks.policy-mission]
+args = [
+  { "arg" = "x", "default" = "0.1" },
+  { "arg" = "y", "default" = "0.0" },
+  { "arg" = "z", "default" = "0.0" },
+  { "arg" = "roll", "default" = "0.0" },
+  { "arg" = "pitch", "default" = "0.0" },
+  { "arg" = "yaw", "default" = "0.0" },
+  { "arg" = "wait1", "default" = "5.0" },
+  { "arg" = "wait2", "default" = "5.0" },
+  { "arg" = "wait3", "default" = "5.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --mission {{ x }} {{ y }} {{ z }} {{ roll }} {{ pitch }} {{ yaw }} {{ wait1 }} {{ wait2 }} {{ wait3 }}"
 
 [tasks.sim]
 args = [

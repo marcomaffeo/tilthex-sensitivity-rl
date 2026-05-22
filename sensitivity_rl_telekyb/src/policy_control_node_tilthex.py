@@ -67,14 +67,14 @@ class PolicyControlNode(Node):
         
         self.info_pub = self.create_publisher(String, '/policy/staged_info', 10)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_16') 
-        self.declare_parameter('policy_duration', 1000.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_14') 
+        self.declare_parameter('policy_duration', 100.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.2) 
-        self.declare_parameter('takeoff_ramp_rate_mps', 0.25) 
+        self.declare_parameter('takeoff_height', 0.8) 
+        self.declare_parameter('takeoff_ramp_rate_mps', 0.2) 
         
         self.declare_parameter('enable_action_bias', True)
-        self.declare_parameter('drone_mass_kg', 2.936)
+        self.declare_parameter('drone_mass_kg', 2.908)
         self.declare_parameter('tilt_angle_deg', 20.0)
 
         self.declare_parameter('skip_plots', False)
@@ -89,6 +89,7 @@ class PolicyControlNode(Node):
         self.target_hold_z = 0.0  
         self.hold_x = 0.0 
         self.hold_y = 0.0 
+        self.ground_z = 0.0  # Conserva la quota assoluta del pavimento letta all'armaggio
         
         self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.reference_setpoint = None  
@@ -331,6 +332,7 @@ class PolicyControlNode(Node):
                 self.hold_x = initial_state[0]
                 self.hold_y = initial_state[1]
                 self.target_hold_z = initial_state[2]
+                self.ground_z = initial_state[2]  # Salva la quota reale del pavimento
                 
                 euler_init = quat_to_euler_xyz(initial_state[6:10])
                 self.init_yaw = euler_init[2]  
@@ -345,7 +347,7 @@ class PolicyControlNode(Node):
                 self.setpoint = self.pending_setpoint.copy()
                 self.action_bias = self.pending_bias.copy()
 
-            self.get_logger().info(f"Initial Z: POM={initial_state[2]:.3f} m")
+            self.get_logger().info(f"Initial Z (Ground): POM={initial_state[2]:.3f} m")
 
             self.motors_armed = True 
             response.success = True 
@@ -371,7 +373,7 @@ class PolicyControlNode(Node):
             
             start_x, start_y, start_z = state[0], state[1], state[2]
             takeoff_h = float(self.get_parameter('takeoff_height').value)
-            target_z = takeoff_h
+            target_z = start_z + takeoff_h  # RELATIVO
 
             self.target_hold_z = target_z
             self.hold_x = start_x
@@ -422,7 +424,6 @@ class PolicyControlNode(Node):
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
 
-            # Se per qualche motivo la policy sta girando, la interrompiamo per passare al PID
             if self.policy_thread and self.policy_thread.is_alive():
                 self._stop_takeoff_ramp()
                 self.policy_stop_event.set()
@@ -435,7 +436,7 @@ class PolicyControlNode(Node):
 
             curr_x, curr_y, start_z = state[0], state[1], state[2]
             curr_yaw = quat_to_euler_xyz(state[6:10])[2]
-            target_z = 0.05 
+            target_z = self.ground_z + 0.05  # RELATIVO AL PAVIMENTO INIZIALE
             
             target_quat_w = np.cos(curr_yaw / 2.0)
             target_quat_z = np.sin(curr_yaw / 2.0)
@@ -447,7 +448,6 @@ class PolicyControlNode(Node):
                 self.target_hold_z = target_z
                 self.init_yaw = curr_yaw
 
-            # Riattiviamo servo NHFC e rotorcraft (se non lo erano già)
             self.components.rotorcraft.set_ramp(1e-3)
             self.components.rotorcraft.servo(ack=True)
             self.components.nhfc.servo(ack=True)
@@ -584,7 +584,7 @@ class PolicyControlNode(Node):
 
         curr_pos = state[0:3]
         curr_quat_wxyz = state[6:10]
-        curr_euler = quat_to_euler_xyz(curr_quat_wxyz)
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz) 
         
         delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         with self.lock:
@@ -729,8 +729,10 @@ class PolicyControlNode(Node):
 
             start_x, start_y, start_z = state[0], state[1], state[2]
             takeoff_h = float(self.get_parameter('takeoff_height').value)
-            target_z = takeoff_h
-            current_yaw = quat_to_euler_xyz(state[6:10])[2]
+            target_z = start_z + takeoff_h  # RELATIVO
+
+            euler = quat_to_euler_xyz(state[6:10])
+            current_yaw = euler[2] 
 
             self.get_logger().info(
                 f"Policy takeoff: start_z POM={start_z:.3f} m, "
@@ -812,7 +814,7 @@ class PolicyControlNode(Node):
 
             curr_x, curr_y, start_z = state[0], state[1], state[2]
             curr_yaw = quat_to_euler_xyz(state[6:10])[2]
-            target_z = 0.05 
+            target_z = self.ground_z + 0.05  # RELATIVO AL PAVIMENTO INIZIALE
             
             target_quat_w = np.cos(curr_yaw / 2.0)
             target_quat_z = np.sin(curr_yaw / 2.0)
@@ -1376,6 +1378,7 @@ def run_mission_cli(args):
 
     node.destroy_node()
     rclpy.shutdown()
+
 
 def check_battery_cli():
     print("Connecting to Genomix to check battery...")

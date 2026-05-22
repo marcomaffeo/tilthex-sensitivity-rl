@@ -43,18 +43,23 @@ class PolicyControlNode(Node):
         
         self.cb_group = ReentrantCallbackGroup() 
         
+        # PID Control Services
         self.create_service(Trigger, '/control/setup', self.setup_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/start', self.start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/control/takeoff', self.takeoff_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/control/land', self.control_land_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/control/stop', self.stop_callback, callback_group=self.cb_group) 
 
+        # Policy Loop Services
         self.create_service(Trigger, '/policy/start', self.policy_start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/policy/takeoff', self.policy_takeoff_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/policy/stop', self.policy_stop_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/policy/land', self.land_callback, callback_group=self.cb_group) 
         
+        # PID Navigation Services
         self.create_service(Trigger, '/policy/pid_start', self.pid_start_callback, callback_group=self.cb_group) 
         self.create_service(Trigger, '/policy/pid_stop', self.pid_stop_callback, callback_group=self.cb_group)
+        self.create_service(Trigger, '/policy/pid_go', self.pid_go_callback, callback_group=self.cb_group)
         self.create_service(Trigger, '/control/pid_test', self.pid_test_callback, callback_group=self.cb_group)
 
         self.create_subscription(PoseStamped, '/policy/setpoint', self.setpoint_callback, 10, callback_group=self.cb_group)
@@ -63,32 +68,17 @@ class PolicyControlNode(Node):
         self.info_pub = self.create_publisher(String, '/policy/staged_info', 10)
 
         self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_16') 
-        self.declare_parameter('policy_duration', 500.0)  
+        self.declare_parameter('policy_duration', 1000.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.8) # 0.08 for exp
-        self.declare_parameter('takeoff_ramp_rate_mps', 0.25) # vertical takeoff reference ramp [m/s]; <=0 disables ramp
+        self.declare_parameter('takeoff_height', 0.2) 
+        self.declare_parameter('takeoff_ramp_rate_mps', 0.25) 
         
-        self.declare_parameter('enable_action_bias', False)
+        self.declare_parameter('enable_action_bias', True)
         self.declare_parameter('drone_mass_kg', 2.936)
         self.declare_parameter('tilt_angle_deg', 20.0)
 
         self.declare_parameter('skip_plots', False)
         self.declare_parameter('plot_formats', ['png'])
-
-        # SPPO_4B same of SPPO_4 but sppo_aug_grad_param_dual instead of sppo_grad
-        # Policy_5 same of Policy_4 but with noise distrubation
-        # Policy_6 best PPO last sweep nominal with noise disturbation
-        # Policy_7 best SPPO last sweep perturbed with noise disturbation
-        # Policy_8 best SPPO last sweep nominal with noise disturbation
-        # Policy_9 same of Policy_4 but with tilthex mass = 2.75 and range [2.5, 3.0] 
-        # Policy_10 same of Policy_9 but with noise disturbation
-        # Policy_11 best SPPO last sweep nominal and perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
-        # Policy_12 best PPO last sweep with mass = 2.9 and range [2.6, 3.2] with noise disturbation
-        # Policy_14 second best SPPO last sweep perturbed with mass = 2.9 and range [2.6, 3.2] with noise disturbation
-        # Policy_15 same of Policy 14 but with different seed 
-        # Policy_16 best SPPO last sweep nominal augmented box size env 
-        # Policy_17 best PPO last sweep perturbed augmented box size env 
-        # Policy_18 second best SPPO last sweep nominal augmented box size env
 
         self.lock = threading.Lock() 
 
@@ -100,7 +90,6 @@ class PolicyControlNode(Node):
         self.hold_x = 0.0 
         self.hold_y = 0.0 
         
-        # Variabili Active (in uso) e Pending (in attesa)
         self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.reference_setpoint = None  
         self.pending_setpoint = self.setpoint.copy()
@@ -116,7 +105,6 @@ class PolicyControlNode(Node):
         self.takeoff_ramp_thread: Optional[threading.Thread] = None
         self.takeoff_ramp_stop_event = threading.Event()
         
-        # Thread elements for PID test
         self.pid_test_thread: Optional[threading.Thread] = None
         self.pid_test_stop_event = threading.Event()
         self.components_lock = threading.RLock()
@@ -136,7 +124,6 @@ class PolicyControlNode(Node):
             
             self.get_logger().info("JAX Warm-up: Compiling policy and estimating bias...")
             
-            # Calcoliamo il bias iniziale in base al setpoint di default
             self._update_pending_state(self.setpoint)
             with self.lock:
                 self.action_bias = self.pending_bias.copy()
@@ -162,16 +149,10 @@ class PolicyControlNode(Node):
             self.components.rotorcraft.set_velocity(rotor_speed, ack=ack)
 
     def _update_pending_state(self, new_setpoint):
-        """ 
-        Aggiorna il setpoint in memoria e calcola il NUOVO bias nominale 
-        basato sul nuovo orientamento, per poi sottrarlo quando viene chiamato lo start.
-        """
         with self.lock:
             self.pending_setpoint = new_setpoint.copy()
             target_quat_wxyz = new_setpoint[3:7].copy()
             
-        # Creiamo un'osservazione nominale ideale per questo specifico target 
-        # (pos_err = 0, vel = 0, target_quat = target desiderato, avel = 0, q_error = 0)
         obs = np.array([
             0.0, 0.0, 0.0,            
             0.0, 0.0, 0.0,            
@@ -181,7 +162,6 @@ class PolicyControlNode(Node):
         ], dtype=np.float32)
         
         if self.policy is not None:
-            # Output della rete a regime per questo specifico orientamento
             u_rl = np.asarray(self.policy.get_action(jnp.array(obs)), dtype=np.float64)
             
             if self.get_parameter('enable_action_bias').value:
@@ -191,8 +171,6 @@ class PolicyControlNode(Node):
                 f_nom = (mass * gravity) / (6.0 * np.cos(tilt_rad))
                 
                 u_nom = np.full_like(u_rl, f_nom)
-                
-                # BIAS DIVERSO PER OGNI ROTORE (Element-wise) come richiesto
                 new_bias = u_rl - u_nom
             else:
                 new_bias = np.zeros(6, dtype=np.float64)
@@ -283,6 +261,33 @@ class PolicyControlNode(Node):
         self.takeoff_ramp_thread = threading.Thread(target=ramp_loop, daemon=True)
         self.takeoff_ramp_thread.start()
 
+    def _pid_monitor(self):
+        self.get_logger().info("--- CONTINUOUS PID MONITOR ACTIVE ---")
+        start_time = perf_counter()
+        
+        while self.is_flying:
+            if (self.policy_thread is not None and self.policy_thread.is_alive()) or \
+               (self.pid_test_thread is not None and self.pid_test_thread.is_alive()):
+                sleep(0.5)
+                continue
+                
+            current_time = perf_counter() - start_time
+            state = self._read_state()
+            if state is not None:
+                curr_z = state[2]
+                euler = quat_to_euler_xyz(state[6:10])
+                
+                with self.lock:
+                    target_z = self.target_hold_z
+                
+                self.get_logger().info(
+                    f"PID T: {current_time:.1f}s | "
+                    f"Z: {curr_z:.2f}m (Ref: {target_z:.2f}m) | "
+                    f"RPY: {euler[0]:+.2f}, {euler[1]:+.2f}, {euler[2]:+.2f} rad"
+                )
+                
+            sleep(0.5)
+
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
         try: 
             self.components.setup() 
@@ -335,15 +340,12 @@ class PolicyControlNode(Node):
                     np.cos(self.init_yaw / 2.0), 0.0, 0.0, np.sin(self.init_yaw / 2.0)
                 ])
 
-            # Inizializziamo il bias per la posizione attuale
             self._update_pending_state(start_setpoint)
             with self.lock:
                 self.setpoint = self.pending_setpoint.copy()
                 self.action_bias = self.pending_bias.copy()
 
-            self.get_logger().info(
-                f"Initial Z: POM={initial_state[2]:.3f} m"
-            )
+            self.get_logger().info(f"Initial Z: POM={initial_state[2]:.3f} m")
 
             self.motors_armed = True 
             response.success = True 
@@ -404,7 +406,6 @@ class PolicyControlNode(Node):
             
             self.is_flying = True 
             
-            # Start continuous background monitoring thread for PID
             threading.Thread(target=self._pid_monitor, daemon=True).start()
 
             response.success = True 
@@ -416,12 +417,62 @@ class PolicyControlNode(Node):
             self.get_logger().error(response.message) 
         return response
 
-    def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
+    def control_land_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        try: 
+            if not self.motors_armed: 
+                raise RuntimeError('Motors must be armed to land.') 
+
+            # Se per qualche motivo la policy sta girando, la interrompiamo per passare al PID
+            if self.policy_thread and self.policy_thread.is_alive():
+                self._stop_takeoff_ramp()
+                self.policy_stop_event.set()
+                self.policy_thread.join(timeout=2.0)
+                self.policy_thread = None
+
+            state = self._read_state() 
+            if state is None: 
+                raise RuntimeError('Cannot read state for landing.') 
+
+            curr_x, curr_y, start_z = state[0], state[1], state[2]
+            curr_yaw = quat_to_euler_xyz(state[6:10])[2]
+            target_z = 0.05 
+            
+            target_quat_w = np.cos(curr_yaw / 2.0)
+            target_quat_z = np.sin(curr_yaw / 2.0)
+            target_quat_wxyz = np.array([target_quat_w, 0.0, 0.0, target_quat_z], dtype=np.float64)
+
+            with self.lock:
+                self.hold_x = curr_x
+                self.hold_y = curr_y
+                self.target_hold_z = target_z
+                self.init_yaw = curr_yaw
+
+            # Riattiviamo servo NHFC e rotorcraft (se non lo erano già)
+            self.components.rotorcraft.set_ramp(1e-3)
+            self.components.rotorcraft.servo(ack=True)
+            self.components.nhfc.servo(ack=True)
+
+            self._start_takeoff_ramp(
+                curr_x, curr_y, start_z, target_z,
+                target_quat_wxyz, float(curr_yaw),
+                use_pid=True,
+                label="PID landing"
+            )
+            
+            response.success = True 
+            response.message = f'PID landing initiated descending to {target_z:.2f}m' 
+            self.get_logger().info(response.message)
+        except Exception as e: 
+            response.success = False 
+            response.message = f'Land failed: {str(e)}' 
+            self.get_logger().error(response.message)
+        return response 
+
+    def pid_go_callback(self, request: Trigger.Request, response: Trigger.Response):
         try:
             if not self.motors_armed: raise RuntimeError('Motors not armed.')
             self.pid_active = True
             
-            # Applica i dati in pending
             with self.lock:
                 self.setpoint = self.pending_setpoint.copy()
                 self.reference_setpoint = self.setpoint.copy()
@@ -431,11 +482,15 @@ class PolicyControlNode(Node):
             self._set_nhfc_position(target[0], target[1], target[2], float(yaw))
             
             response.success = True
-            response.message = f'PID Navigation active. Applied target: {target[0:3]}'
+            response.message = f'PID moving to staged target: Pos [{target[0]:.2f}, {target[1]:.2f}, {target[2]:.2f}], Yaw {np.degrees(yaw):.2f}°'
+            self.get_logger().info(response.message)
         except Exception as e:
             response.success = False
-            response.message = f'PID Start failed: {e}'
+            response.message = f'PID Go failed: {e}'
         return response
+
+    def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
+        return self.pid_go_callback(request, response)
 
     def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
         self.pid_active = False
@@ -529,7 +584,7 @@ class PolicyControlNode(Node):
 
         curr_pos = state[0:3]
         curr_quat_wxyz = state[6:10]
-        curr_euler = quat_to_euler_xyz(curr_quat_wxyz) # [roll, pitch, yaw]
+        curr_euler = quat_to_euler_xyz(curr_quat_wxyz)
         
         delta_pos = np.array([msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
         with self.lock:
@@ -552,20 +607,19 @@ class PolicyControlNode(Node):
         
         target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
 
-        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() # [x, y, z, w]
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() 
         
         new_setpoint = np.array([ 
             target_pos[0], target_pos[1], target_pos[2], 
             q_target[3], q_target[0], q_target[1], q_target[2]  
         ], dtype=np.float64)
         
-        # Salviamo il setpoint e calcoliamo il bias senza applicarlo al drone
         self._update_pending_state(new_setpoint)
         self.custom_setpoint_active = True
 
         self.get_logger().info(
             f"STAGED Setpoint! Pos: [{target_pos[0]:.2f}, {target_pos[1]:.2f}, {target_pos[2]:.2f}]m | Target Yaw: {np.degrees(target_rpy[2]):.2f}°. "
-            f"Call /policy/start to apply and move."
+            f"Call /policy/start or /policy/pid_go to apply and move."
         )
 
     def attitude_callback(self, msg: Quaternion): 
@@ -601,20 +655,19 @@ class PolicyControlNode(Node):
         
         target_rpy[2] = (target_rpy[2] + np.pi) % (2 * np.pi) - np.pi
         
-        q_target = Rotation.from_euler('xyz', target_rpy).as_quat()  # [x, y, z, w]
+        q_target = Rotation.from_euler('xyz', target_rpy).as_quat() 
             
         new_setpoint = np.array([
             target_pos[0], target_pos[1], target_pos[2],
             q_target[3], q_target[0], q_target[1], q_target[2]
         ], dtype=np.float64)
 
-        # Salviamo l'attitude e calcoliamo il bias senza applicarlo al drone
         self._update_pending_state(new_setpoint)
         self.custom_setpoint_active = True
 
         self.get_logger().info(
             f"STAGED Attitude! Yaw: {np.degrees(target_rpy[2]):.2f}°. "
-            f"Call /policy/start to apply and move."
+            f"Call /policy/start or /policy/pid_go to apply and move."
         )
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
@@ -625,14 +678,12 @@ class PolicyControlNode(Node):
             if self.policy is None:
                 raise RuntimeError('Policy failed to load during node initialization.')
             
-            # Trasferiamo i valori "pending" nei valori "active" reali usati nel loop
             with self.lock:
                 self.setpoint = self.pending_setpoint.copy()
                 self.reference_setpoint = self.setpoint.copy()
                 self.action_bias = self.pending_bias.copy()
                 self.custom_setpoint_active = False
 
-            # Se la policy sta GIA' girando, basta applicare i valori e il drone si muoverà dinamicamente
             if self.policy_thread is not None and self.policy_thread.is_alive(): 
                 response.success = True 
                 response.message = 'Policy is already running. Staged target and bias dynamically applied!' 
@@ -696,7 +747,6 @@ class PolicyControlNode(Node):
                 self.target_hold_z = target_z
                 self.init_yaw = current_yaw
 
-            # Questo fa sia il pending che l'active update interno
             self._set_internal_setpoint(start_x, start_y, start_z, target_quat_wxyz)
 
             self.pid_active = False
@@ -762,7 +812,7 @@ class PolicyControlNode(Node):
 
             curr_x, curr_y, start_z = state[0], state[1], state[2]
             curr_yaw = quat_to_euler_xyz(state[6:10])[2]
-            target_z = 0.05  # Quota di atterraggio
+            target_z = 0.05 
             
             target_quat_w = np.cos(curr_yaw / 2.0)
             target_quat_z = np.sin(curr_yaw / 2.0)
@@ -774,7 +824,6 @@ class PolicyControlNode(Node):
                 self.target_hold_z = target_z
                 self.init_yaw = curr_yaw
 
-            # Avvia la rampa di discesa usando la policy attiva
             self._start_takeoff_ramp(
                 curr_x, curr_y, start_z, target_z,
                 target_quat_wxyz, float(curr_yaw),
@@ -802,8 +851,6 @@ class PolicyControlNode(Node):
         with self.lock: 
             target_pos = self.setpoint[0:3].copy()
             target_quat_wxyz = self.setpoint[3:7].copy()
-
-        # target_pos and pos are expressed in the same raw POM/world frame.
         
         to_target_world = target_pos - pos 
         rot_mat = quat_to_rot_matrix_wxyz(quat_wxyz)
@@ -1276,7 +1323,6 @@ def run_mission_cli(args):
     stop_cli = node.create_client(Trigger, '/control/stop')
     setpoint_pub = node.create_publisher(PoseStamped, '/policy/setpoint', 10)
 
-    # Verifica che tutti i servizi siano online
     for cli, name in [(takeoff_cli, 'takeoff'), (start_cli, 'start'), (land_cli, 'land'), (stop_cli, 'stop')]:
         if not cli.wait_for_service(timeout_sec=3.0):
             node.get_logger().error(f'Service {name} not available. Is the node running?')
@@ -1312,7 +1358,7 @@ def run_mission_cli(args):
     
     node.get_logger().info(f'[MISSION] Staging RELATIVE setpoint: Pos=[{x}, {y}, {z}], RPY=[{r_deg}, {p_deg}, {y_deg}]')
     setpoint_pub.publish(msg)
-    time.sleep(0.5) # Diamo tempo al nodo di recepire il messaggio e ricalcolare il bias
+    time.sleep(0.5) 
 
     # --- FASE 3: ESECUZIONE SETPOINT ---
     call_srv(start_cli, '/policy/start')
@@ -1327,50 +1373,6 @@ def run_mission_cli(args):
     # --- FASE 5: SHUTDOWN AUTOMATICO ---
     call_srv(stop_cli, '/control/stop')
     node.get_logger().info('[MISSION] Mission sequence complete. Motors stopped!')
-
-    node.destroy_node()
-    rclpy.shutdown()
-
-    def call_srv(cli, name):
-        node.get_logger().info(f'Calling {name}...')
-        req = Trigger.Request()
-        future = cli.call_async(req)
-        rclpy.spin_until_future_complete(node, future)
-        if future.result() is not None:
-            node.get_logger().info(f"Response: {future.result().message}")
-        else:
-            node.get_logger().error(f"{name} failed.")
-
-    # --- FASE 1: TAKEOFF ---
-    call_srv(takeoff_cli, '/policy/takeoff')
-    node.get_logger().info(f'[MISSION] Waiting {wait1}s for takeoff to complete...')
-    time.sleep(wait1)
-
-    # --- FASE 2: STAGE DEL SETPOINT ---
-    quat_xyzw = Rotation.from_euler('xyz', [r_deg, p_deg, y_deg], degrees=True).as_quat()
-    msg = PoseStamped()
-    msg.header.frame_id = 'world'
-    msg.header.stamp = node.get_clock().now().to_msg()
-    msg.pose.position.x = x
-    msg.pose.position.y = y
-    msg.pose.position.z = z
-    msg.pose.orientation.x = quat_xyzw[0]
-    msg.pose.orientation.y = quat_xyzw[1]
-    msg.pose.orientation.z = quat_xyzw[2]
-    msg.pose.orientation.w = quat_xyzw[3]
-    
-    node.get_logger().info(f'[MISSION] Staging setpoint: Pos=[{x}, {y}, {z}], RPY=[{r_deg}, {p_deg}, {y_deg}]')
-    setpoint_pub.publish(msg)
-    time.sleep(0.5) # Diamo tempo al nodo di recepire il messaggio e ricalcolare il bias
-
-    # --- FASE 3: ESECUZIONE SETPOINT ---
-    call_srv(start_cli, '/policy/start')
-    node.get_logger().info(f'[MISSION] Waiting {wait2}s to hold position...')
-    time.sleep(wait2)
-
-    # --- FASE 4: LANDING ---
-    call_srv(land_cli, '/policy/land')
-    node.get_logger().info('[MISSION] Mission sequence complete!')
 
     node.destroy_node()
     rclpy.shutdown()

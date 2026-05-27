@@ -4,6 +4,57 @@ import distrax
 import jax
 import jax.numpy as jnp
 
+class TanhTransformedNormal:
+    """Gaussian policy with tanh squashing for bounded action spaces.
+
+    Samples are drawn as a = tanh(u), u ~ N(loc, scale), giving a ∈ (-1, 1)^d.
+    The log-probability is corrected for the change of variables:
+
+        log π(a) = log N(arctanh(a); loc, scale) - Σ_i log(1 - a_i²)
+
+    Attributes:
+        loc  : pre-tanh mean μ — kept as an attribute for sensitivity Jacobians
+               that need d(tanh(μ))/dθ via jax.jacfwd over the network.
+        scale: per-dimension standard deviations σ.
+    """
+
+    def __init__(self, loc: jax.Array, scale: jax.Array):
+        self._normal = distrax.MultivariateNormalDiag(loc, scale)
+        self.loc = loc    # pre-tanh mean
+        self.scale = scale
+
+    def sample(self, seed: jax.Array) -> jax.Array:
+        u = self._normal.sample(seed=seed)
+        return jnp.tanh(u)
+
+    def log_prob(self, a: jax.Array) -> jax.Array:
+        """Log probability with tanh change-of-variables correction."""
+        eps = 1e-6
+        a_safe = jnp.clip(a, -1.0 + eps, 1.0 - eps)
+        u = jnp.arctanh(a_safe)
+        # log N(arctanh(a); loc, scale) - Σ log(1 - a_i²)
+        return self._normal.log_prob(u) - jnp.sum(
+            jnp.log(1.0 - a_safe ** 2 + eps), axis=-1
+        )
+
+    def mode(self) -> jax.Array:
+        """Deterministic mode: tanh of the pre-tanh mean."""
+        return jnp.tanh(self.loc)
+
+    def mean(self) -> jax.Array:
+        """Approximate mean tanh(μ) — exact only when σ → 0."""
+        return jnp.tanh(self.loc)
+
+    def entropy(self) -> jax.Array:
+        """Gaussian entropy H(N(loc, scale)) as a proxy exploration bonus.
+
+        The true entropy H(tanh(N)) = H(N) - E[Σ log(1-tanh²(u_i))] ≤ H(N).
+        Using H(N) is a differentiable upper-bound that preserves the exploration
+        incentive without requiring Monte Carlo estimation.
+        """
+        return self._normal.entropy()
+
+
 
 class ActorCritic(nnx.Module):
     def __init__(
@@ -78,9 +129,12 @@ class ActorCritic(nnx.Module):
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
-        return distrax.MultivariateNormalDiag(
+        return TanhTransformedNormal(
             actor_mean, jnp.exp(self.actor_log_std.value)
         )
+        # return distrax.MultivariateNormalDiag(
+        #     actor_mean, jnp.exp(self.actor_log_std.value)
+        # )
 
     def critic(self, x):
         """Critic forward pass."""

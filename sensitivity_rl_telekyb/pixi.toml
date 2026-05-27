@@ -70,6 +70,26 @@ args = [
 ]
 cmd = "python src/policy_control_node_tilthex.py --mission {{ x }} {{ y }} {{ z }} {{ roll }} {{ pitch }} {{ yaw }} {{ wait1 }} {{ wait2 }} {{ wait3 }}"
 
+[tasks.policy-takeoff-to-point-land]
+args = [
+  { "arg" = "takeoff", "default" = "0.8" },
+  { "arg" = "x", "default" = "0.1" },
+  { "arg" = "y", "default" = "0.0" },
+  { "arg" = "z", "default" = "0.0" },
+  { "arg" = "wait", "default" = "6.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --takeoff-to-point-land {{ takeoff }} {{ x }} {{ y }} {{ z }} {{ wait }}"
+
+[tasks.policy-takeoff-attitude-land]
+args = [
+  { "arg" = "takeoff", "default" = "0.8" },
+  { "arg" = "roll", "default" = "0.0" },
+  { "arg" = "pitch", "default" = "0.0" },
+  { "arg" = "yaw", "default" = "0.0" },
+  { "arg" = "wait", "default" = "6.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --takeoff-attitude-land {{ takeoff }} {{ roll }} {{ pitch }} {{ yaw }} {{ wait }}"
+
 [tasks.sim]
 args = [
   { "arg" = "world_file", "default" = "worlds/myworld.world" },

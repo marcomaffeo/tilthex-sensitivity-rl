@@ -129,12 +129,12 @@ class ActorCritic(nnx.Module):
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
-        return TanhTransformedNormal(
-            actor_mean, jnp.exp(self.actor_log_std.value)
-        )
-        # return distrax.MultivariateNormalDiag(
+        # return TanhTransformedNormal(
         #     actor_mean, jnp.exp(self.actor_log_std.value)
         # )
+        return distrax.MultivariateNormalDiag(
+            actor_mean, jnp.exp(self.actor_log_std.value)
+        )
 
     def critic(self, x):
         """Critic forward pass."""

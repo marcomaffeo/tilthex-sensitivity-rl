@@ -67,19 +67,23 @@ class PolicyControlNode(Node):
         
         self.info_pub = self.create_publisher(String, '/policy/staged_info', 10)
 
-        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_tommaso') 
-        self.declare_parameter('policy_duration', 10.0)  
+        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_14') 
+        self.declare_parameter('policy_duration', 1000.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 1.85) 
+        self.declare_parameter('takeoff_height', 0.8) 
         self.declare_parameter('takeoff_ramp_rate_mps', 0.2) 
         self.declare_parameter('mission_takeoff_xy_ref_enabled', False)
         self.declare_parameter('mission_takeoff_x_ref', 0.0)
         self.declare_parameter('mission_takeoff_y_ref', 0.0)
         self.declare_parameter('mission_land_z_ref_enabled', False)
         self.declare_parameter('mission_land_z_ref', 0.0)
+        self.declare_parameter('mission_attitude_ref_enabled', False)
+        self.declare_parameter('mission_roll_ref', 0.0)
+        self.declare_parameter('mission_pitch_ref', 0.0)
+        self.declare_parameter('mission_yaw_ref', 0.0)
         
         self.declare_parameter('enable_action_bias', True)
-        self.declare_parameter('drone_mass_kg', 2.968)
+        self.declare_parameter('drone_mass_kg', 3.0324)
         self.declare_parameter('tilt_angle_deg', 20.0)
 
         self.declare_parameter('skip_plots', False)
@@ -107,6 +111,7 @@ class PolicyControlNode(Node):
         self.policy_thread: Optional[threading.Thread] = None 
         self.policy_stop_event = threading.Event() 
         self.policy_land_event = threading.Event() 
+        self.policy_skip_pid_restore_event = threading.Event()
 
         self.takeoff_ramp_thread: Optional[threading.Thread] = None
         self.takeoff_ramp_stop_event = threading.Event()
@@ -153,6 +158,21 @@ class PolicyControlNode(Node):
     def _set_rotor_velocity(self, rotor_speed, ack=False):
         with self.components_lock:
             self.components.rotorcraft.set_velocity(rotor_speed, ack=ack)
+
+    @staticmethod
+    def _quat_wxyz_from_rpy(roll, pitch, yaw):
+        cr = np.cos(roll / 2.0)
+        sr = np.sin(roll / 2.0)
+        cp = np.cos(pitch / 2.0)
+        sp = np.sin(pitch / 2.0)
+        cy = np.cos(yaw / 2.0)
+        sy = np.sin(yaw / 2.0)
+        return np.array([
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy
+        ], dtype=np.float64)
 
     def _update_pending_state(self, new_setpoint):
         with self.lock:
@@ -408,6 +428,7 @@ class PolicyControlNode(Node):
 
             if self.policy_thread and self.policy_thread.is_alive():
                 self._stop_takeoff_ramp()
+                self.policy_skip_pid_restore_event.clear()
                 self.policy_stop_event.set()
                 self.policy_thread.join(timeout=2.0)
                 self.policy_thread = None
@@ -542,6 +563,7 @@ class PolicyControlNode(Node):
             self._stop_takeoff_ramp()
 
             if self.policy_thread and self.policy_thread.is_alive(): 
+                self.policy_skip_pid_restore_event.set()
                 self.policy_stop_event.set() 
                 self.policy_thread.join(timeout=2.0) 
                 self.policy_thread = None 
@@ -713,6 +735,7 @@ class PolicyControlNode(Node):
                 self.get_logger().info(response.message)
                 return response 
             
+            self.policy_skip_pid_restore_event.clear()
             self.policy_stop_event.clear() 
             self.policy_land_event.clear() 
             self.is_flying = True 
@@ -762,23 +785,31 @@ class PolicyControlNode(Node):
 
             euler = quat_to_euler_xyz(state[6:10])
             current_yaw = euler[2] 
+            if bool(self.get_parameter('mission_attitude_ref_enabled').value):
+                roll_ref = float(self.get_parameter('mission_roll_ref').value)
+                pitch_ref = float(self.get_parameter('mission_pitch_ref').value)
+                yaw_ref = float(self.get_parameter('mission_yaw_ref').value)
+            else:
+                roll_ref = 0.0
+                pitch_ref = 0.0
+                yaw_ref = current_yaw
 
             self.get_logger().info(
                 f"Policy takeoff: start_z POM={start_z:.3f} m, "
                 f"target_z absolute={target_z:.3f} m, "
                 f"xy_ref=[{start_x:.3f}, {start_y:.3f}] m "
-                f"(measured=[{measured_start_x:.3f}, {measured_start_y:.3f}] m)"
+                f"(measured=[{measured_start_x:.3f}, {measured_start_y:.3f}] m), "
+                f"rpy_ref=[{roll_ref:+.3f}, {pitch_ref:+.3f}, {yaw_ref:+.3f}] rad "
+                f"(measured_yaw={current_yaw:+.3f} rad)"
             )
 
-            target_quat_w = np.cos(current_yaw / 2.0)
-            target_quat_z = np.sin(current_yaw / 2.0)
-            target_quat_wxyz = np.array([target_quat_w, 0.0, 0.0, target_quat_z], dtype=np.float64)
+            target_quat_wxyz = self._quat_wxyz_from_rpy(roll_ref, pitch_ref, yaw_ref)
 
             with self.lock:
                 self.hold_x = start_x
                 self.hold_y = start_y
                 self.target_hold_z = target_z
-                self.init_yaw = current_yaw
+                self.init_yaw = yaw_ref
                 self.custom_setpoint_active = True
 
             self._set_internal_setpoint(start_x, start_y, start_z, target_quat_wxyz)
@@ -787,6 +818,7 @@ class PolicyControlNode(Node):
             self.components.rotorcraft.set_ramp(1e-3)
             self.components.rotorcraft.servo(ack=True)
 
+            self.policy_skip_pid_restore_event.clear()
             self.policy_stop_event.clear()
             self.policy_land_event.clear()
             self.is_flying = True
@@ -795,7 +827,7 @@ class PolicyControlNode(Node):
             self.policy_thread.start()
             self._start_takeoff_ramp(
                 start_x, start_y, start_z, target_z,
-                target_quat_wxyz, float(current_yaw),
+                target_quat_wxyz, float(yaw_ref),
                 use_pid=False,
                 label="Policy takeoff"
             )
@@ -821,6 +853,7 @@ class PolicyControlNode(Node):
                 raise RuntimeError('Policy is not running.') 
 
             self._stop_takeoff_ramp()
+            self.policy_skip_pid_restore_event.clear()
             self.policy_stop_event.set() 
             self.policy_thread.join(timeout=2.0) 
             self.policy_thread = None 
@@ -852,20 +885,25 @@ class PolicyControlNode(Node):
                 curr_x = measured_curr_x
                 curr_y = measured_curr_y
             curr_yaw = quat_to_euler_xyz(state[6:10])[2]
-            with self.lock:
-                land_yaw = (
-                    quat_to_euler_xyz(self.setpoint[3:7])[2]
-                    if self.setpoint is not None
-                    else curr_yaw
-                )
+            if bool(self.get_parameter('mission_attitude_ref_enabled').value):
+                land_roll = float(self.get_parameter('mission_roll_ref').value)
+                land_pitch = float(self.get_parameter('mission_pitch_ref').value)
+                land_yaw = float(self.get_parameter('mission_yaw_ref').value)
+            else:
+                with self.lock:
+                    land_yaw = (
+                        quat_to_euler_xyz(self.setpoint[3:7])[2]
+                        if self.setpoint is not None
+                        else curr_yaw
+                    )
+                land_roll = 0.0
+                land_pitch = 0.0
             if bool(self.get_parameter('mission_land_z_ref_enabled').value):
                 target_z = float(self.get_parameter('mission_land_z_ref').value)
             else:
                 target_z = self.ground_z
             
-            target_quat_w = np.cos(land_yaw / 2.0)
-            target_quat_z = np.sin(land_yaw / 2.0)
-            target_quat_wxyz = np.array([target_quat_w, 0.0, 0.0, target_quat_z], dtype=np.float64)
+            target_quat_wxyz = self._quat_wxyz_from_rpy(land_roll, land_pitch, land_yaw)
 
             with self.lock:
                 self.hold_x = curr_x
@@ -876,7 +914,9 @@ class PolicyControlNode(Node):
             self.get_logger().info(
                 f"Policy landing: xy_ref=[{curr_x:.3f}, {curr_y:.3f}] m "
                 f"(measured=[{measured_curr_x:.3f}, {measured_curr_y:.3f}] m), "
-                f"target_z={target_z:.3f} m"
+                f"target_z={target_z:.3f} m, "
+                f"rpy_ref=[{land_roll:+.3f}, {land_pitch:+.3f}, {land_yaw:+.3f}] rad "
+                f"(measured_yaw={curr_yaw:+.3f} rad)"
             )
 
             self._start_takeoff_ramp(
@@ -1197,30 +1237,33 @@ class PolicyControlNode(Node):
                 break 
             rate.sleep()
 
-        self.get_logger().warn("Switching back to PID control") 
         try: self.components.pom.log_stop()
         except Exception: pass
 
-        try: 
-            with self.lock:
-                if self.reference_setpoint is not None:
-                    target = self.reference_setpoint
-                else:
-                    target = self.setpoint 
-                
-                target_x, target_y, target_z = target[0], target[1], target[2]
-                target_yaw = quat_to_euler_xyz(target[3:7])[2]
+        if self.policy_skip_pid_restore_event.is_set():
+            self.get_logger().info("Policy loop stopped for full shutdown; skipping PID restore.")
+        else:
+            self.get_logger().warn("Switching back to PID control") 
+            try: 
+                with self.lock:
+                    if self.reference_setpoint is not None:
+                        target = self.reference_setpoint
+                    else:
+                        target = self.setpoint 
+                    
+                    target_x, target_y, target_z = target[0], target[1], target[2]
+                    target_yaw = quat_to_euler_xyz(target[3:7])[2]
 
-            self._set_nhfc_position(target_x, target_y, target_z, float(target_yaw))
-            self.get_logger().info(
-                f"*** PID RESTORED Z REFERENCE: {target_z:.3f} m ***"
-            )
-            
-            self.components.nhfc.servo(ack=True) 
-            self.components.rotorcraft.servo(ack=True) 
-            self.components.rotorcraft.set_ramp(1e-3) 
-        except Exception as e: 
-            self.get_logger().error(f"RECOVERY FAILED: {e}")
+                self._set_nhfc_position(target_x, target_y, target_z, float(target_yaw))
+                self.get_logger().info(
+                    f"*** PID RESTORED Z REFERENCE: {target_z:.3f} m ***"
+                )
+                
+                self.components.nhfc.servo(ack=True) 
+                self.components.rotorcraft.servo(ack=True) 
+                self.components.rotorcraft.set_ramp(1e-3) 
+            except Exception as e: 
+                self.get_logger().error(f"RECOVERY FAILED: {e}")
 
         log_data = {
             't': log_t[:step_idx],
@@ -1463,6 +1506,14 @@ def run_mission_cli(args):
             make_double_parameter('mission_land_z_ref', z_ref)
         ])
 
+    def set_mission_attitude_ref(enabled, roll_ref, pitch_ref, yaw_ref):
+        set_parameters([
+            make_bool_parameter('mission_attitude_ref_enabled', enabled),
+            make_double_parameter('mission_roll_ref', roll_ref),
+            make_double_parameter('mission_pitch_ref', pitch_ref),
+            make_double_parameter('mission_yaw_ref', yaw_ref)
+        ])
+
     def publish_absolute_point(target_world, yaw_ref):
         quat_xyzw = Rotation.from_euler('xyz', [0.0, 0.0, yaw_ref], degrees=False).as_quat()
 
@@ -1508,10 +1559,12 @@ def run_mission_cli(args):
 
     set_takeoff_height(takeoff_z)
     set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
+    set_mission_attitude_ref(True, 0.0, 0.0, yaw_ref)
 
     # --- FASE 1: TAKEOFF ---
     if not call_srv(takeoff_cli, '/policy/takeoff'):
         set_mission_takeoff_xy_ref(False, 0.0, 0.0)
+        set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
         return
     set_mission_takeoff_xy_ref(False, 0.0, 0.0)
     node.get_logger().info(f'[TAKEOFF-TO-POINT-LAND] Waiting {wait_s}s for takeoff...')
@@ -1530,6 +1583,7 @@ def run_mission_cli(args):
 
     # --- FASE 3: ESECUZIONE PUNTO ---
     if not call_srv(start_cli, '/policy/start'):
+        set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
         return
     node.get_logger().info(f'[TAKEOFF-TO-POINT-LAND] Waiting {wait_s}s at point...')
     time.sleep(wait_s)
@@ -1540,9 +1594,11 @@ def run_mission_cli(args):
     if not call_srv(land_cli, '/policy/land'):
         set_mission_takeoff_xy_ref(False, 0.0, 0.0)
         set_mission_land_z_ref(False, 0.0)
+        set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
         return
     set_mission_takeoff_xy_ref(False, 0.0, 0.0)
     set_mission_land_z_ref(False, 0.0)
+    set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
     node.get_logger().info(f'[TAKEOFF-TO-POINT-LAND] Waiting {wait_s}s for landing...')
     time.sleep(wait_s)
     
@@ -1556,6 +1612,428 @@ def run_mission_cli(args):
 
 def run_legacy_mission_cli(args):
     print("Warning: --mission is deprecated. Use --takeoff-to-point-land takeoff_z dx dy dz wait_s")
+
+
+def run_point_to_point_mission_cli(args):
+    import time
+    from scipy.spatial.transform import Rotation
+    from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+    from rcl_interfaces.srv import SetParameters
+    from std_srvs.srv import Trigger
+    from geometry_msgs.msg import PoseStamped
+    import rclpy
+
+    if len(args) < 5:
+        print("Error: missing arguments. Usage: --takeoff-zero-point-land takeoff_z x_des y_des z_des wait_s")
+        return
+
+    takeoff_z, x_des, y_des, z_des, wait_s = map(float, args[:5])
+
+    rclpy.init()
+    node = rclpy.create_node('cli_takeoff_point_to_point_land_director')
+    components = TK3Components_tilthex(Path("logs"))
+
+    takeoff_cli = node.create_client(Trigger, '/policy/takeoff')
+    start_cli = node.create_client(Trigger, '/policy/start')
+    land_cli = node.create_client(Trigger, '/policy/land')
+    stop_cli = node.create_client(Trigger, '/control/stop')
+    set_params_cli = node.create_client(SetParameters, '/policy_controller/set_parameters')
+    setpoint_pub = node.create_publisher(PoseStamped, '/policy/setpoint', 10)
+
+    for cli, name in [(takeoff_cli, 'takeoff'), (start_cli, 'start'), (land_cli, 'land'), (stop_cli, 'stop')]:
+        if not cli.wait_for_service(timeout_sec=3.0):
+            node.get_logger().error(f'Service {name} not available. Is the node running?')
+            return
+    if not set_params_cli.wait_for_service(timeout_sec=3.0):
+        node.get_logger().error('Service /policy_controller/set_parameters not available. Is the node running?')
+        return
+
+    def read_pose(label):
+        for _ in range(20):
+            state = read_state_and_rot_w(components)
+            if state is not None:
+                return state
+            time.sleep(0.1)
+        raise RuntimeError(f'Cannot read telemetry for {label}.')
+
+    def call_srv(cli, name):
+        node.get_logger().info(f'Calling {name}...')
+        req = Trigger.Request()
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        if future.result() is not None:
+            node.get_logger().info(f"Response: {future.result().message}")
+            return future.result().success
+        node.get_logger().error(f"{name} failed.")
+        return False
+
+    def make_double_parameter(name, value):
+        return Parameter(
+            name=name,
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE,
+                double_value=float(value)
+            )
+        )
+
+    def make_bool_parameter(name, value):
+        return Parameter(
+            name=name,
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL,
+                bool_value=bool(value)
+            )
+        )
+
+    def set_parameters(params):
+        req = SetParameters.Request()
+        req.parameters = params
+        future = set_params_cli.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        if future.result() is None:
+            raise RuntimeError('Failed to set parameters: no response')
+        for param, result in zip(params, future.result().results):
+            if not result.successful:
+                raise RuntimeError(f'Failed to set {param.name}: {result.reason}')
+
+    def set_takeoff_height(z_ref):
+        set_parameters([make_double_parameter('takeoff_height', z_ref)])
+
+    def set_mission_takeoff_xy_ref(enabled, x_ref, y_ref):
+        set_parameters([
+            make_bool_parameter('mission_takeoff_xy_ref_enabled', enabled),
+            make_double_parameter('mission_takeoff_x_ref', x_ref),
+            make_double_parameter('mission_takeoff_y_ref', y_ref)
+        ])
+
+    def set_mission_land_z_ref(enabled, z_ref):
+        set_parameters([
+            make_bool_parameter('mission_land_z_ref_enabled', enabled),
+            make_double_parameter('mission_land_z_ref', z_ref)
+        ])
+
+    def set_mission_attitude_ref(enabled, roll_ref, pitch_ref, yaw_ref):
+        set_parameters([
+            make_bool_parameter('mission_attitude_ref_enabled', enabled),
+            make_double_parameter('mission_roll_ref', roll_ref),
+            make_double_parameter('mission_pitch_ref', pitch_ref),
+            make_double_parameter('mission_yaw_ref', yaw_ref)
+        ])
+
+    def publish_absolute_setpoint(target_world, rpy_rad, label):
+        quat_xyzw = Rotation.from_euler('xyz', rpy_rad, degrees=False).as_quat()
+
+        msg = PoseStamped()
+        msg.header.frame_id = 'world_absolute'
+        msg.header.stamp = node.get_clock().now().to_msg()
+        msg.pose.position.x = float(target_world[0])
+        msg.pose.position.y = float(target_world[1])
+        msg.pose.position.z = float(target_world[2])
+        msg.pose.orientation.x = quat_xyzw[0]
+        msg.pose.orientation.y = quat_xyzw[1]
+        msg.pose.orientation.z = quat_xyzw[2]
+        msg.pose.orientation.w = quat_xyzw[3]
+
+        node.get_logger().info(
+            f'[TAKEOFF-POINT-TO-POINT-LAND] Staging {label}: xyz='
+            f'[{target_world[0]:.3f}, {target_world[1]:.3f}, {target_world[2]:.3f}], '
+            f'RPY=[{rpy_rad[0]:+.3f}, {rpy_rad[1]:+.3f}, {rpy_rad[2]:+.3f}] rad'
+        )
+        time.sleep(0.2)
+        setpoint_pub.publish(msg)
+
+    def clear_mission_refs():
+        set_mission_takeoff_xy_ref(False, 0.0, 0.0)
+        set_mission_land_z_ref(False, 0.0)
+        set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
+
+    ground_state = read_pose('ground pose')
+    ground_pos = ground_state[0:3].copy()
+    ground_rpy = quat_to_euler_xyz(ground_state[6:10])
+    takeoff_ref = np.array([ground_pos[0], ground_pos[1], takeoff_z], dtype=np.float64)
+    first_point = np.array([0.0, 0.0, takeoff_z], dtype=np.float64)
+    second_point = np.array([x_des, y_des, takeoff_z + z_des], dtype=np.float64)
+    landing_point = np.array([x_des, y_des, ground_pos[2]], dtype=np.float64)
+    zero_attitude = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+    takeoff_attitude = np.array([0.0, 0.0, ground_rpy[2]], dtype=np.float64)
+
+    node.get_logger().info(
+        f'[TAKEOFF-POINT-TO-POINT-LAND] Initial pose xyz='
+        f'[{ground_pos[0]:.3f}, {ground_pos[1]:.3f}, {ground_pos[2]:.3f}], '
+        f'rpy=[{ground_rpy[0]:+.3f}, {ground_rpy[1]:+.3f}, {ground_rpy[2]:+.3f}] rad'
+    )
+    node.get_logger().info(
+        f'[TAKEOFF-POINT-TO-POINT-LAND] References: '
+        f'takeoff=[{takeoff_ref[0]:.3f}, {takeoff_ref[1]:.3f}, {takeoff_ref[2]:.3f}], '
+        f'point1=[{first_point[0]:.3f}, {first_point[1]:.3f}, {first_point[2]:.3f}], '
+        f'point2=[{second_point[0]:.3f}, {second_point[1]:.3f}, {second_point[2]:.3f}], '
+        f'land=[{landing_point[0]:.3f}, {landing_point[1]:.3f}, {landing_point[2]:.3f}]'
+    )
+
+    set_takeoff_height(takeoff_z)
+    set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
+    set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
+
+    # --- FASE 1: TAKEOFF ---
+    if not call_srv(takeoff_cli, '/policy/takeoff'):
+        clear_mission_refs()
+        return
+    set_mission_takeoff_xy_ref(False, 0.0, 0.0)
+    set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
+    node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s for takeoff...')
+    time.sleep(wait_s)
+
+    # --- FASE 2: PRIMO PUNTO WORLD ---
+    publish_absolute_setpoint(first_point, zero_attitude, 'first world point')
+    time.sleep(0.5)
+    if not call_srv(start_cli, '/policy/start'):
+        clear_mission_refs()
+        return
+    node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s at first point...')
+    time.sleep(wait_s)
+
+    # --- FASE 3: SECONDO PUNTO WORLD ---
+    publish_absolute_setpoint(second_point, zero_attitude, 'second world point')
+    time.sleep(0.5)
+    if not call_srv(start_cli, '/policy/start'):
+        clear_mission_refs()
+        return
+    node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s at second point...')
+    time.sleep(wait_s)
+
+    # --- FASE 4: LANDING SUL SECONDO PUNTO ---
+    set_mission_takeoff_xy_ref(True, landing_point[0], landing_point[1])
+    set_mission_land_z_ref(True, landing_point[2])
+    set_mission_attitude_ref(True, zero_attitude[0], zero_attitude[1], zero_attitude[2])
+    if not call_srv(land_cli, '/policy/land'):
+        clear_mission_refs()
+        return
+    clear_mission_refs()
+    node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s for landing...')
+    time.sleep(wait_s)
+
+    # --- FASE 5: SHUTDOWN AUTOMATICO ---
+    call_srv(stop_cli, '/control/stop')
+    node.get_logger().info('[TAKEOFF-POINT-TO-POINT-LAND] Mission sequence complete. Motors stopped!')
+
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+def run_zero_attitude_zero_land_cli(args):
+    import time
+    from scipy.spatial.transform import Rotation
+    from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
+    from rcl_interfaces.srv import SetParameters
+    from std_srvs.srv import Trigger
+    from geometry_msgs.msg import PoseStamped
+    import rclpy
+
+    if len(args) < 5:
+        print("Error: missing arguments. Usage: --takeoff-zero-attitude-zero-land takeoff_z roll_deg pitch_deg yaw_deg wait_s")
+        return
+
+    takeoff_z, roll_deg, pitch_deg, yaw_deg, wait_s = map(float, args[:5])
+
+    rclpy.init()
+    node = rclpy.create_node('cli_takeoff_zero_attitude_zero_land_director')
+    components = TK3Components_tilthex(Path("logs"))
+
+    takeoff_cli = node.create_client(Trigger, '/policy/takeoff')
+    start_cli = node.create_client(Trigger, '/policy/start')
+    land_cli = node.create_client(Trigger, '/policy/land')
+    stop_cli = node.create_client(Trigger, '/control/stop')
+    set_params_cli = node.create_client(SetParameters, '/policy_controller/set_parameters')
+    setpoint_pub = node.create_publisher(PoseStamped, '/policy/setpoint', 10)
+
+    for cli, name in [(takeoff_cli, 'takeoff'), (start_cli, 'start'), (land_cli, 'land'), (stop_cli, 'stop')]:
+        if not cli.wait_for_service(timeout_sec=3.0):
+            node.get_logger().error(f'Service {name} not available. Is the node running?')
+            return
+    if not set_params_cli.wait_for_service(timeout_sec=3.0):
+        node.get_logger().error('Service /policy_controller/set_parameters not available. Is the node running?')
+        return
+
+    def read_pose(label):
+        for _ in range(20):
+            state = read_state_and_rot_w(components)
+            if state is not None:
+                return state
+            time.sleep(0.1)
+        raise RuntimeError(f'Cannot read telemetry for {label}.')
+
+    def call_srv(cli, name):
+        node.get_logger().info(f'Calling {name}...')
+        req = Trigger.Request()
+        future = cli.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        if future.result() is not None:
+            node.get_logger().info(f"Response: {future.result().message}")
+            return future.result().success
+        node.get_logger().error(f"{name} failed.")
+        return False
+
+    def make_double_parameter(name, value):
+        return Parameter(
+            name=name,
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE,
+                double_value=float(value)
+            )
+        )
+
+    def make_bool_parameter(name, value):
+        return Parameter(
+            name=name,
+            value=ParameterValue(
+                type=ParameterType.PARAMETER_BOOL,
+                bool_value=bool(value)
+            )
+        )
+
+    def set_parameters(params):
+        req = SetParameters.Request()
+        req.parameters = params
+        future = set_params_cli.call_async(req)
+        rclpy.spin_until_future_complete(node, future)
+        if future.result() is None:
+            raise RuntimeError('Failed to set parameters: no response')
+        for param, result in zip(params, future.result().results):
+            if not result.successful:
+                raise RuntimeError(f'Failed to set {param.name}: {result.reason}')
+
+    def set_takeoff_height(z_ref):
+        set_parameters([make_double_parameter('takeoff_height', z_ref)])
+
+    def set_mission_takeoff_xy_ref(enabled, x_ref, y_ref):
+        set_parameters([
+            make_bool_parameter('mission_takeoff_xy_ref_enabled', enabled),
+            make_double_parameter('mission_takeoff_x_ref', x_ref),
+            make_double_parameter('mission_takeoff_y_ref', y_ref)
+        ])
+
+    def set_mission_land_z_ref(enabled, z_ref):
+        set_parameters([
+            make_bool_parameter('mission_land_z_ref_enabled', enabled),
+            make_double_parameter('mission_land_z_ref', z_ref)
+        ])
+
+    def set_mission_attitude_ref(enabled, roll_ref, pitch_ref, yaw_ref):
+        set_parameters([
+            make_bool_parameter('mission_attitude_ref_enabled', enabled),
+            make_double_parameter('mission_roll_ref', roll_ref),
+            make_double_parameter('mission_pitch_ref', pitch_ref),
+            make_double_parameter('mission_yaw_ref', yaw_ref)
+        ])
+
+    def publish_absolute_setpoint(target_world, rpy_rad, label):
+        quat_xyzw = Rotation.from_euler('xyz', rpy_rad, degrees=False).as_quat()
+
+        msg = PoseStamped()
+        msg.header.frame_id = 'world_absolute'
+        msg.header.stamp = node.get_clock().now().to_msg()
+        msg.pose.position.x = float(target_world[0])
+        msg.pose.position.y = float(target_world[1])
+        msg.pose.position.z = float(target_world[2])
+        msg.pose.orientation.x = quat_xyzw[0]
+        msg.pose.orientation.y = quat_xyzw[1]
+        msg.pose.orientation.z = quat_xyzw[2]
+        msg.pose.orientation.w = quat_xyzw[3]
+
+        node.get_logger().info(
+            f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Staging {label}: xyz='
+            f'[{target_world[0]:.3f}, {target_world[1]:.3f}, {target_world[2]:.3f}], '
+            f'RPY=[{rpy_rad[0]:+.3f}, {rpy_rad[1]:+.3f}, {rpy_rad[2]:+.3f}] rad'
+        )
+        time.sleep(0.2)
+        setpoint_pub.publish(msg)
+
+    def clear_mission_refs():
+        set_mission_takeoff_xy_ref(False, 0.0, 0.0)
+        set_mission_land_z_ref(False, 0.0)
+        set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
+
+    ground_state = read_pose('ground pose')
+    ground_pos = ground_state[0:3].copy()
+    ground_rpy = quat_to_euler_xyz(ground_state[6:10])
+    takeoff_ref = np.array([ground_pos[0], ground_pos[1], takeoff_z], dtype=np.float64)
+    zero_point = np.array([0.0, 0.0, takeoff_z], dtype=np.float64)
+    land_point = np.array([0.0, 0.0, ground_pos[2]], dtype=np.float64)
+    takeoff_attitude = np.array([0.0, 0.0, ground_rpy[2]], dtype=np.float64)
+    zero_attitude = np.array([0.0, 0.0, 0.0], dtype=np.float64)
+    attitude_target = np.radians([roll_deg, pitch_deg, yaw_deg]).astype(np.float64)
+    zero_with_target_yaw = np.array([0.0, 0.0, attitude_target[2]], dtype=np.float64)
+
+    node.get_logger().info(
+        f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Initial pose xyz='
+        f'[{ground_pos[0]:.3f}, {ground_pos[1]:.3f}, {ground_pos[2]:.3f}], '
+        f'rpy=[{ground_rpy[0]:+.3f}, {ground_rpy[1]:+.3f}, {ground_rpy[2]:+.3f}] rad'
+    )
+    node.get_logger().info(
+        f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] References: '
+        f'takeoff=[{takeoff_ref[0]:.3f}, {takeoff_ref[1]:.3f}, {takeoff_ref[2]:.3f}], '
+        f'zero=[{zero_point[0]:.3f}, {zero_point[1]:.3f}, {zero_point[2]:.3f}], '
+        f'attitude_rpy=[{attitude_target[0]:+.3f}, {attitude_target[1]:+.3f}, {attitude_target[2]:+.3f}], '
+        f'land=[{land_point[0]:.3f}, {land_point[1]:.3f}, {land_point[2]:.3f}]'
+    )
+
+    set_takeoff_height(takeoff_z)
+    set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
+    set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
+
+    # --- FASE 1: TAKEOFF ---
+    if not call_srv(takeoff_cli, '/policy/takeoff'):
+        clear_mission_refs()
+        return
+    set_mission_takeoff_xy_ref(False, 0.0, 0.0)
+    set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
+    node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s for takeoff...')
+    time.sleep(wait_s)
+
+    # --- FASE 2: ZERO POINT WORLD ---
+    publish_absolute_setpoint(zero_point, zero_attitude, 'zero point')
+    time.sleep(0.5)
+    if not call_srv(start_cli, '/policy/start'):
+        clear_mission_refs()
+        return
+    node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at zero point...')
+    time.sleep(wait_s)
+
+    # --- FASE 3: ATTITUDE ---
+    publish_absolute_setpoint(zero_point, attitude_target, 'attitude target')
+    time.sleep(0.5)
+    if not call_srv(start_cli, '/policy/start'):
+        clear_mission_refs()
+        return
+    node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at attitude target...')
+    time.sleep(wait_s)
+
+    # --- FASE 4: ZERO POINT CON YAW TARGET ---
+    publish_absolute_setpoint(zero_point, zero_with_target_yaw, 'zero point with target yaw')
+    time.sleep(0.5)
+    if not call_srv(start_cli, '/policy/start'):
+        clear_mission_refs()
+        return
+    node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at zero point with target yaw...')
+    time.sleep(wait_s)
+
+    # --- FASE 5: LANDING SULLO ZERO POINT ---
+    set_mission_takeoff_xy_ref(True, land_point[0], land_point[1])
+    set_mission_land_z_ref(True, land_point[2])
+    set_mission_attitude_ref(True, zero_with_target_yaw[0], zero_with_target_yaw[1], zero_with_target_yaw[2])
+    if not call_srv(land_cli, '/policy/land'):
+        clear_mission_refs()
+        return
+    clear_mission_refs()
+    node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s for landing...')
+    time.sleep(wait_s)
+
+    # --- FASE 6: SHUTDOWN AUTOMATICO ---
+    call_srv(stop_cli, '/control/stop')
+    node.get_logger().info('[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Mission sequence complete. Motors stopped!')
+
+    node.destroy_node()
+    rclpy.shutdown()
 
 
 def run_attitude_mission_cli(args):
@@ -1827,6 +2305,10 @@ if __name__ == '__main__':
         trigger_pid_test_cli()
     elif len(sys.argv) > 1 and sys.argv[1] == '--takeoff-to-point-land':
         run_mission_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--takeoff-zero-point-land':
+        run_point_to_point_mission_cli(sys.argv[2:])
+    elif len(sys.argv) > 1 and sys.argv[1] == '--takeoff-zero-attitude-zero-land':
+        run_zero_attitude_zero_land_cli(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--takeoff-attitude-land':
         run_attitude_mission_cli(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--mission':

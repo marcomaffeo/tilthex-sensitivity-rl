@@ -80,6 +80,26 @@ args = [
 ]
 cmd = "python src/policy_control_node_tilthex.py --takeoff-to-point-land {{ takeoff }} {{ x }} {{ y }} {{ z }} {{ wait }}"
 
+[tasks.policy-takeoff-zero-point-land]
+args = [
+  { "arg" = "takeoff", "default" = "0.8" },
+  { "arg" = "x", "default" = "0.1" },
+  { "arg" = "y", "default" = "0.0" },
+  { "arg" = "z", "default" = "0.0" },
+  { "arg" = "wait", "default" = "6.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --takeoff-zero-point-land {{ takeoff }} {{ x }} {{ y }} {{ z }} {{ wait }}"
+
+[tasks.policy-takeoff-zero-attitude-zero-land]
+args = [
+  { "arg" = "takeoff", "default" = "0.8" },
+  { "arg" = "roll", "default" = "0.0" },
+  { "arg" = "pitch", "default" = "0.0" },
+  { "arg" = "yaw", "default" = "0.0" },
+  { "arg" = "wait", "default" = "6.0" },
+]
+cmd = "python src/policy_control_node_tilthex.py --takeoff-zero-attitude-zero-land {{ takeoff }} {{ roll }} {{ pitch }} {{ yaw }} {{ wait }}"
+
 [tasks.policy-takeoff-attitude-land]
 args = [
   { "arg" = "takeoff", "default" = "0.8" },

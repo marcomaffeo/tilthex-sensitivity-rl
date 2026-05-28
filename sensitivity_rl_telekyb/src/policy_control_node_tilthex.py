@@ -67,23 +67,26 @@ class PolicyControlNode(Node):
         
         self.info_pub = self.create_publisher(String, '/policy/staged_info', 10)
 
-        self.declare_parameter('policy_dir', 'configs/policy/SPPO/SPPO_14') 
+        self.declare_parameter('policy_dir', 'configs/policy/PPO/PPO_14') 
         self.declare_parameter('policy_duration', 1000.0)  
         self.declare_parameter('frequency_hz', 100.0)
-        self.declare_parameter('takeoff_height', 0.8) 
+        self.declare_parameter('takeoff_height', 0.5) 
         self.declare_parameter('takeoff_ramp_rate_mps', 0.2) 
+
         self.declare_parameter('mission_takeoff_xy_ref_enabled', False)
         self.declare_parameter('mission_takeoff_x_ref', 0.0)
         self.declare_parameter('mission_takeoff_y_ref', 0.0)
+
         self.declare_parameter('mission_land_z_ref_enabled', False)
         self.declare_parameter('mission_land_z_ref', 0.0)
+
         self.declare_parameter('mission_attitude_ref_enabled', False)
         self.declare_parameter('mission_roll_ref', 0.0)
         self.declare_parameter('mission_pitch_ref', 0.0)
         self.declare_parameter('mission_yaw_ref', 0.0)
         
-        self.declare_parameter('enable_action_bias', True)
-        self.declare_parameter('drone_mass_kg', 3.0324)
+        self.declare_parameter('enable_action_bias', False)
+        self.declare_parameter('drone_mass_kg', 2.950)
         self.declare_parameter('tilt_angle_deg', 20.0)
 
         self.declare_parameter('skip_plots', False)

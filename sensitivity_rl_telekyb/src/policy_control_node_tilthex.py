@@ -1613,7 +1613,6 @@ def run_mission_cli(args):
 def run_legacy_mission_cli(args):
     print("Warning: --mission is deprecated. Use --takeoff-to-point-land takeoff_z dx dy dz wait_s")
 
-
 def run_point_to_point_mission_cli(args):
     import time
     from scipy.spatial.transform import Rotation
@@ -1622,6 +1621,7 @@ def run_point_to_point_mission_cli(args):
     from std_srvs.srv import Trigger
     from geometry_msgs.msg import PoseStamped
     import rclpy
+    import numpy as np
 
     if len(args) < 5:
         print("Error: missing arguments. Usage: --takeoff-zero-point-land takeoff_z x_des y_des z_des wait_s")
@@ -1699,6 +1699,10 @@ def run_point_to_point_mission_cli(args):
     def set_takeoff_height(z_ref):
         set_parameters([make_double_parameter('takeoff_height', z_ref)])
 
+    # Dynamically set the ramp rate based on desired duration
+    def set_ramp_rate(rate_mps):
+        set_parameters([make_double_parameter('takeoff_ramp_rate_mps', rate_mps)])
+
     def set_mission_takeoff_xy_ref(enabled, x_ref, y_ref):
         set_parameters([
             make_bool_parameter('mission_takeoff_xy_ref_enabled', enabled),
@@ -1775,6 +1779,11 @@ def run_point_to_point_mission_cli(args):
     set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
 
     # --- FASE 1: TAKEOFF ---
+    # Calculate required takeoff rate to match wait_s duration
+    dz_takeoff = abs(takeoff_ref[2] - ground_pos[2])
+    rate_takeoff = dz_takeoff / wait_s if wait_s > 0.0 else 0.2
+    set_ramp_rate(rate_takeoff)
+
     if not call_srv(takeoff_cli, '/policy/takeoff'):
         clear_mission_refs()
         return
@@ -1802,6 +1811,11 @@ def run_point_to_point_mission_cli(args):
     time.sleep(wait_s)
 
     # --- FASE 4: LANDING SUL SECONDO PUNTO ---
+    # Calculate required land rate to match wait_s duration
+    dz_land = abs(second_point[2] - landing_point[2])
+    rate_land = dz_land / wait_s if wait_s > 0.0 else 0.2
+    set_ramp_rate(rate_land)
+
     set_mission_takeoff_xy_ref(True, landing_point[0], landing_point[1])
     set_mission_land_z_ref(True, landing_point[2])
     set_mission_attitude_ref(True, zero_attitude[0], zero_attitude[1], zero_attitude[2])
@@ -1819,7 +1833,6 @@ def run_point_to_point_mission_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 
-
 def run_zero_attitude_zero_land_cli(args):
     import time
     from scipy.spatial.transform import Rotation
@@ -1828,6 +1841,7 @@ def run_zero_attitude_zero_land_cli(args):
     from std_srvs.srv import Trigger
     from geometry_msgs.msg import PoseStamped
     import rclpy
+    import numpy as np
 
     if len(args) < 5:
         print("Error: missing arguments. Usage: --takeoff-zero-attitude-zero-land takeoff_z roll_deg pitch_deg yaw_deg wait_s")
@@ -1904,6 +1918,9 @@ def run_zero_attitude_zero_land_cli(args):
 
     def set_takeoff_height(z_ref):
         set_parameters([make_double_parameter('takeoff_height', z_ref)])
+
+    def set_ramp_rate(rate_mps):
+        set_parameters([make_double_parameter('takeoff_ramp_rate_mps', rate_mps)])
 
     def set_mission_takeoff_xy_ref(enabled, x_ref, y_ref):
         set_parameters([
@@ -1982,6 +1999,10 @@ def run_zero_attitude_zero_land_cli(args):
     set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
 
     # --- FASE 1: TAKEOFF ---
+    dz_takeoff = abs(takeoff_ref[2] - ground_pos[2])
+    rate_takeoff = dz_takeoff / wait_s if wait_s > 0.0 else 0.2
+    set_ramp_rate(rate_takeoff)
+
     if not call_srv(takeoff_cli, '/policy/takeoff'):
         clear_mission_refs()
         return
@@ -2018,6 +2039,11 @@ def run_zero_attitude_zero_land_cli(args):
     time.sleep(wait_s)
 
     # --- FASE 5: LANDING SULLO ZERO POINT ---
+    # Fix: use the correct Z coordinate from zero_point to calculate distance
+    dz_land = abs(zero_point[2] - land_point[2])
+    rate_land = dz_land / wait_s if wait_s > 0.0 else 0.2
+    set_ramp_rate(rate_land)
+
     set_mission_takeoff_xy_ref(True, land_point[0], land_point[1])
     set_mission_land_z_ref(True, land_point[2])
     set_mission_attitude_ref(True, zero_with_target_yaw[0], zero_with_target_yaw[1], zero_with_target_yaw[2])
@@ -2034,8 +2060,6 @@ def run_zero_attitude_zero_land_cli(args):
 
     node.destroy_node()
     rclpy.shutdown()
-
-
 def run_attitude_mission_cli(args):
     import time
     from scipy.spatial.transform import Rotation

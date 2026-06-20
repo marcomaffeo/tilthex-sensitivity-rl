@@ -11,10 +11,10 @@ from scipy.spatial.transform import Rotation
 
 def quat_wxyz_to_euler_xyz(q_wxyz):
     q_xyzw = np.empty_like(q_wxyz)
-    q_xyzw[:, 0] = q_wxyz[:, 1]  # x
-    q_xyzw[:, 1] = q_wxyz[:, 2]  # y
-    q_xyzw[:, 2] = q_wxyz[:, 3]  # z
-    q_xyzw[:, 3] = q_wxyz[:, 0]  # w
+    q_xyzw[:, 0] = q_wxyz[:, 1]  
+    q_xyzw[:, 1] = q_wxyz[:, 2]  
+    q_xyzw[:, 2] = q_wxyz[:, 3]  
+    q_xyzw[:, 3] = q_wxyz[:, 0]  
     rot = Rotation.from_quat(q_xyzw)
     return rot.as_euler('xyz')
 
@@ -29,11 +29,9 @@ def process_log(npz_path: Path):
         print(f"-> File {npz_path.name} ignorato: manca la chiave 't'.")
         return None
         
-    # Allineamento temporale (tutti partono da 0)
     times = data['t']
     times = times - times[0] 
     
-    # Determiniamo se è PPO o SPPO in base al nome della cartella o al policy_name
     policy_name = str(data['policy_name']) if 'policy_name' in data else ""
     folder_name = npz_path.parent.name.upper()
     
@@ -46,7 +44,6 @@ def process_log(npz_path: Path):
 
     res = {'t': times, 'group': group}
     
-    # Caso 1: Abbiamo i dati grezzi completi (possiamo estrarre x,y,z,roll,pitch,yaw)
     if 'pos' in data and 'quat' in data and 'pos_ref' in data and 'quat_ref' in data:
         pos_act = data['pos']
         pos_ref = data['pos_ref']
@@ -70,9 +67,7 @@ def process_log(npz_path: Path):
         dot_prod = np.clip(np.abs(np.sum(quats_act * quats_ref, axis=1)), -1.0, 1.0)
         res['e_att_norm'] = 2.0 * np.arccos(dot_prod)
         
-    # Caso 2: Abbiamo solo gli array di errore preconfezionati
     elif 'pos_err' in data and 'att_err' in data:
-        # Se pos_err è un vettore Nx3, estraiamo le componenti, se no la norma
         if len(data['pos_err'].shape) > 1 and data['pos_err'].shape[1] == 3:
             res['e_x'] = data['pos_err'][:, 0]
             res['e_y'] = data['pos_err'][:, 1]
@@ -81,7 +76,6 @@ def process_log(npz_path: Path):
         else:
             res['e_pos_norm'] = data['pos_err']
             
-        # Idem per att_err
         if len(data['att_err'].shape) > 1 and data['att_err'].shape[1] == 3:
             res['e_roll'] = data['att_err'][:, 0]
             res['e_pitch'] = data['att_err'][:, 1]
@@ -90,7 +84,6 @@ def process_log(npz_path: Path):
         else:
             res['e_att_norm'] = data['att_err']
             
-        # Aggiungiamo anche le velocità (che hai salvato nei log!)
         if 'vel_err' in data:
             res['e_vel_norm'] = np.linalg.norm(data['vel_err'], axis=1) if len(data['vel_err'].shape) > 1 else data['vel_err']
         if 'avel_err' in data:
@@ -99,28 +92,21 @@ def process_log(npz_path: Path):
         print(f"-> File {npz_path.name} in {npz_path.parent.name} ignorato: chiavi mancanti. Chiavi: {list(data.keys())}")
         return None
 
-    # Calcolo Total Variation (TV) per la smoothness dei comandi motore
-    # NOTA: si assume che i comandi motore siano salvati con la chiave 'rpm'
     if 'action' in data:
         motor_cmds = data['action']
         if motor_cmds.ndim == 2 and motor_cmds.shape[0] > 1:
-            num_samples = motor_cmds.shape[0]
+            a_span = 2.0 
+            delta_a = np.diff(motor_cmds, axis=0) / a_span
             
-            # 1. Calcolare la TV per ogni singolo motore
-            tv_per_motor = np.sum(np.abs(np.diff(motor_cmds, axis=0)), axis=0)
+            inst_tv = np.linalg.norm(delta_a, axis=1)
+            inst_tv = np.insert(inst_tv, 0, 0.0)
             
-            # 2. Normalizzare la TV per la durata del volo
-            tv_norm_per_motor = tv_per_motor / (num_samples - 1)
-            
-            # 3. Calcolare un indice globale come media tra i motori
-            res['tv_norm_global'] = np.mean(tv_norm_per_motor)
+            res['inst_tv'] = inst_tv
+            res['tv_a_global'] = np.sum(inst_tv)
 
     return res
 
 def export_campaign_plots(input_dir: Path, output_dir: Path):
-    # ========================================== 
-    # PUBLICATION-READY LATEX STYLE SETTINGS 
-    # ========================================== 
     plt.rcParams.update({ 
         "text.usetex": False, 
         "mathtext.fontset": "cm", 
@@ -168,13 +154,11 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         print("Nessun dato valido estratto. Uscita.")
         return
 
-    # Troviamo la durata massima tra tutti i log per identificare le morti premature
     max_time_global = max(d['t'][-1] for d in all_data)
     print(f"Durata massima identificata nella campagna: {max_time_global:.1f} s")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Definizione di tutte le metriche teoricamente plottabili
     metrics_def = [
         ('e_x', r'$e_x$ [m]', 'Position Error X', '1_error_pos_x.pdf'),
         ('e_y', r'$e_y$ [m]', 'Position Error Y', '2_error_pos_y.pdf'),
@@ -185,14 +169,14 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         ('e_pos_norm', r'$||e_p||$ [m]', 'Total Position Error', '7_error_pos_total.pdf'),
         ('e_att_norm', r'$||e_R||$ [rad]', 'Total Attitude Error', '8_error_att_total.pdf'),
         ('e_vel_norm', r'$||e_v||$ [m/s]', 'Total Velocity Error', '9_error_vel_total.pdf'),
-        ('e_avel_norm', r'$||e_\omega||$ [rad/s]', 'Total Angular Vel Error', '10_error_avel_total.pdf')
+        ('e_avel_norm', r'$||e_\omega||$ [rad/s]', 'Total Angular Vel Error', '10_error_avel_total.pdf'),
+        ('inst_tv', r'$||\Delta a / a_{\mathrm{span}}||_2$', 'Instantaneous Action Variation', '11_action_variation.pdf')
     ]
     
-    # Filtra solo le metriche effettivamente estratte dal data.npz
     metrics_to_plot = [m for m in metrics_def if m[0] in all_data[0]]
 
-    c_ppo = '#1f77b4'  # Blu
-    c_sppo = '#d62728' # Rosso
+    c_ppo = '#1f77b4'  
+    c_sppo = '#d62728' 
     
     for idx, (key, ylabel, title, filename) in enumerate(metrics_to_plot):
         fig, ax = plt.subplots(figsize=(10, 6))
@@ -212,13 +196,10 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
                 
             ax.plot(d['t'], d[key], color=color, alpha=0.3, linewidth=2.0, label=lbl)
             
-            # Se il volo termina prematuramente (più di 0.5s prima del max), mettiamo una X alla fine
             if d['t'][-1] < max_time_global - 0.5:
-                # Usiamo zorder elevato per mettere la X in primo piano
                 ax.plot(d['t'][-1], d[key][-1], marker='x', markersize=8, color=color, 
                         markeredgewidth=2, alpha=0.8, zorder=10)
                 
-        # Assicura che la linea allo zero sia ben visibile per facilitare la lettura
         ax.axhline(0, color='black', linewidth=1.0, linestyle='--', alpha=0.5)
 
         formatted_title = title.replace(" ", r"\ ")
@@ -226,7 +207,6 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         ax.set_ylabel(ylabel)
         ax.set_xlabel(r'$t$ [s]')
         
-        # Legenda custom per mostrare linee piene invece che trasparenti
         leg = ax.legend(loc='best', frameon=True)
         for lh in leg.legend_handles:
             lh.set_alpha(1.0)
@@ -240,7 +220,6 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
     t_max = 10.0
     t_grid = np.linspace(0, t_max, 1000)
     
-    # Valutiamo lo steady state a partire dal secondo 3
     t_ss_start = 3.0
     ss_mask = t_grid >= t_ss_start
     
@@ -259,31 +238,33 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
                 
             interp_vals = []
             for d in group_data:
-                # Interpoliamo i dati sulla griglia dei 10 secondi.
-                # I voli più corti forniranno "NaN" (Not a Number) dopo il termine.
                 vals = np.interp(t_grid, d['t'], d[key], left=np.nan, right=np.nan)
                 interp_vals.append(vals)
                 
             interp_vals = np.array(interp_vals)
             
-            # Calcoliamo media e deviazione ignorando i NaN
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", category=RuntimeWarning)
                 mean_vals = np.nanmean(interp_vals, axis=0)
                 std_vals = np.nanstd(interp_vals, axis=0)
                 
-            # Errore Steady-State (SS)
-            ss_mean = np.nanmean(mean_vals[ss_mask])
-            ss_std = np.nanmean(std_vals[ss_mask])
+            ss_data = interp_vals[:, ss_mask]
+            
+            ss_mean = np.nanmean(ss_data)
+            ss_std = np.nanstd(ss_data)
+            ss_rmse = np.sqrt(np.nanmean(np.square(ss_data)))
+            ss_mae = np.nanmean(np.abs(ss_data))
             
             table_data.append({
                 'Metric': title,
                 'Group': group,
                 'SS_Mean': ss_mean,
-                'SS_Std': ss_std
+                'SS_Std': ss_std,
+                'SS_RMSE': ss_rmse,
+                'SS_MAE': ss_mae
             })
             
-            lbl = rf'$\mathrm{{{group}}}\ (\mathrm{{SS:}}\ {ss_mean:.3f} \pm {ss_std:.3f})$'
+            lbl = rf'$\mathrm{{{group}}}\ (\mathrm{{}}\ {ss_mean:.3f} \pm {ss_std:.3f})$'
             ax.plot(t_grid, mean_vals, color=color, linewidth=2.5, label=lbl)
             ax.fill_between(t_grid, mean_vals - std_vals, mean_vals + std_vals, color=color, alpha=0.2)
             
@@ -301,9 +282,8 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         plt.close(fig)
         print(f"Generato: {ms_filename}")
         
-    # Generazione del Box Plot per la Total Variation (se i dati sono presenti)
-    ppo_tv_values = [d['tv_norm_global'] for d in all_data if d['group'] == 'PPO' and 'tv_norm_global' in d]
-    sppo_tv_values = [d['tv_norm_global'] for d in all_data if d['group'] == 'SPPO' and 'tv_norm_global' in d]
+    ppo_tv_values = [d['tv_a_global'] for d in all_data if d['group'] == 'PPO' and 'tv_a_global' in d]
+    sppo_tv_values = [d['tv_a_global'] for d in all_data if d['group'] == 'SPPO' and 'tv_a_global' in d]
 
     if ppo_tv_values or sppo_tv_values:
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -330,29 +310,28 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
             patch.set_alpha(0.6)
 
         ax.set_title(r'$\mathrm{Control\ Effort\ Smoothness\ (Total\ Variation)}$', fontweight='bold')
-        ax.set_ylabel(r'Normalized Total Variation ($\mathrm{TV}_{\mathrm{norm}}$)')
+        ax.set_ylabel(r'Total Variation ($\mathrm{TV}_{\mathrm{a}}$)')
         
         tv_filename = 'total_variation_boxplot.pdf'
         fig.savefig(output_dir / tv_filename, format='pdf', transparent=True)
         plt.close(fig)
         print(f"Generato: {tv_filename}")
     else:
-        print("\nAVVISO: Dati per la Total Variation (chiave 'rpm') non trovati in nessun file .npz.")
-        print("-> Il box plot della smoothness non è stato generato.")
-        if npz_files:
-            try:
-                sample_data = np.load(npz_files[0], allow_pickle=True)
-                print(f"-> Suggerimento: le chiavi *reali* salvate nel primo log .npz sono: {list(sample_data.keys())}")
-            except Exception:
-                pass
+        print("\nAVVISO: Dati per la Total Variation non trovati in nessun file .npz.")
 
-    # Esportazione della tabella riassuntiva in CSV
     table_path = output_dir / 'summary_table.csv'
     with open(table_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Metric', 'Group', 'SteadyState_Mean', 'SteadyState_Std'])
+        writer.writerow(['Metric', 'Group', 'SteadyState_Mean', 'SteadyState_Std', 'SteadyState_RMSE', 'SteadyState_MAE'])
         for row in table_data:
-            writer.writerow([row['Metric'], row['Group'], f"{row['SS_Mean']:.4f}", f"{row['SS_Std']:.4f}"])
+            writer.writerow([
+                row['Metric'], 
+                row['Group'], 
+                f"{row['SS_Mean']:.4f}", 
+                f"{row['SS_Std']:.4f}",
+                f"{row['SS_RMSE']:.4f}",
+                f"{row['SS_MAE']:.4f}"
+            ])
             
     print(f"Generata tabella riassuntiva: {table_path.name}")
         

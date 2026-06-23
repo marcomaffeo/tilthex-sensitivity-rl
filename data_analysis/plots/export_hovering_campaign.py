@@ -106,7 +106,7 @@ def process_log(npz_path: Path):
 
     return res
 
-def export_campaign_plots(input_dir: Path, output_dir: Path):
+def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, t_crop: float = None):
     plt.rcParams.update({ 
         "text.usetex": False, 
         "mathtext.fontset": "cm", 
@@ -154,8 +154,14 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         print("Nessun dato valido estratto. Uscita.")
         return
 
-    max_time_global = max(d['t'][-1] for d in all_data)
-    print(f"Durata massima identificata nella campagna: {max_time_global:.1f} s")
+    actual_max_time = max(d['t'][-1] for d in all_data)
+    
+    if t_crop is not None:
+        t_max = min(actual_max_time, t_crop)
+        print(f"Durata massima limitata a {t_max:.1f} s tramite parametro --t-crop (max originale: {actual_max_time:.1f} s)")
+    else:
+        t_max = actual_max_time
+        print(f"Durata massima identificata nella campagna: {t_max:.1f} s")
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -169,66 +175,22 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
         ('e_pos_norm', r'$||e_p||$ [m]', 'Total Position Error', '7_error_pos_total.pdf'),
         ('e_att_norm', r'$||e_R||$ [rad]', 'Total Attitude Error', '8_error_att_total.pdf'),
         ('e_vel_norm', r'$||e_v||$ [m/s]', 'Total Velocity Error', '9_error_vel_total.pdf'),
-        ('e_avel_norm', r'$||e_\omega||$ [rad/s]', 'Total Angular Vel Error', '10_error_avel_total.pdf'),
-        ('inst_tv', r'$||\Delta a / a_{\mathrm{span}}||_2$', 'Instantaneous Action Variation', '11_action_variation.pdf')
+        ('e_avel_norm', r'$||e_\omega||$ [rad/s]', 'Total Angular Vel Error', '10_error_avel_total.pdf')
     ]
     
     metrics_to_plot = [m for m in metrics_def if m[0] in all_data[0]]
-
     c_ppo = '#1f77b4'  
     c_sppo = '#d62728' 
+
+    print(f"Generazione dei grafici aggregati utilizzando la metrica {error_metric}...")
     
-    for idx, (key, ylabel, title, filename) in enumerate(metrics_to_plot):
-        fig, ax = plt.subplots(figsize=(10, 6))
-        
-        ppo_label_added = False
-        sppo_label_added = False
-        
-        for d in all_data:
-            if d['group'] == 'PPO':
-                lbl = r'$\mathrm{PPO}$' if not ppo_label_added else None
-                color = c_ppo
-                ppo_label_added = True
-            else:
-                lbl = r'$\mathrm{SPPO}$' if not sppo_label_added else None
-                color = c_sppo
-                sppo_label_added = True
-                
-            ax.plot(d['t'], d[key], color=color, alpha=0.3, linewidth=2.0, label=lbl)
-            
-            if d['t'][-1] < max_time_global - 0.5:
-                ax.plot(d['t'][-1], d[key][-1], marker='x', markersize=8, color=color, 
-                        markeredgewidth=2, alpha=0.8, zorder=10)
-                
-        ax.axhline(0, color='black', linewidth=1.0, linestyle='--', alpha=0.5)
-
-        formatted_title = title.replace(" ", r"\ ")
-        ax.set_title(rf'$\mathrm{{{formatted_title}}}$', fontweight='bold')
-        ax.set_ylabel(ylabel)
-        ax.set_xlabel(r'$t$ [s]')
-        
-        leg = ax.legend(loc='best', frameon=True)
-        for lh in leg.legend_handles:
-            lh.set_alpha(1.0)
-            lh.set_linewidth(3.0)
-            
-        fig.savefig(output_dir / filename, format='pdf', transparent=True)
-        plt.close(fig)
-        print(f"Generato: {filename}")
-
-    print("Generazione dei grafici di Media + Deviazione Standard (primi 10s)...")
-    t_max = 10.0
     t_grid = np.linspace(0, t_max, 1000)
-    
-    t_ss_start = 3.0
-    ss_mask = t_grid >= t_ss_start
+    t_start = 0.0
+    mask = t_grid >= t_start
     
     table_data = []
     
     for idx, (key, ylabel, title, filename) in enumerate(metrics_to_plot):
-        ms_filename = filename.replace('.pdf', '_mean_std.pdf')
-        ms_title = f"Mean Std {title}"
-        
         fig, ax = plt.subplots(figsize=(10, 6))
         
         for group, color in [('PPO', c_ppo), ('SPPO', c_sppo)]:
@@ -237,9 +199,17 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
                 continue
                 
             interp_vals = []
+            flight_rmses = []
+            flight_maes = []
+            
             for d in group_data:
                 vals = np.interp(t_grid, d['t'], d[key], left=np.nan, right=np.nan)
                 interp_vals.append(vals)
+                
+                valid_data = vals[mask]
+                if len(valid_data) > 0:
+                    flight_rmses.append(np.sqrt(np.nanmean(np.square(valid_data))))
+                    flight_maes.append(np.nanmean(np.abs(valid_data)))
                 
             interp_vals = np.array(interp_vals)
             
@@ -248,96 +218,130 @@ def export_campaign_plots(input_dir: Path, output_dir: Path):
                 mean_vals = np.nanmean(interp_vals, axis=0)
                 std_vals = np.nanstd(interp_vals, axis=0)
                 
-            ss_data = interp_vals[:, ss_mask]
-            
-            ss_mean = np.nanmean(ss_data)
-            ss_std = np.nanstd(ss_data)
-            ss_rmse = np.sqrt(np.nanmean(np.square(ss_data)))
-            ss_mae = np.nanmean(np.abs(ss_data))
+            mean_of_rmse = np.nanmean(flight_rmses)
+            std_of_rmse = np.nanstd(flight_rmses)
+            mean_of_mae = np.nanmean(flight_maes)
+            std_of_mae = np.nanstd(flight_maes)
             
             table_data.append({
                 'Metric': title,
                 'Group': group,
-                'SS_Mean': ss_mean,
-                'SS_Std': ss_std,
-                'SS_RMSE': ss_rmse,
-                'SS_MAE': ss_mae
+                'Mean_RMSE': mean_of_rmse,
+                'Std_RMSE': std_of_rmse,
+                'Mean_MAE': mean_of_mae,
+                'Std_MAE': std_of_mae
             })
             
-            lbl = rf'$\mathrm{{{group}}}\ (\mathrm{{}}\ {ss_mean:.3f} \pm {ss_std:.3f})$'
+            if error_metric.upper() == 'MAE':
+                metric_mean = mean_of_mae
+                metric_std = std_of_mae
+            else:
+                metric_mean = mean_of_rmse
+                metric_std = std_of_rmse
+            
+            if len(group_data) == 1:
+                lbl = rf'$\mathrm{{{group}}}\ (\mathrm{{{error_metric}:}}\ {metric_mean:.3f})$'
+            else:
+                lbl = rf'$\mathrm{{{group}}}\ (\mathrm{{{error_metric}:}}\ {metric_mean:.3f} \pm {metric_std:.3f})$'
+            
             ax.plot(t_grid, mean_vals, color=color, linewidth=2.5, label=lbl)
-            ax.fill_between(t_grid, mean_vals - std_vals, mean_vals + std_vals, color=color, alpha=0.2)
+            
+            if len(group_data) > 1:
+                ax.fill_between(t_grid, mean_vals - std_vals, mean_vals + std_vals, color=color, alpha=0.2)
             
         ax.axhline(0, color='black', linewidth=1.0, linestyle='--', alpha=0.5)
 
-        formatted_ms_title = ms_title.replace(" ", r"\ ")
-        ax.set_title(rf'$\mathrm{{{formatted_ms_title}}}$', fontweight='bold')
+        formatted_title = title.replace(" ", r"\ ")
+        ax.set_title(rf'$\mathrm{{{formatted_title}}}$', fontweight='bold')
         ax.set_ylabel(ylabel)
         ax.set_xlabel(r'$t$ [s]')
         ax.set_xlim([0, t_max])
         
         ax.legend(loc='best', frameon=True)
         
-        fig.savefig(output_dir / ms_filename, format='pdf', transparent=True)
+        fig.savefig(output_dir / filename, format='pdf', transparent=True)
         plt.close(fig)
-        print(f"Generato: {ms_filename}")
-        
-    ppo_tv_values = [d['tv_a_global'] for d in all_data if d['group'] == 'PPO' and 'tv_a_global' in d]
-    sppo_tv_values = [d['tv_a_global'] for d in all_data if d['group'] == 'SPPO' and 'tv_a_global' in d]
+        print(f"Generato: {filename}")
 
-    if ppo_tv_values or sppo_tv_values:
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
-        plot_data = []
-        labels = []
-        colors = []
-        
-        if ppo_tv_values:
-            plot_data.append(ppo_tv_values)
-            labels.append('PPO')
-            colors.append(c_ppo)
-        if sppo_tv_values:
-            plot_data.append(sppo_tv_values)
-            labels.append('SPPO')
-            colors.append(c_sppo)
-
-        bplot = ax.boxplot(plot_data, patch_artist=True, vert=True)
-        ax.set_xticks(range(1, len(labels) + 1))
-        ax.set_xticklabels(labels)
-
-        for patch, color in zip(bplot['boxes'], colors):
-            patch.set_facecolor(color)
-            patch.set_alpha(0.6)
-
-        ax.set_title(r'$\mathrm{Control\ Effort\ Smoothness\ (Total\ Variation)}$', fontweight='bold')
-        ax.set_ylabel(r'Total Variation ($\mathrm{TV}_{\mathrm{a}}$)')
-        
-        tv_filename = 'total_variation_boxplot.pdf'
-        fig.savefig(output_dir / tv_filename, format='pdf', transparent=True)
-        plt.close(fig)
-        print(f"Generato: {tv_filename}")
-    else:
-        print("\nAVVISO: Dati per la Total Variation non trovati in nessun file .npz.")
-
+    # Generate CSV Summary Table
     table_path = output_dir / 'summary_table.csv'
     with open(table_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Metric', 'Group', 'SteadyState_Mean', 'SteadyState_Std', 'SteadyState_RMSE', 'SteadyState_MAE'])
+        writer.writerow(['Metric', 'Group', 'Mean_RMSE', 'Std_RMSE', 'Mean_MAE', 'Std_MAE'])
         for row in table_data:
             writer.writerow([
                 row['Metric'], 
                 row['Group'], 
-                f"{row['SS_Mean']:.4f}", 
-                f"{row['SS_Std']:.4f}",
-                f"{row['SS_RMSE']:.4f}",
-                f"{row['SS_MAE']:.4f}"
+                f"{row['Mean_RMSE']:.4f}", 
+                f"{row['Std_RMSE']:.4f}",
+                f"{row['Mean_MAE']:.4f}",
+                f"{row['Std_MAE']:.4f}"
             ])
             
     print(f"Generata tabella riassuntiva: {table_path.name}")
+    
+    # Generate Summary Bar Chart
+    print(f"Generazione del Bar Chart riassuntivo per la metrica {error_metric}...")
+    
+    unique_metrics = []
+    for row in table_data:
+        if row['Metric'] not in unique_metrics:
+            unique_metrics.append(row['Metric'])
+            
+    ppo_means = []
+    ppo_stds = []
+    sppo_means = []
+    sppo_stds = []
+    
+    mean_key = f'Mean_{error_metric.upper()}'
+    std_key = f'Std_{error_metric.upper()}'
+    
+    for m in unique_metrics:
+        ppo_val = next((item for item in table_data if item['Metric'] == m and item['Group'] == 'PPO'), None)
+        sppo_val = next((item for item in table_data if item['Metric'] == m and item['Group'] == 'SPPO'), None)
         
+        ppo_means.append(ppo_val[mean_key] if ppo_val else 0.0)
+        ppo_stds.append(ppo_val[std_key] if ppo_val and ppo_val[std_key] > 0 else 0.0)
+        sppo_means.append(sppo_val[mean_key] if sppo_val else 0.0)
+        sppo_stds.append(sppo_val[std_key] if sppo_val and sppo_val[std_key] > 0 else 0.0)
+        
+    x = np.arange(len(unique_metrics))
+    width = 0.35
+    
+    fig, ax = plt.subplots(figsize=(14, 8))
+    
+    ppo_has_err = any(s > 0 for s in ppo_stds)
+    sppo_has_err = any(s > 0 for s in sppo_stds)
+    
+    rects1 = ax.bar(x - width/2, ppo_means, width, 
+                    yerr=ppo_stds if ppo_has_err else None, 
+                    label='PPO', color=c_ppo, capsize=5, alpha=0.8, edgecolor='black')
+    rects2 = ax.bar(x + width/2, sppo_means, width, 
+                    yerr=sppo_stds if sppo_has_err else None, 
+                    label='SPPO', color=c_sppo, capsize=5, alpha=0.8, edgecolor='black')
+    
+    ax.set_ylabel(rf'${error_metric.upper()}$ Value')
+    ax.set_title(rf'$\mathrm{{Comparison\ ({error_metric.upper()})\ -\ PPO\ vs\ SPPO}}$', fontweight='bold')
+    ax.set_xticks(x)
+    
+    # Clean up metric names for better x-axis readability
+    clean_metrics = [m.replace(" Error ", " ") for m in unique_metrics]
+    ax.set_xticklabels(clean_metrics, rotation=45, ha='right')
+    
+    ax.legend(loc='best', frameon=True)
+    ax.grid(axis='y', linestyle='--', alpha=0.7)
+    
+    fig.tight_layout()
+    bar_filename = f'summary_barchart_{error_metric.lower()}.pdf'
+    fig.savefig(output_dir / bar_filename, format='pdf', transparent=True)
+    plt.close(fig)
+    print(f"Generato: {bar_filename}")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export combined telemetry plots for a hovering campaign (PPO vs SPPO).")
     parser.add_argument("--input", type=str, required=True, help="Cartella contenente tutte le run (es. plots/hovering)")
+    parser.add_argument("--metric", type=str, choices=['RMSE', 'MAE'], default='RMSE', help="Evaluation metric to display in legends (RMSE or MAE)")
+    parser.add_argument("--t-crop", type=float, default=None, help="Maximum time to evaluate (e.g., 10.0 for cropping 20s flights)")
     args = parser.parse_args()
     
     input_dir = Path(args.input)
@@ -347,4 +351,4 @@ if __name__ == "__main__":
         print(f"Errore: Cartella di input '{input_dir}' non trovata.")
         exit(1)
         
-    export_campaign_plots(input_dir, output_dir)
+    export_campaign_plots(input_dir, output_dir, args.metric, args.t_crop)

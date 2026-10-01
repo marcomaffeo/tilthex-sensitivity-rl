@@ -52,7 +52,7 @@
     </model>
 
     <include>
-      <uri>model://tilthex-irisa</uri>
+      <uri>model://mrsim-tilthex-laas</uri>
       <name>hr6</name>
       <pose>0 0 0.21 0 0 1.5708</pose>
     </include>
@@ -65,7 +65,7 @@
       <hz>100</hz>
       <port>1509</port>
       <publish>
-        <link>hr6::tilthex_irisa__configuration_default_propellers_false</link>
+        <link>hr6::tilthex_laas</link>
         <name>HR_6</name>
       </publish>
     </plugin>

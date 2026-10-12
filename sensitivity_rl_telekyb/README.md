@@ -8,14 +8,6 @@ Part of [Tilthex Sensitivity RL](../README.md).
 
 ## How it works
 
-```mermaid
-flowchart LR
-    N["policy node (ROS 2)<br/>src/policy_control_node_tilthex.py"] <-->|"genomix"| C["TeleKyb3 components<br/>rotorcraft · pom · nhfc · mocap"]
-    C <-->|"simulation"| G["Gazebo + mrsim plugin<br/>worlds/myworld.world"]
-    C <-->|"real flight"| H["Tilthex<br/>motors + Qualisys mocap"]
-    U["mission commands<br/>pixi run policy-..."] -->|"ROS 2 services / topics"| N
-```
-
 - **TeleKyb3 components** (GenoM3, pocolibs middleware): `rotorcraft` drives the motors and reads the IMU,
   `pom` estimates the state from IMU and motion capture, `nhfc` is the baseline controller used for manual and
   emergency phases, `optitrack` (simulation) or `qualisys` (real vehicle) read the motion capture.

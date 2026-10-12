@@ -27,17 +27,6 @@ Each folder has its own README with the detailed instructions.
 
 ## From training to flight
 
-```mermaid
-flowchart LR
-    A["sensitivity_rl<br/>train.py"] -->|"policy_params.msgpack<br/>config.json"| B["sensitivity_rl_telekyb<br/>configs/policy/"]
-    B --> C["ROS 2 policy node<br/>+ TeleKyb3 components"]
-    C --> D["Gazebo simulation"]
-    C --> E["Tilthex<br/>(real flight)"]
-    D -->|"data.npz per flight"| F["data_analysis/"]
-    E -->|"data.npz per flight"| F
-    F --> G["tables and figures<br/>of the thesis"]
-```
-
 1. **Training.** `sensitivity_rl/sensitivity_rl/train.py` trains a policy on an environment
    (`tilthex_v1` for the thesis) and saves a run folder with `policy_params.msgpack` and `config.json`.
 2. **Deployment.** The run folder is copied into `sensitivity_rl_telekyb/configs/policy/`.

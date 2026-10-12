@@ -28,70 +28,6 @@ def setup_plugin_paths(g):
         if os.path.exists(p):
             g.rpath(p)
 
-class TK3Components:
-    """Standard Quadrotor (Simulation mostly)"""
-    def __init__(self, log_dir: Path):
-        g = genomix.connect()
-        setup_plugin_paths(g)
-
-        self.optitrack = g.load('optitrack')
-        self.rotorcraft = g.load('rotorcraft')
-        self.pom = g.load('pom')
-        self.nhfc = g.load('nhfc')
-        self.log_dir = log_dir
-
-    def setup(self):
-        self.optitrack.connect({'host': 'localhost', 'host_port': '1509', 'mcast': '', 'mcast_port': '0'})
-        self.rotorcraft.connect({'serial': '/tmp/pty-qr4', 'baud': 0})
-        self.rotorcraft.set_sensor_rate({'rate': {'imu': 1000, 'mag': 0, 'motor': 20, 'battery': 1}})
-        self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
-        self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
-
-        self.nhfc.set_gtmrp_geom({
-            'rotors': 4, 'cx': 0, 'cy': 0, 'cz': 0, 'armlen': 0.23, 'mass': 1.28,
-            'rx':0, 'ry': 0, 'rz': -1, 'cf': 6.5e-4, 'ct': 1e-5
-        })
-        self.nhfc.set_emerg({'emerg': {'descent': 0.1, 'dx': 0.5, 'dq': 1, 'dv': 3, 'dw': 3}})
-        self.nhfc.set_saturation({'sat': {'x': 1, 'v': 1, 'ix': 5.0}})
-        self.nhfc.set_servo_gain({ 'gain': {
-            'Kpxy': 5, 'Kpz': 10, 'Kqxy': 4, 'Kqz': 1,
-            'Kvxy': 6, 'Kvz': 8, 'Kwxy': 1, 'Kwz': 0.1,
-            'Kixy': 0, 'Kiz': 1.0
-        }})
-        self.nhfc.set_control_mode({'att_mode': '::nhfc::tilt_prioritized'})
-        self.nhfc.connect_port({'local': 'rotor_measure', 'remote': 'rotorcraft/rotor_measure'})
-        self.nhfc.connect_port({'local': 'state', 'remote': 'pom/frame/robot'})
-
-        self.pom.set_prediction_model('::pom::constant_acceleration')
-        self.pom.set_process_noise({'max_jerk': 100, 'max_dw': 50})
-        self.pom.set_history_length({'history_length': 0.25})
-        self.pom.set_mag_field({'magdir': {'x': 23.8e-06, 'y': -0.4e-06, 'z': -39.8e-06}})
-        self.pom.connect_port({'local': 'measure/imu', 'remote': 'rotorcraft/imu'})
-        self.pom.add_measurement('imu')
-        self.pom.connect_port({'local': 'measure/mag', 'remote': 'rotorcraft/mag'})
-        self.pom.add_measurement('mag')
-        self.pom.connect_port({'local': 'measure/mocap', 'remote': 'optitrack/bodies/QR_4'})
-        self.pom.add_measurement('mocap')
-
-    def start(self):
-        self.pom.log_state('/tmp/pom.log')
-        self.pom.log_measurements('/tmp/pom-measurements.log')
-        self.optitrack.set_logfile('/tmp/opti.log')
-        self.rotorcraft.log('/tmp/rotorcraft.log')
-        self.rotorcraft.start()
-        self.rotorcraft.servo(ack=True)
-        self.nhfc.log('/tmp/nhfc.log')
-        self.nhfc.set_current_position()
-
-    def stop(self):
-        self.rotorcraft.stop()
-        self.rotorcraft.log_stop()
-        self.nhfc.stop()
-        self.nhfc.log_stop()
-        self.pom.log_stop()
-        self.optitrack.unset_logfile()
-
-
 class TK3Components_tilthex:
     """TiltHex Platform (Sim and Real hardware auto-switching)"""
     def __init__(self, log_dir: Path):
@@ -210,13 +146,6 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
         print('avel:\n', avel)
 
     return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE)
-
-def wrench_to_rotor_speed(components, wrench):
-    alloc_inverse = np.array(components.nhfc.get_body_parameters()["body"]["iG"]).reshape(8, 6)[:4, 2:6]
-    rotor_force = alloc_inverse @ wrench
-    rotor_force = np.nan_to_num(rotor_force, nan=0.0, posinf=0.0, neginf=0.0)
-    rotor_force = np.clip(rotor_force, 0.0, 1e6)
-    return np.sqrt(rotor_force).tolist()
 
 def action_to_rotor_speed(components, action):
     cf = 12.0e-4

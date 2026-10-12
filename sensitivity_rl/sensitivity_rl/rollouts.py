@@ -73,7 +73,10 @@ def build_env_from_config(
         env_params = env_params.replace(
             max_steps_in_episode=int(config["EVAL_MAX_STEPS_IN_EPISODE"])
         )
-    env_params = env_params.replace(is_testing=True)
+    # Testing mode (fixed targets) exists only in the environments that define it
+    # (tilthex_v1, drone_v3); pendulum has no such flag.
+    if hasattr(env_params, "is_testing"):
+        env_params = env_params.replace(is_testing=True)
 
     wrapped_env = GymnaxWrapper(env)
     wrapped_env = ClipAction(wrapped_env)

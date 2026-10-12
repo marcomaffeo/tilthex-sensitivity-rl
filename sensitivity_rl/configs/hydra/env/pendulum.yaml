@@ -1,0 +1,24 @@
+# @package _global_
+# Pendulum environment configuration.
+#
+# Minimal example, meant to check an installation and to show how an environment
+# is plugged into the framework: it trains in a few minutes on a laptop CPU.
+# The hyperparameters are a reasonable starting point (method defaults and the
+# early framework configs), not a tuned result.
+
+ENV_NAME: pendulum
+
+# Environment settings
+NUM_ENVS: 256
+NUM_STEPS: 200          # one full episode per update (the pendulum episode lasts 200 steps)
+TOTAL_TIMESTEPS: 5000000
+NUM_MINIBATCHES: 32
+
+# RL parameters
+UPDATE_EPOCHS: 10
+GAMMA: 0.95
+ENT_COEF: 0.0
+
+# Sensitivity
+SENSITIVITY_REGULARIZATION_WEIGHT: 0.02
+DOMAIN_RANDOMIZATION: false

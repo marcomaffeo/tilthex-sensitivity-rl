@@ -152,6 +152,8 @@ celerybeat.pid
 .venv
 venv/
 ENV/
+# ...but not the Hydra environment configs (ENV/ also matches env/ on case-insensitive macOS)
+!configs/hydra/env/
 env.bak/
 venv.bak/
 

@@ -66,19 +66,14 @@ train_sppo_grad_param = "python sensitivity_rl/train.py ALGORITHM=sppo_grad_para
 train_sppo_aug_grad_param_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual"
 
 # Generate evaluation rollouts from a trained policy. Example:
-#   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --batch_size 256 --deterministic
+#   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --param_samples 10 --plot
 rollouts = "python sensitivity_rl/rollouts.py"
 
-plot_svg = "python sensitivity_rl/plots/plot_svg.py --data runs/latest/rollout_data_nominal.npz --outdir runs/latest/svg_plots/nominal && python sensitivity_rl/plots/plot_svg.py --data runs/latest/rollout_data_perturbed.npz --outdir runs/latest/svg_plots/perturbed"
 
 
 # Deletes all results
 clean = "rm -r ./runs/*"
 
-# Build wheel/sdist into dist/
-build = "python -m build"
-# Install in editable mode
-install = "pip install -e ."
 
 [target.linux-64.dependencies]
 texlive-core = ">=20230313,<20230314"

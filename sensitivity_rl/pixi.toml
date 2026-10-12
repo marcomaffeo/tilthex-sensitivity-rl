@@ -7,7 +7,8 @@ channels = ["conda-forge"]
 platforms = ["osx-arm64", "linux-64"]
 
 [dependencies]
-python = ">=3.10,<3.13"
+# Python >= 3.11 is required by flax >= 0.12 (nnx.List)
+python = ">=3.11,<3.13"
 tensorboard = "*"
 numpy = "*"
 matplotlib = ">=3.10.9,<4"
@@ -16,7 +17,6 @@ pip = "*"
 pytest = ">=8.4.2,<9"
 imageio = ">=2.37.0,<3"
 setuptools = "<70"
-texlive-core = ">=20230313,<20230314"
 # hydra-core from conda-forge: on PyPI its dependency antlr4-python3-runtime 4.9.3 is
 # source-only, and pixi cannot build it for the linux-only cuda environment on macOS.
 hydra-core = "*"
@@ -24,10 +24,11 @@ hydra-core = "*"
 
 [pypi-dependencies]
 jax = "<=0.9.1"
-distrax = "*"
+# distrax >= 0.1.8 uses tfp-nightly; 0.1.5 pulls tensorflow-probability 0.25, incompatible with jax 0.9
+distrax = ">=0.1.8"
 torch = ">=2.0.0"
 gymnax = "*"
-flax = "*"
+flax = ">=0.12"
 optax = "*"
 chex = "*"
 #sensitivity-rl = { path = ".", editable = true }

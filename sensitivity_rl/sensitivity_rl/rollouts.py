@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx, serialization
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1, TilthexV0, TilthexV1
+from envs import Pendulum, DroneV0, DroneV1, TilthexV1
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 

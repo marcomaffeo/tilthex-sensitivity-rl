@@ -37,7 +37,7 @@ from pathlib import Path
 from datetime import datetime
 from flax import serialization
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1, TilthexV0, TilthexV1
+from envs import Pendulum, DroneV0, DroneV1, TilthexV1
 from gymnax.environments import environment
 from envs.wrappers import (
     GymnaxWrapper,

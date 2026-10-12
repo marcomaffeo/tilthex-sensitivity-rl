@@ -21,7 +21,7 @@ Both policies are validated in a Gazebo simulation and in real flights.
 |---|---|---|
 | [`sensitivity_rl/`](sensitivity_rl/) | Training framework in JAX: environments, PPO/SPPO algorithms, evaluation rollouts | macOS (Apple Silicon) and Linux x86_64, optional NVIDIA GPU |
 | [`sensitivity_rl_telekyb/`](sensitivity_rl_telekyb/) | Deployment: ROS 2 node that runs a trained policy on the Tilthex through TeleKyb3, Gazebo simulation, the flown policies | Linux x86_64 (simulation), Linux aarch64 (onboard computer) |
-| [`data_analysis/`](data_analysis/) | Analysis of the flight campaigns: flight data, scripts, result tables of the thesis | any system with Python 3 |
+| [`data_analysis/`](data_analysis/) | Analysis of the flight campaigns: flight data, scripts, result tables of the thesis | macOS and Linux (any Python 3 with numpy, scipy, matplotlib) |
 
 Each folder has its own README with the detailed instructions.
 
@@ -100,8 +100,8 @@ The full procedure is in [`sensitivity_rl_telekyb/README.md`](sensitivity_rl_tel
 
 ```bash
 cd data_analysis
-python analyze_trajectory.py --input p2p_nominal                     # metrics of one campaign
-python compare_trajectory.py -n p2p_nominal -p p2p_perturbed         # nominal vs perturbed
+pixi install
+pixi run tables      # regenerate every table and figure of the thesis from the flight data (about 2 minutes)
 ```
 
 See [`data_analysis/README.md`](data_analysis/README.md) for every campaign and script.
@@ -148,6 +148,7 @@ make install
 | Training of the thesis policies | Linux x86_64, NVIDIA GPU | used for PPO_14 and SPPO_14 |
 | Simulation with the policy node | Linux x86_64, during the thesis | working; not re-run after the October 2026 clean-up of the repository |
 | Real flights | Tilthex, IRISA flight arena (May 2026) | code at tag `flight-campaign` |
+| Analysis: every table regenerated from the `data.npz` files | Linux (October 2026) | identical to the tracked tables up to floating-point rounding |
 
 ## Credits and licence
 

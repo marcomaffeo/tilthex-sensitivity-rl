@@ -1,0 +1,20 @@
+[workspace]
+name = "tilthex-data-analysis"
+description = "Analysis of the Tilthex flight campaigns (PPO vs SPPO)"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+python = "3.12.*"
+numpy = "*"
+scipy = "*"
+matplotlib = "*"
+
+[tasks]
+# Regenerate every result table (and figure) of the thesis from the data.npz files.
+# Order matters: the comparisons read the tables written by analyze_trajectory.py.
+analyze-trajectories = "python analyze_trajectory.py --input p2p_nominal && python analyze_trajectory.py --input p2p_perturbed && python analyze_trajectory.py --input rpy_nominal && python analyze_trajectory.py --input rpy_perturbed"
+compare = { cmd = "python compare_trajectory.py -n p2p_nominal -p p2p_perturbed && python compare_trajectory.py -n rpy_nominal -p rpy_perturbed", depends-on = ["analyze-trajectories"] }
+rotor-tv = "python export_rotor_tv.py p2p && python export_rotor_tv.py rpy"
+hovering = "python analyze_campaign.py --input hovering_campaign"
+tables = { depends-on = ["compare", "rotor-tv", "hovering"] }

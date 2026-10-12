@@ -1,0 +1,188 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape https://cad.onshape.com/documents/1ec8d2cd902b8e61882ef63c/w/f95c186669643e2c6d1a3171/e/d754230cf634517f82e75c92 -->
+<sdf version="1.7">
+  <model name="tilthex_laas">
+    <!-- Link tilthex_laas -->
+    <link name="tilthex_laas">
+      <inertial>
+        <pose>0.000122973 0.00013006 0.0248586 0 0 0</pose>
+        <mass>2.98645</mass>
+        <inertia>
+          <ixx>0.082529</ixx>
+          <ixy>0.00175324</ixy>
+          <ixz>1.3135e-06</ixz>
+          <iyy>0.0846092</iyy>
+          <iyz>-5.1512e-05</iyz>
+          <izz>0.154814</izz>
+        </inertia>
+      </inertial>
+      <pose>0 0 0 0 -0 0</pose>
+      <!-- Part tilthex_laas_parts -->
+      <visual name="tilthex_laas_parts_visual_mesh_1">
+        <pose relative_to="tilthex_laas">0.000122973 0.00013006 0.0248586 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://mrsim-tilthex-laas/assets/merged/tilthex_laas_visual.stl</uri>
+          </mesh>
+        </geometry>
+        <material>
+          <ambient>0.558611 0.483785 0.395435 1.0</ambient>
+          <diffuse>0.558611 0.483785 0.395435 1.0</diffuse>
+          <specular>0.1 0.1 0.1 1</specular>
+          <emissive>0 0 0 0</emissive>
+        </material>
+      </visual>
+      <collision name="tilthex_laas_parts_collision_mesh_2">
+        <pose relative_to="tilthex_laas">0.000122973 0.00013006 0.0248586 0 -0 0</pose>
+        <geometry>
+          <mesh>
+            <uri>model://mrsim-tilthex-laas/assets/merged/tilthex_laas_collision.stl</uri>
+          </mesh>
+        </geometry>
+      </collision>
+    </link>
+    <frame name="motor1">
+      <pose relative_to="tilthex_laas">0.39 0.00485669 0.0133436 -0.357673 3.96782e-15 1.25044e-14</pose>
+    </frame>
+    <frame name="motor2">
+      <pose relative_to="tilthex_laas">0.199206 0.335322 0.0133436 0.357673 -3.72628e-15 1.0472</pose>
+    </frame>
+    <frame name="motor3">
+      <pose relative_to="tilthex_laas">-0.199206 0.335322 0.0133436 -0.357673 3.96782e-15 2.0944</pose>
+    </frame>
+    <frame name="motor4">
+      <pose relative_to="tilthex_laas">-0.39 0.00485669 0.0133436 0.357673 -3.73367e-15 -3.14159</pose>
+    </frame>
+    <frame name="motor5">
+      <pose relative_to="tilthex_laas">-0.190794 -0.340178 0.0133436 -0.357673 3.75163e-15 -2.0944</pose>
+    </frame>
+    <frame name="motor6">
+      <pose relative_to="tilthex_laas">0.190794 -0.340178 0.0133436 0.357673 -3.63648e-15 -1.0472</pose>
+    </frame>
+
+    <!-- VISUAL ELEMENT + FIXED JOINT TO DISTINGUISH X BODY AXIS -->
+    <link name="x_axis_visualizer">
+    <pose relative_to="tilthex_laas">0.2 0 0 0 1.57 0</pose>
+        <inertial>
+          <pose>0 0 0 0 0 0</pose>
+          <mass>1e-9</mass>
+          <inertia>
+            <ixx>1e-9</ixx>
+            <iyy>1e-9</iyy>
+            <izz>1e-9</izz>
+          </inertia>
+        </inertial>
+        <visual name="cylinder_visual">
+          <geometry>
+            <cylinder>
+              <radius>0.009</radius>
+              <length>0.41</length>
+            </cylinder>
+          </geometry>
+          <material>
+            <ambient>1 0 0 1</ambient>
+            <diffuse>1 0 0 1</diffuse>
+            <specular>0.1 0.1 0.1 1</specular>
+            <emissive>0 0 0 0</emissive>
+          </material>
+        </visual>
+      </link>
+
+    <joint name="fake_joint" type="fixed">
+      <parent>tilthex_laas</parent>
+      <child>x_axis_visualizer</child>
+      <axis><xyz>0 0 1</xyz></axis>
+    </joint>
+
+
+
+    <!-- PROPELLERS -->
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-1</name>
+			<pose relative_to="motor1"> 0 0 0.047 0 0 0</pose>
+		</include>
+		<joint name="propeller-1-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-1::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-2</name>
+			<pose relative_to="motor2"> 0 0 0.047 0 0 0</pose>
+		</include>
+		<joint name="propeller-2-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-2::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-3</name>
+			<pose relative_to="motor3"> 0 0 0.047 0 0 0</pose>
+		</include>
+		<joint name="propeller-3-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-3::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-4</name>
+			<pose relative_to="motor4"> 0 0 0.047 0 0 0</pose>
+		</include>
+		<joint name="propeller-4-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-4::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-5</name>
+			<pose relative_to="motor5"> 0 0 0.047 0 0 0</pose>
+		</include>
+		
+		<joint name="propeller-5-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-5::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+		<include>
+			<uri>model://propeller</uri>
+			<name>propeller-6</name>
+			<pose relative_to="motor6"> 0 0 0.047 0 0 0</pose>
+		</include>
+		<joint name="propeller-6-joint" type="revolute">
+			<parent>tilthex_laas</parent>
+			<child>propeller-6::blade</child>
+			<axis><xyz>0 0 1</xyz></axis>
+		</joint>
+
+
+		<!-- PLUGIN -->
+		<plugin name="mrsim" filename="mrsim-gazebo.so">
+			<link>tilthex_laas</link>
+			<rotors>
+				<noise>0.03</noise> <!-- Noise added to the rotor speed (Hz) -->
+				<cf>12.0e-4</cf> <!-- Rotor thrust coefficient (N/Hz²) -->
+				<ct>2.4e-5</ct> <!-- Rotor quadratic torque coefficient (N.m/Hz²) -->
+
+        <vfxy>1.2</vfxy>  <!-- Vibration force radial amplitude, (%cf) -->
+        <vfz>0.1</vfz>    <!-- Vibration force axial amplitude, (%cf) -->
+        <vtxy>7.0</vtxy>  <!-- Vibration torque radial amplitude, (%ct) -->
+        <vtz>3.5</vtz>    <!-- Vibration torque axial amplitude, (%ct) -->
+
+				<rotor><joint spin="cw">propeller-1-joint</joint></rotor>
+				<rotor><joint spin="ccw">propeller-2-joint</joint></rotor>
+				<rotor><joint spin="cw">propeller-3-joint</joint></rotor>
+				<rotor><joint spin="ccw">propeller-4-joint</joint></rotor>
+				<rotor><joint spin="cw">propeller-5-joint</joint></rotor>
+				<rotor><joint spin="ccw">propeller-6-joint</joint></rotor>
+			</rotors>
+		</plugin>
+
+  </model>
+</sdf>

@@ -1,0 +1,13 @@
+<?xml version='1.0'?>
+<!-- Documentation at https://gazebosim.org/docs/ionic/web_visualization/ -->
+<gz version='1.0'>
+  <plugin name='gz::launch::WebsocketServer'
+          filename='gz-launch-websocket-server'>
+    <port>9002</port>
+    <publication_hz>60</publication_hz>
+    <ssl>
+      <cert_file>${PIXI_PROJECT_ROOT}/.ssl/localhost.cert</cert_file>
+      <private_key_file>${PIXI_PROJECT_ROOT}/.ssl/localhost.key</private_key_file>
+    </ssl>
+  </plugin>
+</gz>

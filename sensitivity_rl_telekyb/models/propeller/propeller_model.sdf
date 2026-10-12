@@ -1,0 +1,50 @@
+<?xml version="1.0" ?>
+<sdf version="1.7">
+	
+  <model name="propeller">
+
+    <link name="blade">
+
+		<gravity>0</gravity>
+		
+		<inertial>
+			<mass>0.01355</mass>
+			<inertia>
+			  <ixx>7.80691e-07</ixx>
+			  <ixy>-2.7171e-06</ixy>
+			  <ixz>7.33808e-11</ixz>
+			  <iyy>0.000112674</iyy>
+			  <iyz>1.3261e-11</iyz>
+			  <izz>0.000113168</izz>
+			</inertia>
+		</inertial>
+
+      	<pose>0 0 0 0 0 0</pose>
+
+		<visual name="blade_visual">
+        	<pose>0 0 0 0 0 0</pose>
+        	<geometry>
+          		<mesh>
+            		<uri>model://propeller/meshes/blade_visual.stl</uri>
+          		</mesh>
+        	</geometry>
+        	<material>
+          		<ambient>0.196078 0.192157 0.192157 1.0</ambient>
+          		<diffuse>0.196078 0.192157 0.192157 1.0</diffuse>
+          		<specular>0.1 0.1 0.1 1</specular>
+          		<emissive>0 0 0 0</emissive>
+        	</material>
+      	</visual>
+
+      	<collision name="blade_collision">
+        	<pose>0 0 0 0 0 0</pose>
+			<geometry>
+				<cylinder><radius>0.163</radius><length>0.012</length></cylinder>
+        	</geometry>
+      	</collision>
+
+    </link>
+
+  </model>
+
+</sdf>

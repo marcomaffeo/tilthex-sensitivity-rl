@@ -110,10 +110,22 @@ angles in degrees, waits in seconds.
 
 | Command | Arguments | Sequence |
 |---|---|---|
-| `pixi run policy-takeoff-zero-point-land` | `takeoff x y z wait` | takeoff → hold above the origin at the takeoff height → move to (x, y, takeoff + z) → land below that point (point-to-point mission) |
-| `pixi run policy-takeoff-zero-attitude-zero-land` | `takeoff roll pitch yaw wait` | takeoff → hold level → attitude target → back to level, keeping the target yaw → landing (attitude mission) |
+| `pixi run policy-takeoff-zero-point-land` | `takeoff x y z wait` | point-to-point mission (see below) |
+| `pixi run policy-takeoff-zero-attitude-zero-land` | `takeoff roll pitch yaw wait` | attitude mission (see below) |
 | `pixi run policy-takeoff-to-point-land` | `takeoff dx dy dz wait` | takeoff → one displacement → landing |
 | `pixi run policy-takeoff-attitude-land` | `takeoff roll pitch yaw wait` | takeoff → attitude target → hover → landing |
+
+The two missions flown in the thesis are the first two. Each phase lasts `wait` seconds.
+With (x₀, y₀, z₀, yaw₀) the pose read at the start, on the ground, the references
+(x, y, z, roll, pitch, yaw) are:
+
+| Phase | Point-to-point: `policy-takeoff-zero-point-land h x y z wait` | Attitude: `policy-takeoff-zero-attitude-zero-land h roll pitch yaw wait` |
+|---|---|---|
+| takeoff | (x₀, y₀, h, 0, 0, yaw₀) | (x₀, y₀, h, 0, 0, yaw₀) |
+| zero | (0, 0, h, 0, 0, 0) | (0, 0, h, 0, 0, 0) |
+| target | (x, y, h + z, 0, 0, 0) | (0, 0, h, roll, pitch, yaw) |
+| back to zero | — | (0, 0, h, 0, 0, yaw) |
+| landing | (x, y, z₀, 0, 0, 0) | (0, 0, z₀, 0, 0, yaw) |
 
 Single steps are also available, for manual flights:
 

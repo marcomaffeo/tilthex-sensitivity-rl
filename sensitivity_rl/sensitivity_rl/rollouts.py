@@ -22,7 +22,7 @@ import jax.numpy as jnp
 import numpy as np
 from flax import nnx, serialization
 from envs import ENV_REGISTRY
-from envs import Pendulum, DroneV0, DroneV1, TilthexV1
+from envs import Pendulum, DroneV3, TilthexV1
 from envs.wrappers import GymnaxWrapper, ClipAction
 from jax.flatten_util import ravel_pytree
 
@@ -58,7 +58,7 @@ def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
 def build_env_from_config(
     config: Dict[str, Any],
 ) -> Tuple[GymnaxWrapper, Any, str, type]:
-    env_name = config.get("ENV_NAME", "drone_v0").lower()
+    env_name = config.get("ENV_NAME", "tilthex_v1").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
             f"Unknown environment '{env_name}'. Available: {sorted(ENV_REGISTRY)}"

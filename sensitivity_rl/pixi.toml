@@ -29,10 +29,6 @@ optax = "*"
 chex = "*"
 hydra-core = "*"
 #sensitivity-rl = { path = ".", editable = true }
-mujoco-mjx = "*"
-mujoco = "*"
-warp = "*"
-warp-lang = "*"
 
 # CPU environment: install JAX CPU wheels via PyPI
 # [feature.cpu.pypi-dependencies]

@@ -122,11 +122,15 @@ class TK3Components_tilthex:
         self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
         self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
+        # 28/09/2026: massa e offset del baricentro allineati al modello CAD
+        # (models/mrsim-tilthex-laas/tilthex_laas.sdf) e all'ambiente di training.
+        # Prima erano mass=2.936 e cx=cy=cz=0. La campagna di voli riportata in tesi
+        # e' stata volata con i valori precedenti.
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
-            'cx': 0, 'cy': 0, 'cz': 0,
+            'cx': 0.000122973, 'cy': 0.00013006, 'cz': 0.0248586,
             'armlen': 0.39, 
-            'mass': 2.936,
+            'mass': 2.98645,
             'rx': -20.0, 'ry': 0.0, 'rz': -1, 
             'cf': 12.0e-4, 'ct': 2.4e-5
         })

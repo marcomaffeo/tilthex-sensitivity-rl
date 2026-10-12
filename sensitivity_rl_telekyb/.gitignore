@@ -8,3 +8,12 @@ logs/*.txt
 gitlab_upload.sh# pixi environments
 .pixi/*
 !.pixi/config.toml
+
+# macOS
+.DS_Store
+# Python cache
+__pycache__/
+# Runtime outputs of the policy node and of run_campaign.py.
+# Flight logs and their analysis live outside this package (data_analysis/).
+logs/
+campaigns/

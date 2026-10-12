@@ -17,6 +17,9 @@ pytest = ">=8.4.2,<9"
 imageio = ">=2.37.0,<3"
 setuptools = "<70"
 texlive-core = ">=20230313,<20230314"
+# hydra-core from conda-forge: on PyPI its dependency antlr4-python3-runtime 4.9.3 is
+# source-only, and pixi cannot build it for the linux-only cuda environment on macOS.
+hydra-core = "*"
 
 
 [pypi-dependencies]
@@ -27,7 +30,6 @@ gymnax = "*"
 flax = "*"
 optax = "*"
 chex = "*"
-hydra-core = "*"
 #sensitivity-rl = { path = ".", editable = true }
 
 # CPU environment: install JAX CPU wheels via PyPI

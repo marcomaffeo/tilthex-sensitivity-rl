@@ -85,8 +85,8 @@ def export_telemetry_plots(ppo_path: Path, sppo_path: Path, ext="svg", freq=100.
         print(f"Errore nel caricamento dei file npz: {e}")
         return
 
-    c_ppo = '#1f77b4'  # Blue for PPO
-    c_sppo = '#d62728' # Red for SPPO
+    c_ppo = '#ff7f0e'  # Orange for PPO
+    c_sppo = '#1f77b4' # Blue for SPPO
     c_ref = '#000000'  # Black for Reference
 
     output_dir = ppo_path.parent / "exported_plot"

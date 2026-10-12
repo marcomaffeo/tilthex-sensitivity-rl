@@ -165,13 +165,14 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # N.B. Ho aggiornato i titoli e le label per riflettere il fatto che plottiamo il Valore Assoluto
     metrics_def = [
-        ('e_x', r'$e_x$ [m]', 'Position Error X', '1_error_pos_x.pdf'),
-        ('e_y', r'$e_y$ [m]', 'Position Error Y', '2_error_pos_y.pdf'),
-        ('e_z', r'$e_z$ [m]', 'Position Error Z', '3_error_pos_z.pdf'),
-        ('e_roll', r'$e_\phi$ [rad]', 'Attitude Error Roll', '4_error_att_roll.pdf'),
-        ('e_pitch', r'$e_\theta$ [rad]', 'Attitude Error Pitch', '5_error_att_pitch.pdf'),
-        ('e_yaw', r'$e_\psi$ [rad]', 'Attitude Error Yaw', '6_error_att_yaw.pdf'),
+        ('e_x', r'$|e_x|$ [m]', 'Absolute Position Error X', '1_error_pos_x.pdf'),
+        ('e_y', r'$|e_y|$ [m]', 'Absolute Position Error Y', '2_error_pos_y.pdf'),
+        ('e_z', r'$|e_z|$ [m]', 'Absolute Position Error Z', '3_error_pos_z.pdf'),
+        ('e_roll', r'$|e_\phi|$ [rad]', 'Absolute Attitude Error Roll', '4_error_att_roll.pdf'),
+        ('e_pitch', r'$|e_\theta|$ [rad]', 'Absolute Attitude Error Pitch', '5_error_att_pitch.pdf'),
+        ('e_yaw', r'$|e_\psi|$ [rad]', 'Absolute Attitude Error Yaw', '6_error_att_yaw.pdf'),
         ('e_pos_norm', r'$||e_p||$ [m]', 'Total Position Error', '7_error_pos_total.pdf'),
         ('e_att_norm', r'$||e_R||$ [rad]', 'Total Attitude Error', '8_error_att_total.pdf'),
         ('e_vel_norm', r'$||e_v||$ [m/s]', 'Total Velocity Error', '9_error_vel_total.pdf'),
@@ -179,8 +180,8 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
     ]
     
     metrics_to_plot = [m for m in metrics_def if m[0] in all_data[0]]
-    c_ppo = '#1f77b4'  
-    c_sppo = '#d62728' 
+    c_ppo = '#ff7f0e'  # arancione
+    c_sppo = '#1f77b4' # blu
 
     print(f"Generazione dei grafici aggregati utilizzando la metrica {error_metric}...")
     
@@ -201,15 +202,19 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
             interp_vals = []
             flight_rmses = []
             flight_maes = []
+            flight_maxs = []
             
             for d in group_data:
                 vals = np.interp(t_grid, d['t'], d[key], left=np.nan, right=np.nan)
-                interp_vals.append(vals)
                 
                 valid_data = vals[mask]
                 if len(valid_data) > 0:
                     flight_rmses.append(np.sqrt(np.nanmean(np.square(valid_data))))
                     flight_maes.append(np.nanmean(np.abs(valid_data)))
+                    flight_maxs.append(np.nanmax(np.abs(valid_data)))
+                
+                # CRUCIALE: Plottiamo la magnitudo dell'errore per allineare il grafico all'RMSE/MAE calcolato
+                interp_vals.append(np.abs(vals))
                 
             interp_vals = np.array(interp_vals)
             
@@ -219,17 +224,22 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
                 std_vals = np.nanstd(interp_vals, axis=0)
                 
             mean_of_rmse = np.nanmean(flight_rmses)
-            std_of_rmse = np.nanstd(flight_rmses)
-            mean_of_mae = np.nanmean(flight_maes)
-            std_of_mae = np.nanstd(flight_maes)
+            mean_of_mae  = np.nanmean(flight_maes)
+            mean_of_max  = np.nanmean(flight_maxs)
+
+            std_of_rmse = np.nanstd(flight_rmses, ddof=1)
+            std_of_mae  = np.nanstd(flight_maes,  ddof=1)
+            std_of_max  = np.nanstd(flight_maxs,  ddof=1)
             
             table_data.append({
-                'Metric': title,
+                'Metric': title.replace("Absolute ", ""), # Rimuoviamo "Absolute" per mantenere pulita la tabella
                 'Group': group,
                 'Mean_RMSE': mean_of_rmse,
                 'Std_RMSE': std_of_rmse,
                 'Mean_MAE': mean_of_mae,
-                'Std_MAE': std_of_mae
+                'Std_MAE': std_of_mae,
+                'Mean_MAX': mean_of_max,
+                'Std_MAX': std_of_max
             })
             
             if error_metric.upper() == 'MAE':
@@ -257,6 +267,10 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
         ax.set_xlabel(r'$t$ [s]')
         ax.set_xlim([0, t_max])
         
+        # Facciamo partire l'asse Y da 0 per gli errori assoluti
+        bottom, top = ax.get_ylim()
+        ax.set_ylim(0, top)
+        
         ax.legend(loc='best', frameon=True)
         
         fig.savefig(output_dir / filename, format='pdf', transparent=True)
@@ -267,7 +281,7 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
     table_path = output_dir / 'summary_table.csv'
     with open(table_path, mode='w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerow(['Metric', 'Group', 'Mean_RMSE', 'Std_RMSE', 'Mean_MAE', 'Std_MAE'])
+        writer.writerow(['Metric', 'Group', 'Mean_RMSE', 'Std_RMSE', 'Mean_MAE', 'Std_MAE', 'Mean_MAX', 'Std_MAX'])
         for row in table_data:
             writer.writerow([
                 row['Metric'], 
@@ -275,7 +289,9 @@ def export_campaign_plots(input_dir: Path, output_dir: Path, error_metric: str, 
                 f"{row['Mean_RMSE']:.4f}", 
                 f"{row['Std_RMSE']:.4f}",
                 f"{row['Mean_MAE']:.4f}",
-                f"{row['Std_MAE']:.4f}"
+                f"{row['Std_MAE']:.4f}",
+                f"{row['Mean_MAX']:.4f}",
+                f"{row['Std_MAX']:.4f}"
             ])
             
     print(f"Generata tabella riassuntiva: {table_path.name}")

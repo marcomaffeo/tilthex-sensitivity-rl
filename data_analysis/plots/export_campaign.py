@@ -68,7 +68,17 @@ def generate_comparison_plots(path1: Path, label1: str, path2: Path, label2: str
         "lines.antialiased": True
     })
 
-    c1, c2 = '#1f77b4', '#ff7f0e' # Blu e Arancione
+    C_PPO, C_SPPO, C_FALLBACK = '#ff7f0e', '#1f77b4', '#2ca02c'  # arancione / blu, come analyze_trajectory.py
+
+    def color_for(label: str) -> str:
+        key = label.strip().upper()
+        if key == 'PPO':
+            return C_PPO
+        if key == 'SPPO':
+            return C_SPPO
+        return C_FALLBACK
+
+    c1, c2 = color_for(label1), color_for(label2)
 
     # --- FIG 1: Comparison Tracking Errors ---
     fig_err, axs_err = plt.subplots(2, 1, figsize=(12, 10), sharex=True)

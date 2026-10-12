@@ -1,0 +1,82 @@
+\documentclass[tikz,border=10pt]{standalone}
+\usepackage{tikz}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm} 
+\usetikzlibrary{positioning, arrows.meta, calc, decorations.pathreplacing}
+
+\providecommand{\vect}[1]{\bm{#1}}
+
+\begin{document}
+\begin{tikzpicture}[
+    >={Latex[length=5mm, width=3mm]}, % Frecce ulteriormente ingrandite per proporzione
+    font=\huge, % Testo globale (linee/frecce) aumentato a \huge
+    block/.style={
+        rectangle,
+        draw=black,
+        thick,
+        minimum width=4.5cm, 
+        minimum height=2.2cm, 
+        align=center,
+        font=\Huge % Testo dei blocchi al massimo (\Huge)
+    },
+    bold_block/.style={
+        rectangle,
+        draw=black, 
+        thick,
+        font=\bfseries\Huge, % Testo dei blocchi al massimo e in grassetto
+        minimum width=4.5cm,
+        minimum height=2.2cm,
+        align=center
+    },
+    image_block/.style={
+        rectangle,
+        draw=black,
+        thick,
+        minimum width=5cm,
+        minimum height=3.5cm,
+        align=center
+    },
+    arrow/.style={
+        ->,
+        thick,
+        line width=1.5pt % Spessore linea aumentato
+    }
+]
+
+% Nodes
+\node[block] (observer) {Observer};
+\node[bold_block, right=5.5cm of observer] (ppo) {PPO/\\SPPO}; % Spazio aumentato per ospitare la matrice grande
+\node[block, right=5cm of ppo] (action) {Action};
+
+% Drone image node
+\node[image_block, right=6.5cm of action] (drone) {\includegraphics[width=4.5cm, height=3cm, keepaspectratio]{cad_model.png}}; 
+
+% Initial input
+\coordinate (start) at ($(observer.west) - (3.5cm,0)$);
+\draw[arrow] (start) -- (observer.west) node[midway, above=0.4cm] {$\vect{p}_d, \vect{q}_d$};
+
+% Arrow Observer -> PPO
+\draw[arrow] (observer.east) -- (ppo.west) node[midway, above=0.3cm] { 
+    $\renewcommand{\arraystretch}{1.2}
+    \begin{bmatrix}
+    \vect{e}_p^b \\
+    \vect{v}^b \\
+    \vect{q} \\
+    \vect{\omega} \\
+    \vect{q}_e
+    \end{bmatrix} \in \mathbb{R}^{17}$
+};
+
+% Arrow PPO -> Action
+\draw[arrow] (ppo.east) -- (action.west) node[midway, above=0.5cm] {$\vect{a}_t \in [-1, 1]$}; 
+
+% Arrow Action -> Drone (Rimossa la radice quadrata)
+\draw[arrow] (action.east) -- (drone.west) node[midway, above=0.5cm] {$\varpi_i \in [16, 100]$ Hz}; 
+
+% Feedback loop (Drone -> Observer)
+\coordinate (feedback_y) at ($(observer.south) - (0, 3cm)$); % Loop abbassato per evitare sovrapposizioni
+\draw[arrow] (drone.south) -- (drone.south |- feedback_y) -- (observer.south |- feedback_y) -- (observer.south);
+
+\end{tikzpicture}
+\end{document}

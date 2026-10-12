@@ -1,0 +1,7 @@
+# macOS
+.DS_Store
+# Python
+__pycache__/
+*.pyc
+# pixi environments (each subproject has its own)
+.pixi/

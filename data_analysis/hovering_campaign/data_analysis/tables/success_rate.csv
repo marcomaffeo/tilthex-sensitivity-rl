@@ -1,0 +1,3 @@
+group,n_total,n_success,rate_pct,wilson_lo,wilson_hi,p_fisher,mean_sat_frac,inf_time_mean_ms,inf_time_max_ms
+PPO,14,14,100.00,78.47,100.00,1.0000,0.00000,1.214,4.756
+SPPO,14,14,100.00,78.47,100.00,1.0000,0.00000,1.270,4.743

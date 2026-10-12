@@ -1,0 +1,18 @@
+% RMSE mediato dentro ciascuna policy, poi media +/- std sulle policy.
+% p: Wilcoxon signed-rank appaiato sulle coppie PPO/SPPO.
+\begin{tabular}{lccrc}
+\toprule
+Metric & PPO & SPPO & $\Delta$ [\%] & $p$ \\
+\midrule
+Position Error X (body) & $0.0155 \pm 0.0122$ & $0.0126 \pm 0.0085$ & $-18.8$ & 0.426 \\
+Position Error Y (body) & $0.0324 \pm 0.0132$ & $0.0374 \pm 0.0170$ & $+15.5$ & 0.153 \\
+Position Error Z (body) & $0.0098 \pm 0.0125$ & $0.0071 \pm 0.0070$ & $-27.9$ & 0.068 \\
+Attitude Error Roll & $0.0184 \pm 0.0104$ & $0.0219 \pm 0.0154$ & $+18.8$ & 0.626 \\
+Attitude Error Pitch & $0.0106 \pm 0.0090$ & $0.0138 \pm 0.0113$ & $+30.2$ & 0.583 \\
+Attitude Error Yaw & $0.0614 \pm 0.0157$ & $0.0583 \pm 0.0148$ & $-5.1$ & 0.626 \\
+Total Position Error & $0.0402 \pm 0.0151$ & $0.0417 \pm 0.0164$ & $+3.7$ & 0.583 \\
+Total Attitude Error & $0.0662 \pm 0.0163$ & $0.0656 \pm 0.0180$ & $-0.8$ & 1.000 \\
+Linear Velocity Norm & $0.0421 \pm 0.0102$ & $0.0407 \pm 0.0134$ & $-3.3$ & 0.358 \\
+Angular Velocity Norm & $0.1396 \pm 0.0595$ & $0.1281 \pm 0.0681$ & $-8.2$ & 0.296 \\
+\bottomrule
+\end{tabular}

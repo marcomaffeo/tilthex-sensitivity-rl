@@ -1,0 +1,15 @@
+% p2p_nominal: transitorio normalizzato sull'ampiezza del gradino.
+% e(t)/Delta e' invariante rispetto all'ampiezza del gradino nel regime
+% lineare: assunzione da dichiarare nel testo. Solo fasi raggiunte da un gradino
+% (decollo e atterraggio sono rampe ed escono).
+\begin{tabular}{llccccc}
+\toprule
+Phase & Policy & $\Delta$ [m] & peak/$\Delta$ [-] & RMSE$_{tr}$/$\Delta$ [-] & IAE/$\Delta$ [-] & peak $\|e_R\|$/$\Delta$ [rad/m] \\
+\midrule
+SETPOINT 1 & PPO & 1.350 & 0.9752 & 0.3772 & 0.1642 & 0.266 \\
+SETPOINT 1 & SPPO & 1.472 & 0.9827 & 0.3835 & 0.1557 & 0.274 \\
+\midrule
+SETPOINT 2 & PPO & 0.735 & 0.9504 & 0.3787 & 0.1968 & 0.295 \\
+SETPOINT 2 & SPPO & 0.735 & 0.9825 & 0.3836 & 0.1773 & 0.335 \\
+\bottomrule
+\end{tabular}

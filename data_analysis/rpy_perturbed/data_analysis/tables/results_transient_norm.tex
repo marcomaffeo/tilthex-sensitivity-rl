@@ -1,0 +1,12 @@
+% rpy_perturbed: transitorio normalizzato sull'ampiezza del gradino.
+% e(t)/Delta e' invariante rispetto all'ampiezza del gradino nel regime
+% lineare: assunzione da dichiarare nel testo. Solo fasi raggiunte da un gradino
+% (decollo e atterraggio sono rampe ed escono).
+\begin{tabular}{llccccc}
+\toprule
+Phase & Policy & $\Delta$ [m] & peak/$\Delta$ [-] & RMSE$_{tr}$/$\Delta$ [-] & IAE/$\Delta$ [-] & peak $\|e_R\|$/$\Delta$ [rad/m] \\
+\midrule
+SETPOINT 1 & PPO & 1.459 & 0.9716 & 0.3821 & 0.1857 & 0.287 \\
+SETPOINT 1 & SPPO & 1.479 & 0.9827 & 0.3911 & 0.1803 & 0.268 \\
+\bottomrule
+\end{tabular}

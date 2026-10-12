@@ -1,0 +1,30 @@
+% rpy_nominal vs rpy_perturbed
+% D = perturbed / nominal. D > 1 = peggioramento.
+% Un volo per condizione: differenze sotto il 5% assunto non sono
+% commentate. La soglia e' una convenzione dichiarata, non una stima statistica.
+
+% --- pos a regime [m] ---
+\begin{tabular}{lcccccc}
+\toprule
+Phase & PPO nom & PPO pert & SPPO nom & SPPO pert & $D_{\mathrm{PPO}}$ & $D_{\mathrm{SPPO}}$ \\
+\midrule
+TAKEOFF & 0.1143 & 0.1647 & 0.0969 & 0.1571 & 1.44 & 1.62 \\
+SETPOINT 1 & 0.0791 & 0.1194 & 0.0595 & 0.0962 & 1.51 & 1.62 \\
+SETPOINT 2 & 0.0462 & 0.0862 & 0.0638 & 0.0977 & 1.87 & 1.53 \\
+SETPOINT 3 & 0.0743 & 0.0968 & 0.0592 & 0.0878 & 1.30 & 1.48 \\
+LANDING & 0.0673 & 0.0582 & 0.0538 & 0.0416 & 0.86 & 0.77 \\
+\bottomrule
+\end{tabular}
+
+% --- att a regime [rad] ---
+\begin{tabular}{lcccccc}
+\toprule
+Phase & PPO nom & PPO pert & SPPO nom & SPPO pert & $D_{\mathrm{PPO}}$ & $D_{\mathrm{SPPO}}$ \\
+\midrule
+TAKEOFF & 0.0782 & 0.1007 & 0.0750 & 0.1281 & 1.29 & 1.71 \\
+SETPOINT 1 & 0.0723 & 0.0600 & 0.0807 & 0.0674 & 0.83 & 0.84 \\
+SETPOINT 2 & 0.1324 & 0.1277 & 0.1442 & 0.1476 & 0.96 & 1.02 \\
+SETPOINT 3 & 0.0734 & 0.0595 & 0.0709 & 0.0611 & 0.81 & 0.86 \\
+LANDING & 0.0624 & 0.0459 & 0.0696 & 0.0451 & 0.74 & 0.65 \\
+\bottomrule
+\end{tabular}

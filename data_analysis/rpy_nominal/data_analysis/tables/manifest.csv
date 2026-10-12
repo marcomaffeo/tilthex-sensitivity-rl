@@ -1,0 +1,3 @@
+run,group,included,duration,dt_mean_ms,n_samples,n_phases,sat_frac,inf_time_mean_ms,note
+PPO_14_20260529_190447,PPO,1,27.2168,10.032,2714,3,0.00123,1.420,
+SPPO_14_20260529_191049,SPPO,1,27.2087,10.003,2721,3,0.00098,1.442,

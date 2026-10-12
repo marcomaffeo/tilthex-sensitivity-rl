@@ -1,0 +1,26 @@
+% rpy_perturbed: un volo per algoritmo, stesso riferimento.
+% Regime = ultimi 2.0 s di ciascuna fase.
+% Valori singoli, non stime con incertezza: n = 1 per condizione.
+% '--': transitorio non confrontabile (ampiezza del gradino
+%       diversa fra i due voli). Fasi: SETPOINT 1
+\begin{tabular}{llcccc}
+\toprule
+Phase & Policy & RMSE $\|e_p\|$ [m] & peak [m] & RMSE $\|e_R\|$ [rad] & peak [rad] \\
+ & & (steady) & & (steady) & \\
+\midrule
+TAKEOFF & PPO & 0.1647 & 0.180 & 0.1007 & 0.1220 \\
+TAKEOFF & SPPO & 0.1571 & 0.176 & 0.1281 & 0.1393 \\
+\midrule
+SETPOINT 1 & PPO & 0.1194 & -- & 0.0600 & -- \\
+SETPOINT 1 & SPPO & 0.0962 & -- & 0.0674 & -- \\
+\midrule
+SETPOINT 2 & PPO & 0.0862 & 0.146 & 0.1277 & 0.6781 \\
+SETPOINT 2 & SPPO & 0.0977 & 0.113 & 0.1476 & 0.6545 \\
+\midrule
+SETPOINT 3 & PPO & 0.0968 & 0.122 & 0.0595 & 0.1227 \\
+SETPOINT 3 & SPPO & 0.0878 & 0.106 & 0.0611 & 0.1100 \\
+\midrule
+LANDING & PPO & 0.0582 & 0.066 & 0.0459 & 0.0697 \\
+LANDING & SPPO & 0.0416 & 0.062 & 0.0451 & 0.0572 \\
+\bottomrule
+\end{tabular}

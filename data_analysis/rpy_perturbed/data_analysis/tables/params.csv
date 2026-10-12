@@ -1,0 +1,9 @@
+param,value
+cat_delta,2.5
+t_ss,2.0
+step_tol_pos,0.02
+step_tol_ang,2.0
+settle_band,0.05
+tol_pos,0.05
+tol_att_deg,5.0
+min_step_norm,0.05

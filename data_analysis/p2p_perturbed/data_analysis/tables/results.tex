@@ -1,0 +1,23 @@
+% p2p_perturbed: un volo per algoritmo, stesso riferimento.
+% Regime = ultimi 2.0 s di ciascuna fase.
+% Valori singoli, non stime con incertezza: n = 1 per condizione.
+% '--': transitorio non confrontabile (ampiezza del gradino
+%       diversa fra i due voli). Fasi: SETPOINT 1
+\begin{tabular}{llcccc}
+\toprule
+Phase & Policy & RMSE $\|e_p\|$ [m] & peak [m] & RMSE $\|e_R\|$ [rad] & peak [rad] \\
+ & & (steady) & & (steady) & \\
+\midrule
+TAKEOFF & PPO & 0.1591 & 0.174 & 0.0901 & 0.1231 \\
+TAKEOFF & SPPO & 0.1524 & 0.168 & 0.1163 & 0.1281 \\
+\midrule
+SETPOINT 1 & PPO & 0.1084 & -- & 0.0634 & -- \\
+SETPOINT 1 & SPPO & 0.0943 & -- & 0.0585 & -- \\
+\midrule
+SETPOINT 2 & PPO & 0.1165 & 0.703 & 0.0759 & 0.2106 \\
+SETPOINT 2 & SPPO & 0.0980 & 0.718 & 0.0588 & 0.2383 \\
+\midrule
+LANDING & PPO & 0.0653 & 0.076 & 0.0496 & 0.0972 \\
+LANDING & SPPO & 0.0467 & 0.059 & 0.0610 & 0.0838 \\
+\bottomrule
+\end{tabular}

@@ -1,0 +1,15 @@
+% p2p_perturbed: transitorio normalizzato sull'ampiezza del gradino.
+% e(t)/Delta e' invariante rispetto all'ampiezza del gradino nel regime
+% lineare: assunzione da dichiarare nel testo. Solo fasi raggiunte da un gradino
+% (decollo e atterraggio sono rampe ed escono).
+\begin{tabular}{llccccc}
+\toprule
+Phase & Policy & $\Delta$ [m] & peak/$\Delta$ [-] & RMSE$_{tr}$/$\Delta$ [-] & IAE/$\Delta$ [-] & peak $\|e_R\|$/$\Delta$ [rad/m] \\
+\midrule
+SETPOINT 1 & PPO & 1.526 & 0.9804 & 0.3881 & 0.1846 & 0.256 \\
+SETPOINT 1 & SPPO & 1.349 & 0.9741 & 0.3835 & 0.1821 & 0.291 \\
+\midrule
+SETPOINT 2 & PPO & 0.735 & 0.9573 & 0.4075 & 0.2515 & 0.287 \\
+SETPOINT 2 & SPPO & 0.735 & 0.9774 & 0.3906 & 0.2198 & 0.324 \\
+\bottomrule
+\end{tabular}

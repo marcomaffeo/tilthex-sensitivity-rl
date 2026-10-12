@@ -34,7 +34,7 @@ The same code runs in simulation and on the vehicle: `src/tk3_common.py` detects
 |---|---|---|
 | Machine | Linux x86_64 | onboard computer of the Tilthex (Linux aarch64) |
 | Environment | [pixi](https://pixi.sh): ROS 2 Jazzy (RoboStack), Gazebo Ionic (`gz-sim` 9), compilers, JAX | pixi (no Gazebo) |
-| TeleKyb3 components | robotpkg | robotpkg |
+| TeleKyb3 components | installed following the TeleKyb3 guide | installed following the TeleKyb3 guide |
 
 macOS is not supported: Gazebo and the TeleKyb3 components are only set up for Linux.
 
@@ -51,27 +51,10 @@ pixi run checkout     # clones openrobots-idl, genom3, genomix, python-genomix f
 pixi run build
 ```
 
-3. **TeleKyb3 components**, installed with [robotpkg](http://robotpkg.openrobots.org) following the
-   [TeleKyb3 installation guide](https://git.openrobots.org/projects/telekyb3/pages/index).
-   The components used here are:
-
-   | Package | Used for |
-   |---|---|
-   | pocolibs (`h2`), genomixd | middleware and component server |
-   | `rotorcraft-genom3` | motors and IMU |
-   | `pom-genom3` | state estimation |
-   | `nhfc-genom3` | baseline controller (manual and emergency phases) |
-   | `optitrack-genom3` | motion capture in simulation |
-   | `qualisys-genom3` | motion capture on the real vehicle |
-   | `maneuver-genom3`, `dynamixel-genom3` | started by `scripts/components.sh` |
-   | `mrsim-gazebo`, `optitrack-gazebo` | Gazebo plugins: Tilthex dynamics and simulated motion capture |
-
-   The component executables (`rotorcraft-pocolibs`, `pom-pocolibs`, ...) must be on the `PATH`, and the
-   Gazebo plugins on `GZ_SIM_SYSTEM_PLUGIN_PATH`. `src/tk3_common.py` looks for the genomix plugins in
-   `$ROBOTPKG_BASE`, in the pixi environment and in `/opt/openrobots`.
-
-   The commented lines in `development/scripts/pixi/checkout_telekyb3.sh` and `build_telekyb3.sh` are the
-   alternative of building every component from source inside the pixi environment.
+3. **TeleKyb3 components**: follow the official
+   [TeleKyb3 installation guide](https://git.openrobots.org/projects/telekyb3/pages/index)
+   (*Software – Installation*: installation with robotpkg, then *Environment setup*).
+   Install the `telekyb3` package set and, for the simulation, the `simulation` set.
 
 The TeleKyb3 documentation is the reference for the components; a more recent, work-in-progress version
 can be built from the Inria mirror, see the [general README](../README.md#telekyb3).

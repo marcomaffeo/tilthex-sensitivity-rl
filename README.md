@@ -95,6 +95,17 @@ pixi run tables      # regenerate every table and figure of the thesis from the 
 
 See [`data_analysis/README.md`](data_analysis/README.md) for every campaign and script.
 
+## Documentation website
+
+The README files and an API reference generated from the source code are also available as a
+website, built with Sphinx:
+
+```bash
+cd docs
+pixi install
+pixi run build      # then open docs/_build/html/index.html
+```
+
 ## Reproducing the thesis results
 
 | What | Where |

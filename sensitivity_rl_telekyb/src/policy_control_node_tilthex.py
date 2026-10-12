@@ -29,7 +29,17 @@ from policy import Policy
 from tk3_common import TK3Components_tilthex, read_state_and_rot_w, action_to_rotor_speed, quat_multiply, quat_to_rot_matrix_wxyz, quat_to_euler_xyz, save_and_plot_telemetry
 
 class PolicyControlNode(Node): 
+    """ROS 2 node that flies the Tilthex with a trained policy.
+
+    At start-up it loads the policy given by the ``policy_dir`` parameter and connects to the
+    TeleKyb3 components (see ``tk3_common.TK3Components_tilthex``). The services under ``/control``
+    manage the components and the baseline controller (nhfc); the services under ``/policy`` run
+    the policy loop, which reads the state from ``pom`` and sends rotor commands to ``rotorcraft``
+    at ``frequency_hz``. References arrive on ``/policy/setpoint`` and ``/policy/attitude_target``.
+    Every policy flight is saved in ``logs/<policy>_<timestamp>/data.npz``.
+    """
     def __init__(self): 
+        """Declare the parameters, load and compile the policy, connect the components, create services and topics."""
         super().__init__('policy_controller') 
         
         self.declare_parameter('custom_log_dir', '')
@@ -151,6 +161,7 @@ class PolicyControlNode(Node):
         self.get_logger().info('Policy control node initialized')
 
     def _read_state(self):
+        """State estimated by pom: position, velocity, quaternion (w, x, y, z), angular velocity (13 values)."""
         with self.components_lock:
             return read_state_and_rot_w(self.components)
 
@@ -291,6 +302,7 @@ class PolicyControlNode(Node):
         self.takeoff_ramp_thread.start()
 
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/setup``: configure and connect the TeleKyb3 components."""
         try: 
             self.components.setup() 
             self.hardware_initialized = True 
@@ -304,6 +316,7 @@ class PolicyControlNode(Node):
         return response 
     
     def start_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/start``: start the motors (arm) and wait for a valid state estimate."""
         try: 
             if not self.hardware_initialized: 
                 raise RuntimeError('Call /control/setup first.') 
@@ -362,6 +375,7 @@ class PolicyControlNode(Node):
         return response
 
     def takeoff_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/takeoff``: take off with the baseline controller (nhfc), along a height ramp."""
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Call /control/start first.') 
@@ -425,6 +439,7 @@ class PolicyControlNode(Node):
         return response
 
     def control_land_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/land``: land with the baseline controller (nhfc)."""
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
@@ -484,6 +499,7 @@ class PolicyControlNode(Node):
         return response 
 
     def pid_go_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/pid_go``: fly to the current reference with the baseline controller (nhfc)."""
         try:
             if not self.motors_armed: raise RuntimeError('Motors not armed.')
             self.pid_active = True
@@ -505,9 +521,11 @@ class PolicyControlNode(Node):
         return response
 
     def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/pid_start``: same as ``pid_go_callback``."""
         return self.pid_go_callback(request, response)
 
     def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/pid_stop``: stop following references with the baseline controller and hold the current position."""
         self.pid_active = False
 
         state = self._read_state()
@@ -537,6 +555,7 @@ class PolicyControlNode(Node):
         return response
 
     def pid_test_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/control/pid_test``: start a test flight with the baseline controller, in its own thread."""
         try:
             if not self.motors_armed: 
                 raise RuntimeError('Motors not armed.')
@@ -560,6 +579,7 @@ class PolicyControlNode(Node):
         return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/stop``: stop the policy loop, the baseline controller, the motors and the logs, without handing control back to nhfc."""
         try: 
             self.pid_active = False
             self.pid_test_stop_event.set()
@@ -587,6 +607,7 @@ class PolicyControlNode(Node):
         return response 
     
     def setpoint_callback(self, msg: PoseStamped): 
+        """``/policy/setpoint``: new position and attitude reference, relative to the current pose, or absolute when ``frame_id`` is ``world_absolute``."""
         from scipy.spatial.transform import Rotation
         
         if not self.hardware_initialized:
@@ -668,6 +689,7 @@ class PolicyControlNode(Node):
         )
 
     def attitude_callback(self, msg: Quaternion): 
+        """``/policy/attitude_target``: new attitude reference, relative to the current attitude; the position reference is kept at the current position and reference height."""
         from scipy.spatial.transform import Rotation
 
         if not self.hardware_initialized:
@@ -716,6 +738,7 @@ class PolicyControlNode(Node):
         )
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/start``: start the policy loop on the pending reference; nhfc is stopped while the policy flies."""
         activation_start_time = perf_counter()
         try: 
             if not self.motors_armed: 
@@ -759,6 +782,7 @@ class PolicyControlNode(Node):
         return response 
 
     def policy_takeoff_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/takeoff``: take off with the policy, along a height ramp on the reference."""
         activation_start_time = perf_counter()
         try:
             if not self.motors_armed:
@@ -851,6 +875,7 @@ class PolicyControlNode(Node):
         return response
 
     def policy_stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/stop``: stop the policy loop and hand control back to the baseline controller (nhfc)."""
         try: 
             if self.policy_thread is None or not self.policy_thread.is_alive(): 
                 raise RuntimeError('Policy is not running.') 
@@ -869,6 +894,7 @@ class PolicyControlNode(Node):
         return response 
     
     def land_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/land``: land with the policy, along a descending ramp on the reference."""
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
@@ -939,6 +965,9 @@ class PolicyControlNode(Node):
         return response 
 
     def _build_observation(self, state: np.ndarray) -> Optional[jnp.ndarray]: 
+        """Observation of the policy from the state (17 values): vector to the target and linear velocity in the
+        body frame, attitude quaternion (w, x, y, z), angular velocity, attitude error quaternion in the body frame.
+        """
         if state is None: return None 
         
         pos = state[0:3].copy()
@@ -977,6 +1006,7 @@ class PolicyControlNode(Node):
         return jnp.array(obs)
     
     def _pid_test_loop(self):
+        """Test flight with the baseline controller, run by ``pid_test_callback``."""
         frequency = self.get_parameter('frequency_hz').value
         duration = self.get_parameter('policy_duration').value
         rate = self.create_rate(frequency)
@@ -1088,6 +1118,10 @@ class PolicyControlNode(Node):
                 self.get_logger().error(f"Plotting thread failed to start: {e}")
 
     def _policy_loop(self): 
+        """Policy loop, in its own thread at ``frequency_hz``: read the state, compute the action, send the
+        rotor speeds and log. At the end the flight is saved and, unless stopped with ``/control/stop``,
+        control goes back to nhfc.
+        """
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
         policy_dir = self.get_parameter('policy_dir').value
@@ -1298,6 +1332,7 @@ class PolicyControlNode(Node):
             self.get_logger().warn("Not enough data to plot.")
 
 def publish_setpoint_cli(args):
+    """Command line ``--setpoint x y z roll pitch yaw``: publish one reference on ``/policy/setpoint``."""
     import sys
     import time
     from scipy.spatial.transform import Rotation
@@ -1346,6 +1381,7 @@ def publish_setpoint_cli(args):
     rclpy.shutdown()
 
 def publish_attitude_cli(args):
+    """Command line ``--setattitude roll pitch yaw``: publish one attitude reference on ``/policy/attitude_target``."""
     import sys
     import time
     from scipy.spatial.transform import Rotation
@@ -1388,6 +1424,7 @@ def publish_attitude_cli(args):
     rclpy.shutdown()
 
 def trigger_pid_test_cli():
+    """Command line ``--pid-test``: call ``/control/pid_test``."""
     import sys
     from std_srvs.srv import Trigger
     rclpy.init()
@@ -1411,6 +1448,7 @@ def trigger_pid_test_cli():
     rclpy.shutdown()
 
 def run_mission_cli(args):
+    """Mission ``--takeoff-to-point-land takeoff_z dx dy dz wait_s``: takeoff, one displacement, landing, motors off."""
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -1614,9 +1652,14 @@ def run_mission_cli(args):
 
 
 def run_legacy_mission_cli(args):
+    """Deprecated ``--mission`` entry point: prints the command to use instead."""
     print("Warning: --mission is deprecated. Use --takeoff-to-point-land takeoff_z dx dy dz wait_s")
 
 def run_point_to_point_mission_cli(args):
+    """Point-to-point mission of the thesis, ``--takeoff-zero-point-land takeoff_z x y z wait_s``:
+    takeoff, hold above the origin at ``takeoff_z``, move to (x, y, takeoff_z + z), land below that
+    point, motors off. Each phase lasts ``wait_s`` seconds.
+    """
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -1837,6 +1880,10 @@ def run_point_to_point_mission_cli(args):
     rclpy.shutdown()
 
 def run_zero_attitude_zero_land_cli(args):
+    """Attitude mission of the thesis, ``--takeoff-zero-attitude-zero-land takeoff_z roll pitch yaw wait_s``:
+    takeoff, hold level above the origin, attitude target, back to level keeping the target yaw,
+    landing, motors off. Each phase lasts ``wait_s`` seconds.
+    """
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -2064,6 +2111,7 @@ def run_zero_attitude_zero_land_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 def run_attitude_mission_cli(args):
+    """Mission ``--takeoff-attitude-land takeoff_z roll pitch yaw wait_s``: takeoff, attitude target, hover, landing, motors off."""
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -2266,6 +2314,7 @@ def run_attitude_mission_cli(args):
 
 
 def check_battery_cli():
+    """Command line ``--battery``: print the battery voltage read by rotorcraft."""
     print("Connecting to Genomix to check battery...")
     try:
         components = TK3Components_tilthex(Path("logs"))
@@ -2283,6 +2332,7 @@ def check_battery_cli():
         print(f"Failed to read battery. Are Genomix components active? Error: {e}")
 
 def check_telemetry_cli():
+    """Command line ``--telemetry``: print live telemetry read from the components."""
     print("Connecting to Genomix to read telemetry...")
     try:
         components = TK3Components_tilthex(Path("logs"))
@@ -2298,6 +2348,7 @@ def check_telemetry_cli():
         print(f"Failed to read telemetry. Error: {e}")
 
 def main(args=None): 
+    """Start the policy node (with real-time priority when allowed) and spin it until shutdown."""
     try:
         os.nice(-10)
     except PermissionError:

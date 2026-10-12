@@ -1,0 +1,17 @@
+[workspace]
+name = "tilthex-docs"
+description = "Documentation website of Tilthex Sensitivity RL (Sphinx)"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "linux-64"]
+
+[dependencies]
+python = "3.12.*"
+sphinx = "*"
+myst-parser = "*"
+sphinx-autoapi = "*"
+furo = "*"
+
+[tasks]
+# Build the website: open _build/html/index.html in a browser.
+build = "sphinx-build -b html . _build/html"
+clean = "rm -rf _build"

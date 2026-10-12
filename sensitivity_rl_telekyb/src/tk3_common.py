@@ -1,3 +1,5 @@
+"""TeleKyb3 components of the Tilthex (simulation and real vehicle) and helpers on state, quaternions and flight logs."""
+
 import genomix
 import os
 import platform
@@ -31,6 +33,9 @@ def setup_plugin_paths(g):
 class TK3Components_tilthex:
     """TiltHex Platform (Sim and Real hardware auto-switching)"""
     def __init__(self, log_dir: Path):
+        """Connect to genomix and load the components. The motion capture is optitrack in simulation
+        (x86_64) and qualisys on the vehicle (aarch64). ``log_dir`` is the folder of the flight logs.
+        """
         g = genomix.connect()
         setup_plugin_paths(g)
 
@@ -47,6 +52,7 @@ class TK3Components_tilthex:
             self.mocap = g.load('optitrack')
 
     def setup(self):
+        """Connect the components to the simulator or to the vehicle and configure rotorcraft, pom and nhfc (geometry, gains, filters, ports)."""
         if IS_REAL_ROBOT:
             self.mocap.connect('10.135.2.40')
             self.rotorcraft.connect({'serial': '/dev/ttyACM0', 'baud': 0})
@@ -101,6 +107,7 @@ class TK3Components_tilthex:
         self.pom.add_measurement('mocap')
 
     def start(self):
+        """Start the component logs in /tmp, start the motors and set the nhfc reference to the current position."""
         self.pom.log_state('/tmp/pom.log')
         self.pom.log_measurements('/tmp/pom-measurements.log')
         self.mocap.set_logfile('/tmp/mocap.log')
@@ -113,6 +120,7 @@ class TK3Components_tilthex:
         self.nhfc.set_current_position()
 
     def stop(self):
+        """Stop the motors, nhfc and the component logs."""
         self.rotorcraft.stop()
         self.rotorcraft.log_stop()
         self.nhfc.stop()
@@ -121,6 +129,9 @@ class TK3Components_tilthex:
         self.mocap.unset_logfile()
 
 def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
+    """State estimated by pom as a 13-element array: position and linear velocity (world frame),
+    attitude quaternion (w, x, y, z), angular velocity (body frame).
+    """
     pom = components.pom
     body = pom.frame('robot')['frame']
     pos_dict = body['pos']
@@ -148,6 +159,7 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
     return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE)
 
 def action_to_rotor_speed(components, action):
+    """Rotor speeds from the six rotor forces [N] given by the policy, with the thrust coefficient of the Tilthex (forces clipped to [0.3072, 12] N)."""
     cf = 12.0e-4
     force_cmds = np.array(action, dtype=np.float64)
     force_cmds = np.clip(force_cmds, 0.3072, 12.0)
@@ -155,6 +167,7 @@ def action_to_rotor_speed(components, action):
     return np.sqrt(force_cmds / cf).tolist()
 
 def quat_multiply(q1, q2):
+    """Hamilton product of two quaternions (w, x, y, z)."""
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return np.array([
@@ -165,6 +178,7 @@ def quat_multiply(q1, q2):
     ], dtype=np.float64)
 
 def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
+    """Rotation matrix of a quaternion (w, x, y, z)."""
     w, x, y, z = q[0], q[1], q[2], q[3]
     return np.array([
         [1.0 - 2.0*(y**2 + z**2), 2.0*(x*y - z*w),       2.0*(x*z + y*w)],
@@ -173,6 +187,7 @@ def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
     ], dtype=np.float64)
 
 def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
+    """Roll, pitch and yaw [rad] of a quaternion (w, x, y, z)."""
     w, x, y, z = q[0], q[1], q[2], q[3]
     sinr_cosp = 2.0 * (w * x + y * z)
     cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
@@ -186,6 +201,7 @@ def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
 
 def save_and_plot_telemetry(log_data, policy_name, sim_folder: Path, frequency_hz: float, target_info="", skip_plots=False, formats=['png'], logger=None):
 
+    """Save one flight in ``sim_folder``: ``data.npz`` with the logged signals and, unless ``skip_plots``, the plots."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt

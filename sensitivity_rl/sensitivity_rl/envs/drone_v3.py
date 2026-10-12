@@ -351,8 +351,18 @@ class DroneV3(environment.Environment):
         )
         return self.get_obs(env_state), env_state
 
-    def get_obs(self, env_state: EnvState) -> jax.Array:
-        """Return a vector of observations from the state."""
+    def get_obs(
+        self,
+        env_state: EnvState,
+        key: jax.Array | None = None,
+        params: EnvParams | None = None,
+    ) -> jax.Array:
+        """Return a vector of observations from the state.
+
+        key and params are accepted for interface compatibility with the
+        sensitivity wrappers (used by tilthex_v1 for observation noise) and
+        are not used here: drone_v3 observations are noise-free.
+        """
         state = env_state.state
 
         pos = state.pos

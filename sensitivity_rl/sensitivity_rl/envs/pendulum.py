@@ -103,7 +103,7 @@ class Pendulum(environment.Environment):
 
         done = self.is_terminal(env_state, params)
         return (
-            self.get_obs(state),
+            self._obs_from_model_state(state),
             env_state,
             reward,
             done,
@@ -156,9 +156,19 @@ class Pendulum(environment.Environment):
         state = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
         state = ModelState(theta=state[0], theta_dot=state[1])
         env_state = EnvState(state=state, last_u=jnp.array(0.0), time=0)
-        return self.get_obs(state), env_state
+        return self._obs_from_model_state(state), env_state
 
-    def get_obs(self, state: ModelState) -> jax.Array:
+    def get_obs(
+        self,
+        env_state: EnvState,
+        key: jax.Array | None = None,
+        params: EnvParams | None = None,
+    ) -> jax.Array:
+        """Observation of an environment state, with the interface expected by the
+        sensitivity wrappers (key and params are unused: no observation noise)."""
+        return self._obs_from_model_state(env_state.state)
+
+    def _obs_from_model_state(self, state: ModelState) -> jax.Array:
         """Return angle in polar coordinates and change."""
         return jnp.array(
             [

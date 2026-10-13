@@ -52,7 +52,16 @@ _JAC_KEYS = ("sens_bias", "df_du", "dobs_dx_sens")
 
 
 def wrap_env(env, config):
-    """Same wrapper stack as SPPO but with Jacobians exposed in info."""
+    """Apply the SPPO-grad-param wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -85,13 +94,20 @@ def _sensitivity_loss(graphdef, params, obs, sens_bias, df_du, dobs_dx_S):
     """Recompute the sensitivity norm differentiably through the policy.
 
     All environment Jacobians are treated as constants; only the policy
-    Jacobian dμ/dobs carries gradients.
+    Jacobian dmu/dobs carries gradients. The sensitivity update is
+    ``M = sens_bias + df/du (dmu/dobs) (dobs/dx S)``, where
+    ``sens_bias = df/dx S + df/dp`` does not depend on the policy.
 
-    The sensitivity update is:
-        M = sens_bias  +  df/du · (dμ/dobs) · (dobs/dx·S)
-    where sens_bias = df/dx·S + df/dp_norm (precomputed, no policy dependence).
+    Args:
+        graphdef (nnx.GraphDef): Graph definition of the policy network.
+        params (nnx.State): Current network parameters.
+        obs (jax.Array): Observations, shape ``(B, obs_dim)``.
+        sens_bias (jax.Array): Policy-independent part of M, shape ``(B, state_dim, param_dim)``.
+        df_du (jax.Array): Jacobian of the dynamics with respect to the action, shape ``(B, state_dim, action_dim)``.
+        dobs_dx_S (jax.Array): Observation Jacobian times the state sensitivity, shape ``(B, obs_dim, param_dim)``.
 
-    Returns -log(||M||_F + ε) per sample.
+    Returns:
+        jax.Array: ``-log(||M||_F + eps)`` per sample, shape ``(B,)``.
     """
     sens_bias = jax.lax.stop_gradient(sens_bias)
     df_du = jax.lax.stop_gradient(df_du)
@@ -113,7 +129,14 @@ sensitivity_loss = jax.vmap(_sensitivity_loss, in_axes=(None, None, 0, 0, 0, 0))
 
 
 def _actor_param_leaves(params):
-    """Return only actor-related parameter leaves in a stable traversal order."""
+    """Return the actor parameter leaves in a stable traversal order.
+
+    Args:
+        params (nnx.State): Parameters of the whole actor-critic network.
+
+    Returns:
+        tuple[jax.Array, ...]: Leaves whose path contains ``actor``.
+    """
     leaves_with_paths, _ = jax.tree_util.tree_flatten_with_path(params)
     return tuple(
         leaf
@@ -123,7 +146,15 @@ def _actor_param_leaves(params):
 
 
 def _actor_l2_distance(params, old_actor_params):
-    """Compute L2 distance using actor params only."""
+    """L2 distance between the current and the reference actor parameters.
+
+    Args:
+        params (nnx.State): Current network parameters.
+        old_actor_params (tuple[jax.Array, ...]): Reference actor leaves, from ``_actor_param_leaves``.
+
+    Returns:
+        jax.Array: Scalar Euclidean distance over all actor leaves.
+    """
     actor_params = _actor_param_leaves(params)
     sq_sums = []
     for new_param, old_param in zip(actor_params, old_actor_params):
@@ -140,7 +171,16 @@ def _actor_l2_distance(params, old_actor_params):
 
 
 def make_loss_fn(config, graphdef):
-    """PPO clipped loss + direct sensitivity gradient term."""
+    """Create the SPPO-grad-param loss function of the policy network.
+
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCriticGRU network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, targets, old_actor_params) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
+    """
 
     def _loss_fn(params, traj_batch, advantages, targets, old_actor_params):
         model = nnx.merge(graphdef, params)
@@ -208,15 +248,17 @@ def make_loss_fn(config, graphdef):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create the update epoch function for SPPO-grad-param.
+    """Create the function that runs one SPPO-grad-param update epoch over the minibatches.
 
     Args:
-        config: Training configuration
-        loss_fn: Loss function created by make_loss_fn
-        shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
 
     def _update_epoch(update_state: UpdateState, unused):
@@ -266,7 +308,18 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """SPPO collect step that also stores the environment Jacobians in extras."""
+    """Create the step function that collects one transition per environment.
+
+    Args:
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
+    """
     graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):

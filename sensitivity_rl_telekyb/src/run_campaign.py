@@ -1,3 +1,10 @@
+"""Monte Carlo campaign in Gazebo: one flight per sample of the physical parameters, then the envelope of the tracking errors.
+
+The parameters are written into the SDF of the vehicle from a template; the
+policy, the task and the number of runs are set by the constants at the top
+of the file.
+"""
+
 import os
 import time
 import subprocess
@@ -33,6 +40,14 @@ RANGES = {
 }
 
 def generate_mc_perturbations():
+    """Sample the physical parameters of the Monte Carlo runs.
+
+    Each parameter is drawn uniformly from ``RANGES``; inertia triplets that
+    violate the triangle inequality are resampled. The seed is ``RANDOM_SEED``.
+
+    Returns:
+        dict[str, dict[str, float]]: Parameters of each run, keyed by ``mc_run_001``, ``mc_run_002``, ...
+    """
     np.random.seed(RANDOM_SEED)
     perturbations = {}
     
@@ -70,6 +85,11 @@ TEMPLATE_PATH = "models/mrsim-tilthex-laas/tilthex_laas_template.sdf"
 SDF_PATH = "models/mrsim-tilthex-laas/tilthex_laas.sdf"              
 
 def cleanup(procs=None):
+    """Terminate Gazebo, the GenoM3 components and the policy node, and remove their temporary files.
+
+    Args:
+        procs (list[subprocess.Popen] | None): Processes started by the campaign.
+    """
     print("[SYSTEM] Safely terminating Gazebo and Genomix...")
     if procs:
         for p in procs:
@@ -89,6 +109,12 @@ def cleanup(procs=None):
     time.sleep(6)
     
 def generate_sdf(overrides):
+    """Write the vehicle SDF from the template, with the given parameters.
+
+    Args:
+        overrides (dict[str, float]): Parameter values; the missing ones take
+            their value from ``NOMINAL``.
+    """
     with open(TEMPLATE_PATH, "r") as f:
         sdf_content = f.read()
     params = {k: overrides.get(k, NOMINAL[k]) for k in NOMINAL}
@@ -100,6 +126,19 @@ def generate_sdf(overrides):
         f.write(sdf_content)
 
 def run_test(test_name, overrides, target_log_dir, skip_plots=False, npz_name="error_data.npz"):
+    """Run one simulated flight.
+
+    Starts Gazebo, the components and the policy node, calls the setup, start,
+    takeoff, policy and landing services in sequence, and stops everything at
+    the end.
+
+    Args:
+        test_name (str): Name of the run, used in the messages.
+        overrides (dict[str, float]): Physical parameters of the vehicle.
+        target_log_dir (str): Folder where the policy node saves the flight.
+        skip_plots (bool): Save only the data, without plots.
+        npz_name (str): Name of the error file written by the node.
+    """
     print(f"\n{'='*50}\nSTARTING TEST: {test_name}\n{'='*50}")
     cleanup()
     generate_sdf(overrides)
@@ -186,6 +225,16 @@ def run_test(test_name, overrides, target_log_dir, skip_plots=False, npz_name="e
         cleanup(procs)
 
 def plot_aggregated(campaign_dir, perturbed_dir, raw_data_dir):
+    """Plot the mean and standard deviation of the tracking errors over the Monte Carlo runs.
+
+    The RMSE after the first 20% of the flight is printed; the figure is saved
+    as ``sensitivity_results_<POLICY_NAME>.png``.
+
+    Args:
+        campaign_dir (str): Folder of the campaign (not used).
+        perturbed_dir (str): Folder where the figure is saved.
+        raw_data_dir (str): Folder with the ``mc_run_*.npz`` files.
+    """
     print("\n[PLOT] Generating aggregated envelope plot...")
     run_files = list(Path(raw_data_dir).glob("mc_run_*.npz"))
     if not run_files: return

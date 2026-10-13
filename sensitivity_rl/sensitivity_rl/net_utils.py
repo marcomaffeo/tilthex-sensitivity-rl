@@ -1,3 +1,5 @@
+"""Optimiser and learning-rate schedule of the training loop."""
+
 import jax
 import optax
 
@@ -5,7 +7,18 @@ __all__ = ["create_optimizer", "make_linear_schedule"]
 
 
 def create_optimizer(config, linear_schedule_fn):
-    """Create optimizer with optional learning rate annealing."""
+    """Adam optimiser with gradient clipping and optional learning-rate annealing.
+
+    When ``POLICY_MAX_GRAD_NORM`` is set, the actor and the critic parameters are
+    clipped separately; otherwise a single global clipping is used.
+
+    Args:
+        config (dict): Training configuration (``LR``, ``ANNEAL_LR``, ``MAX_GRAD_NORM``, ``POLICY_MAX_GRAD_NORM``).
+        linear_schedule_fn (Callable): Learning-rate schedule used when ``ANNEAL_LR`` is true.
+
+    Returns:
+        optax.GradientTransformation: The optimiser.
+    """
     max_grad_norm = config["MAX_GRAD_NORM"]
     policy_max_grad_norm = config.get("POLICY_MAX_GRAD_NORM")
 
@@ -50,7 +63,14 @@ def create_optimizer(config, linear_schedule_fn):
 
 
 def make_linear_schedule(config):
-    """Create linear learning rate schedule."""
+    """Learning rate decreasing linearly from ``LR`` to zero over the training.
+
+    Args:
+        config (dict): Training configuration (``LR``, ``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``, ``NUM_UPDATES``).
+
+    Returns:
+        Callable: ``schedule(count) -> learning_rate``.
+    """
 
     def linear_schedule(count):
         frac = (

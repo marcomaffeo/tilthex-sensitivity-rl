@@ -17,6 +17,14 @@ from .math import quat2rotm, quat_product, skew, quat_inverse
 
 @struct.dataclass
 class ModelState:
+    """Rigid-body state of the quadrotor.
+
+    Attributes:
+        pos (jax.Array): Position in the world frame [m].
+        attitude (jax.Array): Unit quaternion (w, x, y, z), body to world.
+        vel (jax.Array): Linear velocity in the world frame [m/s].
+        omega (jax.Array): Angular velocity in the body frame [rad/s].
+    """
     pos: jax.Array
     attitude: jax.Array  # (unit quaternion [w, x, y, z])
     vel: jax.Array
@@ -25,6 +33,16 @@ class ModelState:
 
 @struct.dataclass
 class EnvState(environment.EnvState):
+    """State of the quadrotor environment: rigid body, target, inputs and episode counter.
+
+    Attributes:
+        state (ModelState): Rigid-body state.
+        target_pos (jax.Array): Target position [m].
+        target_yaw (jax.Array): Target yaw [rad].
+        last_input (jax.Array): Input applied to the system after the actuator low-pass filter.
+        last_commanded_action (jax.Array): Last action commanded by the policy.
+        time (int): Step index in the episode.
+    """
     state: ModelState
     target_pos: jax.Array
     target_yaw: jax.Array  # Desired yaw angle (rotation around z-axis)
@@ -35,11 +53,25 @@ class EnvState(environment.EnvState):
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
+        """Forward attribute access to the wrapped model state.
+
+        Args:
+            name (str): Attribute name, e.g. ``pos`` or ``attitude``.
+
+        Returns:
+            Any: The attribute of ``self.state``.
+        """
         return getattr(self.state, name)
 
 
 @struct.dataclass
 class EnvParams(environment.EnvParams):
+    """Parameters of the quadrotor environment.
+
+    The pytree fields (mass, inertia, centre of mass and actuator time
+    constant) are the uncertain parameters; the fields with
+    ``pytree_node=False`` are static.
+    """
     min_action: jax.Array = struct.field(
         pytree_node=False,
         default_factory=lambda: jnp.array([-1.0, -1.0, -1.0, -1.0]),
@@ -81,6 +113,7 @@ class DroneV3(environment.Environment):
     """Quadrotor reaching a target position and yaw."""
 
     def __init__(self):
+        """Set the dimensions, the nominal target, the sensitivity weights, the hover input and the parameter ranges."""
         self.type = ""
         self.state_dim = 13
         self.obs_dim = 14  # 13 + yaw error
@@ -113,10 +146,23 @@ class DroneV3(environment.Environment):
 
     @property
     def default_params(self) -> EnvParams:
-        """Default environment parameters for Drone-v3."""
+        """Default parameters of the quadrotor environment.
+
+        Returns:
+            EnvParams: Nominal parameters.
+        """
         return EnvParams()
 
     def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
+        """Map an action from ``[min_action, max_action]`` to ``[min_input, max_input]``.
+
+        Args:
+            action (jax.Array): Action of the policy.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            jax.Array: Actuator input.
+        """
         action_span = params.max_action - params.min_action
         input_span = params.max_input - params.min_input
         normalized = (action - params.min_action) / action_span
@@ -130,7 +176,19 @@ class DroneV3(environment.Environment):
         action: int | float | jax.Array,
         params: TEnvParams | None = None,
     ) -> tuple[jax.Array, TEnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Overload step to remove the reset when done."""
+        """Environment step without the automatic reset at the end of an episode.
+
+        The reset is applied by ``ResetEnvWrapper`` or ``DomainRandomizationWrapper``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current environment state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters; the defaults when ``None``.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
 
         if params is None:
             params = self.default_params
@@ -150,7 +208,21 @@ class DroneV3(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Integrate the quadrotor dynamics and return the transition."""
+        """Apply an action, integrate the dynamics and compute the reward.
+
+        The reward combines the distance to the target (with a bonus when close and
+        slow), the yaw error (with a bonus below 0.05 rad), the distance from the
+        hover input and the variation of the input.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state.
+            action (jax.Array): Action of the policy, shape ``(4,)``.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
 
         action_clipped = jnp.clip(action, params.min_action, params.max_action)
         action_rescaled = self.rescale_action(action_clipped, params)
@@ -230,13 +302,22 @@ class DroneV3(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Step dynamics with first-order actuator low-pass filter.
+        """Next model state, with a first-order low-pass filter on the actuators.
 
         The actuator output is filtered as::
 
             u_actual = last_input + alpha * (u_commanded - last_input)
 
-        where alpha = dt / tau  (clamped to [0, 1]).
+        with ``alpha = dt / tau`` clamped to ``[0, 1]``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state (holds the last input).
+            action (jax.Array): Commanded input (thrust and three torques).
+            params (EnvParams): Environment parameters (``dt``, ``actuator_tau``).
+
+        Returns:
+            ModelState: Next model state.
         """
         state = env_state.state
         last_input = env_state.last_input
@@ -255,6 +336,17 @@ class DroneV3(environment.Environment):
         params: EnvParams,
     ) -> ModelState:
 
+        """Rigid-body dynamics of the quadrotor, with the centre of mass offset.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (ModelState): Current model state.
+            action (jax.Array): Filtered input (thrust and three torques).
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            ModelState: Next model state.
+        """
         u = jnp.clip(action, params.min_input, params.max_input)
 
         quat = state.attitude
@@ -310,7 +402,15 @@ class DroneV3(environment.Environment):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset the environment by sampling the initial state and the target."""
+        """Reset the environment by sampling the initial state and the target.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams): Environment parameters (sampling ranges).
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
+        """
         pos = jax.random.uniform(
             key,
             shape=(3,),
@@ -357,10 +457,19 @@ class DroneV3(environment.Environment):
         key: jax.Array | None = None,
         params: EnvParams | None = None,
     ) -> jax.Array:
-        """Return a vector of observations from the state.
+        """Observation of the policy, without noise.
 
-        The key and params arguments keep the signature expected by the
-        sensitivity wrappers; the observations are noise-free.
+        The 14 components are the vector to the target, the velocity, the attitude
+        quaternion, the angular velocity and the yaw error. The key and params
+        arguments keep the signature expected by the sensitivity wrappers.
+
+        Args:
+            env_state (EnvState): Environment state.
+            key (jax.Array, optional): Unused.
+            params (EnvParams, optional): Unused.
+
+        Returns:
+            jax.Array: Observation, shape ``(14,)``.
         """
         state = env_state.state
 
@@ -390,7 +499,15 @@ class DroneV3(environment.Environment):
         ).squeeze()
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
-        """Check whether state is terminal."""
+        """Whether the episode has reached its maximum length.
+
+        Args:
+            state (EnvState): Environment state.
+            params (EnvParams): Environment parameters (``max_steps_in_episode``).
+
+        Returns:
+            jax.Array: Boolean done flag.
+        """
         # Check number of steps in episode termination condition
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
@@ -398,14 +515,14 @@ class DroneV3(environment.Environment):
     def eval_metrics(
         self, env_state: EnvState, params: EnvParams
     ) -> dict[str, jax.Array]:
-        """Compute evaluation metrics for the current state.
+        """Evaluation metrics of the current state, logged during the rollouts.
 
         Args:
-            env_state: Current environment state
-            params: Environment parameters
+            env_state (EnvState): Current environment state.
+            params (EnvParams): Environment parameters.
 
         Returns:
-            Dictionary of metric names to scalar values
+            dict[str, jax.Array]: Metric name to scalar value.
         """
         state = env_state.state
 
@@ -447,16 +564,31 @@ class DroneV3(environment.Environment):
 
     @property
     def name(self) -> str:
-        """Environment name."""
+        """Environment name.
+
+        Returns:
+            str: Name used in the logs.
+        """
         return "Drone-v2"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
+        """Number of action components.
+
+        Returns:
+            int: Size of the action vector.
+        """
         return 4
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Box:
-        """Action space of the environment."""
+        """Action space of the environment.
+
+        Args:
+            params (EnvParams, optional): Environment parameters; the defaults when ``None``.
+
+        Returns:
+            spaces.Box: Box between ``min_action`` and ``max_action``.
+        """
         if params is None:
             params = self.default_params
         return spaces.Box(
@@ -467,11 +599,25 @@ class DroneV3(environment.Environment):
         )
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
+        """Observation space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Box: Box with one entry per observation component.
+        """
         return spaces.Box(-1, 1, shape=(self.obs_dim,), dtype=jnp.float32)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
+        """State space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Dict: Spaces of the state components.
+        """
         return spaces.Dict(
             {
                 "state": spaces.Box(
@@ -498,16 +644,13 @@ class DroneV3(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot quadrotor rollout trajectories.
+        """Plot the trajectories of a set of rollouts.
 
         Args:
-            series_list: List of trajectory dictionaries with keys:
-                - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
-                - 'actions': array of shape (T, 4)
-                - 'target_pos': optional target position array
-                - 'eval_metrics': optional dict with 'distance_to_target' array
-            output: Optional path to save the figure. If None, displays interactively.
-                When provided, an additional state-trajectory figure is saved to str(output) + "1".
+            series_list (list[dict]): One dict per rollout, with ``state`` (shape ``(T+1, 13)``),
+                ``actions`` (shape ``(T, 4)``) and optionally ``target_pos`` and ``eval_metrics``.
+            output (pathlib.Path, optional): File to save the figure to; shown interactively when ``None``.
+                A second figure with the state components is saved to ``str(output) + "1"``.
         """
         import matplotlib.pyplot as plt
 

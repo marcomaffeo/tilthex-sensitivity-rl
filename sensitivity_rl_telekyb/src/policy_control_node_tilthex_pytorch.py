@@ -1,4 +1,6 @@
 #!/usr/bin/env python3 
+"""ROS 2 node that flies the Tilthex with a policy exported as a TorchScript ``.pt`` file."""
+
 import os 
 import threading 
 from pathlib import Path 
@@ -19,19 +21,37 @@ from std_srvs.srv import Trigger
 from tk3_common import TK3Components_tilthex, read_state_and_rot_w, quat_multiply, quat_to_rot_matrix_wxyz, quat_to_euler_xyz
 
 class ObsHistory:
+    """Fixed-length history of the last actions, part of the observation of the PyTorch policies."""
     def __init__(self):
+        """Create an empty history of 5 actions of 6 values."""
         self.H = 5          
         self.obs_len = 6     
         self.obs_FIFO = np.zeros((self.H, self.obs_len), dtype=np.float32)
 
     def update_FIFO_obs_history(self, new_obs):
+        """Append an action and drop the oldest one.
+
+        Args:
+            new_obs (numpy.ndarray): Last action, shape ``(6,)``.
+
+        Returns:
+            numpy.ndarray: Flattened history, oldest first, shape ``(30,)``.
+        """
         obs_FIFO_cp = self.obs_FIFO.copy()
         self.obs_FIFO[:-1] = obs_FIFO_cp[1:]
         self.obs_FIFO[-1] = new_obs
         return self.obs_FIFO.reshape(self.H * self.obs_len)
 
 class PolicyControlNodePyTorch(Node): 
+    """ROS 2 node that flies the Tilthex with a policy exported as a TorchScript ``.pt`` file.
+
+    It offers the same services and topics as ``PolicyControlNode``, except for
+    the policy takeoff, the baseline landing and ``/policy/pid_go``. The policy
+    outputs normalised rotor speeds in ``[-1, 1]``, mapped to
+    ``[wmin, wmax]`` and clipped at ``wmax_limit``.
+    """
     def __init__(self): 
+        """Declare the parameters, load and warm up the TorchScript policy, load the components, and create services and topics."""
         super().__init__('policy_controller_pytorch') 
         
         self.declare_parameter('custom_log_dir', '')
@@ -128,6 +148,15 @@ class PolicyControlNodePyTorch(Node):
         self.get_logger().info('Policy control node initialized')
 
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/setup``: configure and connect the TeleKyb3 components.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             self.components.setup() 
             self.hardware_initialized = True 
@@ -141,6 +170,15 @@ class PolicyControlNodePyTorch(Node):
         return response 
     
     def start_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/start``: start the motors (arm) and wait for a valid state estimate.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.hardware_initialized: 
                 raise RuntimeError('Call /control/setup first.') 
@@ -191,6 +229,15 @@ class PolicyControlNodePyTorch(Node):
         return response 
 
     def takeoff_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/takeoff``: take off with the baseline controller (nhfc) to ``takeoff_height`` above the current position.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Call /control/start first.') 
@@ -239,6 +286,15 @@ class PolicyControlNodePyTorch(Node):
         return response 
 
     def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/pid_start``: fly to the current reference with the baseline controller (nhfc).
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try:
             if not self.motors_armed: raise RuntimeError('Motors not armed.')
             self.pid_active = True
@@ -256,6 +312,15 @@ class PolicyControlNodePyTorch(Node):
         return response
 
     def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/policy/pid_stop``: stop following references with the baseline controller and hold the current position.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         self.pid_active = False
 
         state = read_state_and_rot_w(self.components)
@@ -278,6 +343,15 @@ class PolicyControlNodePyTorch(Node):
         return response
 
     def pid_test_callback(self, request: Trigger.Request, response: Trigger.Response):
+        """``/control/pid_test``: start a test flight with the baseline controller, in its own thread.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try:
             if not self.motors_armed: 
                 raise RuntimeError('Motors not armed.')
@@ -301,6 +375,15 @@ class PolicyControlNodePyTorch(Node):
         return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/control/stop``: emergency stop of the policy loop, the test flight, the motors and the logs.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             self.pid_active = False
             self.pid_test_stop_event.set()
@@ -326,6 +409,13 @@ class PolicyControlNodePyTorch(Node):
         return response 
     
     def setpoint_callback(self, msg: PoseStamped): 
+        """``/policy/setpoint``: new position and attitude reference, relative to the current pose.
+
+        The position change is expressed in the yaw frame of the vehicle.
+
+        Args:
+            msg (geometry_msgs.msg.PoseStamped): Pose change.
+        """
         from scipy.spatial.transform import Rotation
         
         state = read_state_and_rot_w(self.components)
@@ -382,6 +472,11 @@ class PolicyControlNodePyTorch(Node):
         )
 
     def attitude_callback(self, msg: Quaternion): 
+        """``/policy/attitude_target``: new attitude reference, relative to the current attitude; the position reference is the current position.
+
+        Args:
+            msg (geometry_msgs.msg.Quaternion): Attitude change.
+        """
         from scipy.spatial.transform import Rotation
         
         state = read_state_and_rot_w(self.components)
@@ -418,6 +513,15 @@ class PolicyControlNodePyTorch(Node):
         self.get_logger().info(f"Relative Attitude applied! Holding Pos, New Target Yaw: {np.degrees(target_rpy[2]):.2f}°")
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/start``: start the policy loop on the current reference; nhfc is stopped while the policy flies.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         activation_start_time = perf_counter()
         
         try: 
@@ -451,6 +555,15 @@ class PolicyControlNodePyTorch(Node):
         return response 
 
     def policy_stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/stop``: stop the policy loop and hand control back to the baseline controller (nhfc).
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if self.policy_thread is None or not self.policy_thread.is_alive(): 
                 raise RuntimeError('Policy is not running.') 
@@ -467,6 +580,15 @@ class PolicyControlNodePyTorch(Node):
         return response 
     
     def land_callback(self, request: Trigger.Request, response: Trigger.Response): 
+        """``/policy/land``: stop the policy loop and land with the baseline controller (nhfc) below the current position.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
@@ -498,6 +620,19 @@ class PolicyControlNodePyTorch(Node):
         return response 
 
     def _build_observation(self, state: np.ndarray) -> Optional[np.ndarray]: 
+        """Observation of the PyTorch policy from the state.
+
+        The observation is the vector to the target in the body frame, the first
+        two columns of the current and target rotation matrices, the linear and
+        angular velocities, and the history of the last five actions, 51 values in total.
+        The call also pushes the previous action into the history.
+
+        Args:
+            state (numpy.ndarray): State of 13 values from ``read_state_and_rot_w``.
+
+        Returns:
+            numpy.ndarray | None: Observation as float32, or ``None`` when ``state`` is ``None``.
+        """
         if state is None: return None 
         
         pos = state[0:3] 
@@ -535,6 +670,19 @@ class PolicyControlNodePyTorch(Node):
         return obs
 
     def plot_results(self, log_data, policy_name, target_info=""): 
+        """Save one flight to disk and plot it.
+
+        Writes ``data.npz`` in ``custom_log_dir`` or in a time-stamped folder under
+        ``logs_pid`` or ``logs_policy`` and, unless ``skip_plots`` is set, the plots
+        in the formats of ``plot_formats``.
+
+        Args:
+            log_data (dict): Logged signals, keyed by ``t``, ``pos``, ``vel``, ``quat``,
+                ``euler``, ``avel``, ``pos_ref``, ``quat_ref``, ``euler_ref``,
+                ``action`` and ``inf_time``.
+            policy_name (str): Name of the policy, ``PID`` for the baseline controller.
+            target_info (str): Description of the setpoint shown in the titles.
+        """
         import matplotlib
         matplotlib.use('Agg')
         import matplotlib.pyplot as plt
@@ -768,6 +916,7 @@ class PolicyControlNodePyTorch(Node):
         self.get_logger().info(f"Plots successfully exported in {formats} to: {sim_folder}")
 
     def _pid_test_loop(self):
+        """Test flight with the baseline controller, run by ``/control/pid_test``."""
         frequency = self.get_parameter('frequency_hz').value
         duration = self.get_parameter('policy_duration').value
         rate = self.create_rate(frequency)
@@ -858,6 +1007,12 @@ class PolicyControlNodePyTorch(Node):
                 self.get_logger().error(f"Plotting thread failed to start: {e}")
 
     def _policy_loop(self): 
+        """Policy loop, in its own thread at ``frequency_hz``.
+
+        At each step the loop reads the state, runs the policy, maps its output to
+        rotor speeds and logs. At the end the flight is saved and control goes
+        back to nhfc.
+        """
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
         policy_path = self.get_parameter('policy_path').value
@@ -1035,6 +1190,11 @@ class PolicyControlNodePyTorch(Node):
             self.get_logger().warn("Not enough data to plot.")
 
 def publish_setpoint_cli(args):
+    """Command line ``--setpoint x y z roll pitch yaw``: publish one relative reference on ``/policy/setpoint``.
+
+    Args:
+        args (list[str]): Position change [m] and roll, pitch, yaw change [deg].
+    """
     import sys
     from scipy.spatial.transform import Rotation
     if len(args) < 6:
@@ -1069,6 +1229,11 @@ def publish_setpoint_cli(args):
     rclpy.shutdown()
 
 def publish_attitude_cli(args):
+    """Command line ``--setattitude roll pitch yaw``: publish one attitude change on ``/policy/attitude_target``.
+
+    Args:
+        args (list[str]): Roll, pitch, yaw change [deg].
+    """
     import sys
     from scipy.spatial.transform import Rotation
     
@@ -1099,6 +1264,7 @@ def publish_attitude_cli(args):
     rclpy.shutdown()
 
 def trigger_pid_test_cli():
+    """Command line ``--pid-test``: call ``/control/pid_test``."""
     import sys
     from std_srvs.srv import Trigger
     rclpy.init()
@@ -1122,6 +1288,7 @@ def trigger_pid_test_cli():
     rclpy.shutdown()
 
 def check_battery_cli():
+    """Command line ``--battery``: print the battery voltage read by rotorcraft."""
     print("Connecting to Genomix to check battery...")
     try:
         components = TK3Components_tilthex(Path("logs"))
@@ -1139,6 +1306,7 @@ def check_battery_cli():
         print(f"Failed to read battery. Are Genomix components active? Error: {e}")
 
 def check_telemetry_cli():
+    """Command line ``--telemetry``: print live telemetry read from the components."""
     print("Connecting to Genomix to read telemetry...")
     try:
         components = TK3Components_tilthex(Path("logs"))
@@ -1154,6 +1322,11 @@ def check_telemetry_cli():
         print(f"Failed to read telemetry. Error: {e}")
 
 def main(args=None): 
+    """Start the PyTorch policy node (with real-time priority when allowed) and spin it until shutdown.
+
+    Args:
+        args (list[str] | None): ROS 2 command line arguments.
+    """
     try:
         os.nice(-10)
     except PermissionError:

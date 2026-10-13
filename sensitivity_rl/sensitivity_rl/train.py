@@ -103,7 +103,21 @@ def log_metrics(
     num_envs,
     extra_losses=None,
 ):
-    """Create logging callback for training metrics."""
+    """Send the training metrics of one update to TensorBoard and print the throughput.
+
+    Runs inside the jitted training loop through ``jax.debug.callback``.
+
+    Args:
+        writer (SummaryWriter): TensorBoard writer.
+        losses (dict): Mean losses of the update (``total``, ``value``, ``actor``, ``entropy``, KL and clipping statistics).
+        metric (dict): Info dict of the rollout (returns, sensitivity, constraints).
+        targets (jax.Array): Value targets, used for the explained variance.
+        traj_batch_value (jax.Array): Value predictions of the rollout.
+        timestep (jax.Array): Environment steps so far.
+        num_steps (int): Steps per environment in one rollout.
+        num_envs (int): Number of parallel environments.
+        extra_losses (dict, optional): Algorithm-specific metrics.
+    """
     targets_var = jnp.var(targets)
     explained_var = 1 - jnp.var(targets - traj_batch_value) / (targets_var + 1e-8)
 
@@ -191,7 +205,12 @@ def log_metrics(
 
 
 def debug_callback(config, metric):
-    """Debug callback for printing training progress."""
+    """Print the mean episodic return of the episodes that ended in the last rollout.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        metric (dict): Info dict of the rollout.
+    """
 
     def callback(info):
         returned = info["returned_episode"]
@@ -216,7 +235,18 @@ def _periodic_eval_log_callback(
     sensitivity_mean,
     sensitivity_max,
 ):
-    """Host callback for scalar evaluation logging only."""
+    """Write the result of an in-training evaluation to TensorBoard and to ``evaluation_summary.json``.
+
+    Args:
+        writer (SummaryWriter): TensorBoard writer.
+        run_dir (pathlib.Path): Run directory.
+        update_idx (jax.Array): Index of the update.
+        timestep (jax.Array): Environment steps so far.
+        should_eval (jax.Array): Whether an evaluation ran at this update; nothing is written otherwise.
+        episodic_return (jax.Array): Mean episodic return of the evaluation.
+        sensitivity_mean (jax.Array): Mean weighted sensitivity log-norm, ``nan`` without sensitivity.
+        sensitivity_max (jax.Array): Mean over environments of the maximum log-norm.
+    """
     if not bool(should_eval):
         return
 
@@ -261,16 +291,21 @@ def make_train(
     init_rng,
     run_dir: Path,
 ):
-    """Create unified training function for PPO-family algorithms.
+    """Build the training function of a PPO-family algorithm.
+
+    The networks are initialised outside the jitted function; the returned
+    function runs ``NUM_UPDATES`` iterations of rollout collection, GAE and
+    update epochs, with periodic deterministic evaluations.
 
     Args:
-        config: Training configuration dict
-        spec: Algorithm specification
-        writer: TensorBoard writer
-        init_rng: Concrete PRNG key used for network initialisation
+        config (dict): Training configuration.
+        spec (AlgorithmSpec): Algorithm specification.
+        writer (SummaryWriter): TensorBoard writer.
+        init_rng (jax.Array): Concrete PRNG key for the network initialisation.
+        run_dir (pathlib.Path): Run directory.
 
     Returns:
-        JIT-compilable train function
+        Callable: ``train(rng) -> runner_state``, JIT-compilable.
     """
 
     # Setup derived config values
@@ -483,7 +518,16 @@ def make_train(
 
 
 def _run_deterministic_eval_rollout(config, eval_start_state, eval_step_fn):
-    """Run deterministic rollout for NUM_STEPS and aggregate evaluation metrics."""
+    """Run a deterministic rollout of ``NUM_STEPS`` steps and aggregate the results.
+
+    Args:
+        config (dict): Training configuration (``NUM_STEPS``).
+        eval_start_state (tuple): Initial carry of the evaluation step.
+        eval_step_fn (Callable): Step function from ``make_eval_step_fn``.
+
+    Returns:
+        tuple[jax.Array, jax.Array, jax.Array]: Mean episodic return, mean sensitivity and mean maximum sensitivity.
+    """
     _final_eval_state, info_batch = jax.lax.scan(
         eval_step_fn,
         eval_start_state,
@@ -519,7 +563,20 @@ def run_evaluation_loop(
     step=None,
     trigger="post_training",
 ):
-    """Run deterministic in-process evaluation loop and log return/sensitivity."""
+    """Run a deterministic evaluation and log the return and the sensitivity.
+
+    Args:
+        config (dict): Training configuration (``EVAL_ENABLED``, ``NUM_STEPS``).
+        eval_step_fn (Callable): Step function from ``make_eval_step_fn``.
+        eval_start_state (tuple): Initial carry of the evaluation step.
+        run_dir (pathlib.Path, optional): Run directory, for ``evaluation_summary.json``.
+        writer (SummaryWriter, optional): TensorBoard writer.
+        step (int, optional): Environment step used for the logs.
+        trigger (str): Label of the evaluation, e.g. ``post_training``.
+
+    Returns:
+        list[dict]: The evaluation record, empty when evaluation is disabled.
+    """
     if not config.get("EVAL_ENABLED", True):
         return []
 
@@ -579,7 +636,14 @@ def run_evaluation_loop(
 
 
 def run_evaluation(config, run_dir):
-    """Run evaluation rollouts and plotting."""
+    """Run the evaluation rollouts of a trained policy, on the nominal model and on 10 perturbed models.
+
+    Calls ``rollouts.py`` twice in a subprocess.
+
+    Args:
+        config (dict): Training configuration.
+        run_dir (pathlib.Path): Run directory.
+    """
 
     script_dir = os.path.dirname(__file__)
 
@@ -610,10 +674,13 @@ def run_evaluation(config, run_dir):
 
 @hydra.main(version_base=None, config_path="../configs/hydra", config_name="config")
 def main(cfg: DictConfig):
-    """Main function decorated with Hydra.
+    """Train a policy with the Hydra configuration and save the run.
+
+    The run directory receives ``policy_params.msgpack``, ``config.json``,
+    the TensorBoard logs and, when enabled, the evaluation rollouts.
 
     Args:
-        cfg: Hydra configuration object
+        cfg (DictConfig): Composed Hydra configuration.
     """
     # Convert OmegaConf to regular dict for compatibility
     config = OmegaConf.to_container(cfg, resolve=True)

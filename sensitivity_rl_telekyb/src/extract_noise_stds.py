@@ -1,7 +1,19 @@
+"""Estimate the standard deviation of the sensor noise from hovering flights, in the format of ``obs_noise_stds`` of the Tilthex environment."""
+
 import numpy as np
 import matplotlib.pyplot as plt
 
 def analyze_multiple_hovering_logs(file_paths, plot=True):
+    """Estimate the sensor noise from hovering flights.
+
+    Each signal is centred on its mean, the flights are concatenated and the
+    standard deviation of each component is printed in the format of the
+    ``obs_noise_stds`` array of the environment.
+
+    Args:
+        file_paths (list[str]): Paths of the ``data.npz`` flight files.
+        plot (bool): Plot the centred signals.
+    """
     all_pos_noise = []
     all_vel_noise = []
     all_quat_noise = []

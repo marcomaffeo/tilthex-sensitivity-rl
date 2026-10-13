@@ -108,7 +108,14 @@ SHORT = {
 
 # =========================================================== reading the CSV files
 def fnum(s):
-    """CSV cell -> float. Empty or non-numeric -> nan."""
+    """Convert a CSV cell to a float; an empty or non-numeric cell gives ``nan``.
+
+    Args:
+        s (object): Cell value.
+
+    Returns:
+        float: Numeric value or ``nan``.
+    """
     try:
         v = float(s)
     except (TypeError, ValueError):
@@ -117,11 +124,26 @@ def fnum(s):
 
 
 def tables_dir(folder: Path) -> Path:
+    """Folder of the CSV tables written by ``analyze_trajectory``.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        pathlib.Path: ``<folder>/data_analysis/tables``.
+    """
     return folder / "data_analysis" / "tables"
 
 
 def read_phase_metrics(folder: Path):
-    """{(group, phase): {field: value}} from phase_metrics.csv."""
+    """Read ``phase_metrics.csv`` of a mission folder.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict: ``{(group, phase): {field: value}}``.
+    """
     path = tables_dir(folder) / "phase_metrics.csv"
     if not path.is_file():
         sys.exit(f"Missing {path}\n"
@@ -138,10 +160,17 @@ def read_phase_metrics(folder: Path):
 
 
 def read_tv_flight(folder: Path):
-    """{group: total TV over the whole flight} from tv_windows.csv.
+    """Read the total variation over the whole flight from ``tv_windows.csv``.
 
     The whole flight is the only window that does not depend on a cut, so it
-    can be compared between two folders without checking where the cut fell."""
+    can be compared between two folders without checking where the cut fell.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict[str, float]: Total variation per group; empty when the file is missing.
+    """
     path = tables_dir(folder) / "tv_windows.csv"
     if not path.is_file():
         return {}
@@ -165,7 +194,16 @@ def read_tv_flight(folder: Path):
 # two differ, it says so and draws nothing.
 
 def load_series(npz_path: Path):
-    """(group, dict with t, e_pos_norm, e_att_norm), or (None, reason)."""
+    """Load one flight and recompute its error series.
+
+    Args:
+        npz_path (pathlib.Path): ``data.npz`` of the flight.
+
+    Returns:
+        tuple: ``(group, series)``, with the time, the error norms, the raw
+        position and attitude and, when logged, the velocity norms; or
+        ``(None, reason)`` when the file is discarded.
+    """
     try:
         data = np.load(npz_path, allow_pickle=True)
     except Exception as e:                                   # noqa: BLE001
@@ -208,9 +246,19 @@ def load_series(npz_path: Path):
 
 
 def check_against_csv(f, pm, group, tol=0.02):
-    """Check that the series recomputed here give the same RMSE that
-    analyze_trajectory wrote in the CSV, on a comparable phase.
-    Return (ok, message)."""
+    """Check that the series recomputed here give the RMSE written by ``analyze_trajectory``.
+
+    The check is done on the first comparable phase of the group.
+
+    Args:
+        f (dict): Series from ``load_series``.
+        pm (dict): Phase metrics from ``read_phase_metrics``.
+        group (str): ``'PPO'`` or ``'SPPO'``.
+        tol (float): Relative tolerance.
+
+    Returns:
+        tuple[bool, str]: Outcome and message.
+    """
     for (g, ph), r in pm.items():
         if g != group or r.get('comparable_transient') != 1:
             continue
@@ -231,21 +279,47 @@ def check_against_csv(f, pm, group, tol=0.02):
 
 # =========================================================== comparisons
 def pct(new, old):
-    """Percentage change of new with respect to old."""
+    """Percentage change of ``new`` with respect to ``old``.
+
+    Args:
+        new (float): New value.
+        old (float): Reference value.
+
+    Returns:
+        float: ``(new - old) / old * 100``, ``nan`` when not defined.
+    """
     if new != new or old != old or old == 0:
         return NAN
     return (new - old) / old * 100.0
 
 
 def ratio(num, den):
+    """Ratio of two values.
+
+    Args:
+        num (float): Numerator.
+        den (float): Denominator.
+
+    Returns:
+        float: ``num / den``, ``nan`` when not defined.
+    """
     if num != num or den != den or den == 0:
         return NAN
     return num / den
 
 
 def winner(delta_pct, floor):
-    """delta_pct = (SPPO - PPO) / PPO * 100, on a metric where lower is better.
-    Below the threshold no winner is assigned."""
+    """Policy with the lower value of a metric where lower is better.
+
+    Below the threshold no winner is assigned.
+
+    Args:
+        delta_pct (float): ``(SPPO - PPO) / PPO * 100``.
+        floor (float): Relative difference [%] below which no winner is assigned.
+
+    Returns:
+        str: ``'PPO'``, ``'SPPO'``, ``'~'`` below the threshold, ``''`` when not defined.
+    """
     if delta_pct != delta_pct:
         return ''
     if abs(delta_pct) < floor:
@@ -255,7 +329,16 @@ def winner(delta_pct, floor):
 
 def compare_cell(nom, pert, floor):
     """All the derived numbers for one metric and one phase.
-    nom/pert are dicts {group: value}."""
+
+    Args:
+        nom (dict[str, float]): Nominal value per group.
+        pert (dict[str, float]): Perturbed value per group.
+        floor (float): Relative difference [%] below which no winner is assigned.
+
+    Returns:
+        dict: Values, absolute and relative differences, degradation ratios
+        and winners.
+    """
     c = {}
     for g in GROUPS:
         c[f'{g.lower()}_nom'] = nom.get(g, NAN)
@@ -298,6 +381,7 @@ def compare_cell(nom, pert, floor):
 
 # =========================================================== figures
 def set_style():
+    """Set the matplotlib style of the figures (serif fonts, light grid, minimal frame)."""
     plt.rcParams.update({
         "text.usetex": False,
         "mathtext.fontset": "cm",
@@ -327,6 +411,12 @@ def set_style():
 
 
 def save(fig, path):
+    """Save a figure as a transparent PDF and close it.
+
+    Args:
+        fig (matplotlib.figure.Figure): Figure.
+        path (pathlib.Path): Output file.
+    """
     fig.savefig(path, format='pdf', transparent=True, bbox_inches='tight')
     plt.close(fig)
 
@@ -348,7 +438,14 @@ def fig_overlay_grid(flights, out_path, bounds=(), smooth_s=0.5):
     Dashes are not used: in the other figures of the chapter (full_pose,
     TRACK) a dashed line is the commanded reference. Nominal and perturbed
     are both solid and differ in transparency: nominal faded, perturbed full.
-    Each flight is drawn as its moving average only."""
+    Each flight is drawn as its moving average only.
+
+    Args:
+        flights (dict): Series from ``load_series``, keyed by ``(group, condition)``.
+        out_path (pathlib.Path): Output file.
+        bounds (list[float]): Phase boundaries [s], drawn as vertical lines.
+        smooth_s (float): Width of the moving average [s].
+    """
     with plt.rc_context({
         "axes.labelsize": 20, "xtick.labelsize": 17, "ytick.labelsize": 17,
         "axes.linewidth": 0.9, "xtick.major.width": 0.9, "ytick.major.width": 0.9,
@@ -421,16 +518,27 @@ MISSION_STEP_CHANNEL = {'p2p': 'pos', 'rpy': 'att'}
 
 
 def _step_progress(t, sig, sig_ref, t0, delta, kind):
-    """Progress variable p(t) of eq:step_progress on the window [t0, t0+delta]:
-    0 at the instant of the step (one sample before the phase boundary, as in
-    step_response() of analyze_trajectory, so that the first sample is zero),
-    1 on the target, >1 when the vehicle goes past it.
-    kind='pos': sig/sig_ref are the pos/pos_ref arrays (N, 3).
-    kind='att': sig/sig_ref are the R_act/R_ref scipy Rotation stacks.
-    Same formula as step_response(); the amplitude is checked against
-    step_pos_m/step_ang_deg of phase_metrics.csv, as in check_against_csv.
-    Return (t_rel, p, amp), or None when the step on this channel is below
-    the threshold or the window has too few samples."""
+    """Progress variable ``p(t)`` of a step, on the window ``[t0, t0 + delta]``.
+
+    ``p`` is 0 at the instant of the step (one sample before the phase
+    boundary, as in ``step_response`` of ``analyze_trajectory``, so that the
+    first sample is zero), 1 on the target and above 1 when the vehicle goes
+    past it. The formula is the same as ``step_response``; the amplitude is
+    checked against ``step_pos_m`` and ``step_ang_deg`` of ``phase_metrics.csv``.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        sig (numpy.ndarray | scipy.spatial.transform.Rotation): Position, shape
+            ``(N, 3)``, for ``kind='pos'``; attitude stack for ``kind='att'``.
+        sig_ref (numpy.ndarray | scipy.spatial.transform.Rotation): Reference, same type as ``sig``.
+        t0 (float): Start of the phase [s].
+        delta (float): Duration of the window after the step [s].
+        kind (str): ``'pos'`` or ``'att'``.
+
+    Returns:
+        tuple | None: ``(t_rel, p, amp)``, or ``None`` when the step on this
+        channel is below the threshold or the window has too few samples.
+    """
     # tolerance: t0 comes from phase_metrics.csv rounded to 6 decimals, up
     # to ~1e-6 s after the actual sample of the jump. Without a margin,
     # 't >= t0' could select the sample AFTER the right one, making i_prev
@@ -468,18 +576,29 @@ def _step_progress(t, sig, sig_ref, t0, delta, kind):
 
 def _step_progress_band(flights, pm_nom, pm_pert, key, delta,
                         smooth_s=0.10, n_grid=251, amp_tol=0.05, tag=''):
-    """Mid-point and range band of p(t) for one channel (key='pos'/'att'),
-    one per group, on [0, delta] of STEP_PROFILE_PHASE. Shared by
-    fig_step_profile_pair and fig_step_profile_single (see _step_progress
-    for the formula).
+    """Mid-point and range band of ``p(t)`` for one channel, one per group.
 
-    flights: {(group, cond): dict from load_series, with pos/pos_ref/R_act/R_ref}.
-    pm_nom, pm_pert: dicts from read_phase_metrics, keyed by (group, phase).
-    tag: prefix of the console warnings, to tell the callers apart.
+    The band covers ``[0, delta]`` after the step of ``STEP_PROFILE_PHASE``.
+    It is shared by ``fig_step_profile_pair`` and ``fig_step_profile_single``;
+    see ``_step_progress`` for the formula.
 
-    Return (t_grid, bands) with bands[g] = (mid, lo, hi) on t_grid; bands[g]
-    is None when a flight of that group is missing or the channel has no step
-    above the threshold in one of the two conditions."""
+    Args:
+        flights (dict): Series from ``load_series``, keyed by ``(group, condition)``.
+        pm_nom (dict): Phase metrics of the nominal folder, from ``read_phase_metrics``.
+        pm_pert (dict): Phase metrics of the perturbed folder, from ``read_phase_metrics``.
+        key (str): Channel, ``'pos'`` or ``'att'``.
+        delta (float): Duration of the window after the step [s].
+        smooth_s (float): Width of the moving average [s].
+        n_grid (int): Number of points of the common time grid.
+        amp_tol (float): Relative tolerance between the step amplitude recomputed here and the one in the CSV.
+        tag (str): Prefix of the console warnings, to tell the callers apart.
+
+    Returns:
+        tuple: ``(t_grid, bands)``, with ``bands[g] = (mid, lo, hi)`` on
+        ``t_grid``. ``bands[g]`` is ``None`` when a flight of that group is
+        missing or the channel has no step above the threshold in one of the two
+        conditions.
+    """
     sig_key, ref_key = STEP_PROFILE_CHANNELS[key]
     pm_by_cond = {'nominal': pm_nom, 'perturbed': pm_pert}
     t_grid = np.linspace(0.0, delta, n_grid)
@@ -530,20 +649,33 @@ def _step_progress_band(flights, pm_nom, pm_pert, key, delta,
 
 def fig_step_profile_pair(flights, pm_nom, pm_pert, delta, out_path,
                           smooth_s=0.10, n_grid=251, amp_tol=0.05):
-    """1x2 grid (position, attitude): p(t) on the window [t0, t0+delta] of
-    STEP_PROFILE_PHASE, one mid-point and range band per policy (see
-    _step_progress_band). Same convention as fig_cat_range_pair, over time
-    instead of by category: the centre of each band is the mid-point between
-    the nominal and the perturbed flight, the width is the interval they span
-    (two values are not a sample, so no standard deviation is used). t0 comes
-    from phase_metrics.csv.
+    """Step progress of position and attitude, in a 1x2 grid.
+
+    ``p(t)`` is drawn on the window ``[t0, t0 + delta]`` of
+    ``STEP_PROFILE_PHASE``, with one mid-point and range band per policy (see
+    ``_step_progress_band``). The convention is the one of
+    ``fig_cat_range_pair``, over time instead of by category: the centre of
+    each band is the mid-point between the nominal and the perturbed flight,
+    the width is the interval they span (two values are not a sample, so no
+    standard deviation is used). ``t0`` comes from ``phase_metrics.csv``.
 
     Each mission has a step on a single channel in C->D (see
-    MISSION_STEP_CHANNEL), so one of the two panels is empty; the figure used
-    in the text is fig_step_profile_single.
+    ``MISSION_STEP_CHANNEL``), so one of the two panels is empty; the figure
+    used in the text is ``fig_step_profile_single``.
 
-    flights, pm_nom, pm_pert: as in _step_progress_band.
-    delta: duration of the window (STEP_PROFILE_WINDOW_S)."""
+    Args:
+        flights (dict): Series from ``load_series``, keyed by ``(group, condition)``.
+        pm_nom (dict): Phase metrics of the nominal folder, from ``read_phase_metrics``.
+        pm_pert (dict): Phase metrics of the perturbed folder, from ``read_phase_metrics``.
+        delta (float): Duration of the window after the step [s] (``STEP_PROFILE_WINDOW_S``).
+        out_path (pathlib.Path): Output file.
+        smooth_s (float): Width of the moving average [s].
+        n_grid (int): Number of points of the common time grid.
+        amp_tol (float): Relative tolerance between the step amplitude recomputed here and the one in the CSV.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     panels = {}
     missing = []
     t_grid = None
@@ -589,13 +721,27 @@ def fig_step_profile_pair(flights, pm_nom, pm_pert, delta, out_path,
 
 def fig_step_profile_single(flights, pm_nom, pm_pert, mission, delta, out_path,
                             smooth_s=0.10, n_grid=251, amp_tol=0.05):
-    """One panel: p(t) on the window [t0, t0+delta] of STEP_PROFILE_PHASE,
-    mid-point and range band per policy, only on the channel with a step in
-    C->D for this mission (position for p2p, attitude for the tilt mission,
-    see MISSION_STEP_CHANNEL). One figure per mission.
+    """Step progress on the channel with a step, one panel per mission.
 
-    flights, pm_nom, pm_pert, delta: as in fig_step_profile_pair.
-    mission: key of MISSION_STEP_CHANNEL ('p2p' or 'rpy')."""
+    ``p(t)`` is drawn on the window ``[t0, t0 + delta]`` of
+    ``STEP_PROFILE_PHASE``, with one mid-point and range band per policy, only
+    on the channel with a step in C->D for this mission (position for p2p,
+    attitude for the tilt mission, see ``MISSION_STEP_CHANNEL``).
+
+    Args:
+        flights (dict): Series from ``load_series``, keyed by ``(group, condition)``.
+        pm_nom (dict): Phase metrics of the nominal folder, from ``read_phase_metrics``.
+        pm_pert (dict): Phase metrics of the perturbed folder, from ``read_phase_metrics``.
+        mission (str): Key of ``MISSION_STEP_CHANNEL``, ``'p2p'`` or ``'rpy'``.
+        delta (float): Duration of the window after the step [s].
+        out_path (pathlib.Path): Output file.
+        smooth_s (float): Width of the moving average [s].
+        n_grid (int): Number of points of the common time grid.
+        amp_tol (float): Relative tolerance between the step amplitude recomputed here and the one in the CSV.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     key = MISSION_STEP_CHANNEL[mission]
     ylabel = dict(STEP_PROFILE_PANELS)[key]
     t_grid, bands = _step_progress_band(flights, pm_nom, pm_pert, key, delta,
@@ -648,7 +794,14 @@ STEP_METRICS = [
 
 
 def read_assets(folder: Path):
-    """{(section, phase, group, metric): value} from assets.csv."""
+    """Read ``assets.csv`` of a mission folder.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict: ``{(section, phase, group, metric): value}``.
+    """
     path = tables_dir(folder) / "assets.csv"
     if not path.is_file():
         sys.exit(f"Missing {path}\n"
@@ -661,13 +814,23 @@ def read_assets(folder: Path):
 
 
 def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
-    """Write a LaTeX table (\\begin{tabular}...) with the four quantities of
-    STEP_METRICS on STEP_PROFILE_PHASE, mid-point and range between nominal
-    and perturbed, PPO and SPPO side by side: the counterpart of
-    fig_cat_range_pair for the step, as a table.
+    """Write the LaTeX table of the step metrics, nominal against perturbed.
 
-    mission: key of MISSION_STEP_CHANNEL, selects the 'step_pos' or
-    'step_att' rows of assets.csv."""
+    The table holds the four quantities of ``STEP_METRICS`` on
+    ``STEP_PROFILE_PHASE``, as mid-point and range between nominal and
+    perturbed, PPO and SPPO side by side: the counterpart of
+    ``fig_cat_range_pair`` for the step.
+
+    Args:
+        nom_dir (pathlib.Path): Nominal mission folder.
+        pert_dir (pathlib.Path): Perturbed mission folder.
+        mission (str): Key of ``MISSION_STEP_CHANNEL``; it selects the
+            ``step_pos`` or ``step_att`` rows of ``assets.csv``.
+        out_path (pathlib.Path): Output ``.tex`` file.
+
+    Returns:
+        bool: ``True`` when the table is written.
+    """
     key = MISSION_STEP_CHANNEL[mission]
     section = STEP_METRICS_SECTION[key]
     a_nom, a_pert = read_assets(nom_dir), read_assets(pert_dir)
@@ -719,7 +882,13 @@ def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
 
 
 def tight_x(ax, lo, hi):
-    """No horizontal margin: the trace starts at the axis."""
+    """No horizontal margin: the trace starts at the axis.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        lo (float): Left limit.
+        hi (float): Right limit.
+    """
     if hi > lo:
         ax.set_xlim(lo, hi)
     ax.margins(x=0)
@@ -753,7 +922,16 @@ _TRAPZ = getattr(np, 'trapezoid', None) or np.trapz
 def seg_mean_t(t, y, mask=None):
     """Time average of y: trapezoidal integral divided by the duration, summed
     over contiguous stretches. Same as analyze_trajectory.seg_mean_t, so that
-    the two scripts give the same number on the same window."""
+    the two scripts give the same number on the same window.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        y (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: Time average of ``y``, ``nan`` for an empty mask.
+    """
     t = np.asarray(t, float); y = np.asarray(y, float)
     idx = np.arange(t.size) if mask is None else np.flatnonzero(mask)
     if idx.size == 0:
@@ -768,11 +946,31 @@ def seg_mean_t(t, y, mask=None):
 
 
 def rms_t(t, x, mask=None):
+    """RMS over time, ``sqrt((1/T) * integral of x^2 dt)``.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        x (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: RMS of ``x`` over time.
+    """
     v = seg_mean_t(t, np.asarray(x, float) ** 2, mask)
     return float(np.sqrt(v)) if v == v and v >= 0 else NAN
 
 
 def mae_t(t, x, mask=None):
+    """Mean absolute value over time, ``(1/T) * integral of |x| dt``.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        x (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: Mean absolute value of ``x`` over time.
+    """
     return seg_mean_t(t, np.abs(np.asarray(x, float)), mask)
 
 
@@ -782,8 +980,14 @@ STATS = (("RMSE", rms_t),
          ("MAE",  mae_t))
 
 def read_params(folder):
-    """tables/params.csv: the parameters used for the folder. When the file
-    is missing the check reports it."""
+    """Read ``params.csv``, the parameters used for the analysis of a folder.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict[str, float] | None: Parameter values, ``None`` when the file is missing.
+    """
     p = tables_dir(folder) / "params.csv"
     if not p.exists():
         return None
@@ -805,7 +1009,15 @@ def check_params(nom_dir, pert_dir):
 
     The figures of maneuvers/ and step/ read category_metrics.csv as it is:
     the windows are inherited, not recomputed. With different --delta values
-    'Step' and 'Hover' would cover different intervals in the two folders."""
+    'Step' and 'Hover' would cover different intervals in the two folders.
+
+    Args:
+        nom_dir (pathlib.Path): Nominal mission folder.
+        pert_dir (pathlib.Path): Perturbed mission folder.
+
+    Returns:
+        bool: ``True`` when the parameters that define the windows are the same.
+    """
     a, b = read_params(nom_dir), read_params(pert_dir)
     print(f"\n{'='*78}\nPARAMETERS OF THE TWO FOLDERS\n{'='*78}")
     if a is None or b is None:
@@ -856,6 +1068,14 @@ GLOBAL_UNITS = {
 
 
 def _slug(name):
+    """Turn a metric name into a file name (lower case, underscores).
+
+    Args:
+        name (str): Metric name.
+
+    Returns:
+        str: File name.
+    """
     keep = "".join(ch if ch.isalnum() else "_" for ch in name.lower())
     while "__" in keep:
         keep = keep.replace("__", "_")
@@ -864,7 +1084,18 @@ def _slug(name):
 
 def fig_metric_bars(metric, c, out_path, floor, stat='RMSE'):
     """One metric, four bars: the two policies in the two conditions, without
-    ratios or normalisation."""
+    ratios or normalisation.
+
+    Args:
+        metric (str): Name of the metric.
+        c (dict): Derived numbers from ``compare_cell``.
+        out_path (pathlib.Path): Output file.
+        floor (float): Relative difference [%] below which no winner is assigned.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     unit, scale = GLOBAL_UNITS.get(metric, ('', 1.0))
     order = [('ppo_nom', 'PPO', 'nominal'), ('ppo_pert', 'PPO', 'perturbed'),
              ('sppo_nom', 'SPPO', 'nominal'), ('sppo_pert', 'SPPO', 'perturbed')]
@@ -933,6 +1164,15 @@ CAT_SIGNED = {"lag_z"}
 
 
 def read_category_metrics(folder):
+    """Read ``category_metrics.csv`` of a mission folder.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict: Values keyed by ``(group, category, statistic, metric)``, and the
+        units under ``'_units'``.
+    """
     p = tables_dir(Path(folder)) / "category_metrics.csv"
     if not p.is_file():
         raise SystemExit(f"Missing {p}\n"
@@ -968,7 +1208,21 @@ CAT_MOTION = ("v_norm", "w_norm")
 
 def fig_cat_nom_vs_pert(cats, V, stat, key, sym, unit, out_path, stem):
     """One quantity: the manoeuvres on the x axis, four bars per manoeuvre,
-    without ratios or normalisation."""
+    without ratios or normalisation.
+
+    Args:
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        unit (str): Unit of the quantity.
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     order = [("PPO", "nom"), ("PPO", "pert"), ("SPPO", "nom"), ("SPPO", "pert")]
     allv = [V.get((g, c, cat, stat, key), NAN) for g, c in order for cat in cats]
     finite = [v for v in allv if v == v]
@@ -1005,7 +1259,20 @@ def fig_cat_nom_vs_pert(cats, V, stat, key, sym, unit, out_path, stem):
 
 
 def fig_cat_degradation(cats, V, stat, key, sym, out_path, stem):
-    """One quantity: D = perturbed / nominal, two bars per manoeuvre."""
+    """One quantity: D = perturbed / nominal, two bars per manoeuvre.
+
+    Args:
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     d_all = {}
     for g in ("PPO", "SPPO"):
         d_all[g] = [ratio(V.get((g, "pert", cat, stat, key), NAN),
@@ -1055,6 +1322,19 @@ def fig_cat_delta(cats, V, stat, key, sym, unit, out_path, stem):
     added load this has no physical explanation: it is flight-to-flight
     variability, and its size gives the threshold below which no difference
     between the two policies can be read. The negative region is shaded.
+
+    Args:
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        unit (str): Unit of the quantity.
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
     """
     d_all = {}
     for g in ("PPO", "SPPO"):
@@ -1108,7 +1388,20 @@ def _draw_cat_range(ax, cats, V, stat, key, sym, unit):
 
     Used by fig_cat_range (one quantity, one figure) and by
     fig_cat_range_pair (position and attitude in a 1x2 grid).
-    Return False, without touching the axis, when there is nothing to draw."""
+    Return False, without touching the axis, when there is nothing to draw.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        unit (str): Unit of the quantity.
+
+    Returns:
+        bool: ``True`` when the plot is drawn.
+    """
     mid, lo, hi = {}, {}, {}
     for g in ("PPO", "SPPO"):
         nom = [V.get((g, "nom", cat, stat, key), NAN) for cat in cats]
@@ -1150,7 +1443,21 @@ def fig_cat_range(cats, V, stat, key, sym, unit, out_path, stem):
     """One quantity, one figure: see _draw_cat_range for the drawing and the
     rationale of the mid-point and range plot. The raw values
     (fig_cat_nom_vs_pert) and D/Delta are also written; this figure and
-    fig_cat_range_pair are the ones used in the thesis."""
+    fig_cat_range_pair are the ones used in the thesis.
+
+    Args:
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        unit (str): Unit of the quantity.
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     fig, ax = plt.subplots(figsize=(1.9 * len(cats) + 4.6, 6.2))
     if not _draw_cat_range(ax, cats, V, stat, key, sym, unit):
         plt.close(fig)
@@ -1165,7 +1472,18 @@ def fig_cat_range(cats, V, stat, key, sym, unit, out_path, stem):
 def fig_cat_range_pair(cats, V, stat, out_path, stem):
     """Position and attitude side by side in a 1x2 grid: the same mid-point
     and range plot as fig_cat_range (see _draw_cat_range), one quantity per
-    panel and one shared legend."""
+    panel and one shared legend.
+
+    Args:
+        cats (list[str]): Manoeuvre categories on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     specs = [(k, sm, u) for k, sm, u, _f in CAT_FIGS if k in ("e_p", "e_R")]
     fig_w, fig_h = 11, 4.6
     fig, axs = plt.subplots(1, 2, figsize=(fig_w, fig_h))
@@ -1186,7 +1504,21 @@ def fig_cat_range_pair(cats, V, stat, out_path, stem):
 
 
 def fig_tv_rotors_range(cats, V, stat, key, sym, unit, out_path, stem):
-    """TV per rotor, with the style and height of pos_att_pair_RMSE.pdf."""
+    """TV per rotor, with the style and height of pos_att_pair_RMSE.pdf.
+
+    Args:
+        cats (list[str]): Rotor labels on the x axis.
+        V (dict): Values keyed by ``(group, condition, category, statistic, metric)``, condition ``'nom'`` or ``'pert'``.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+        key (str): Quantity, as in ``CAT_FIGS``.
+        sym (str): Symbol of the quantity (mathtext).
+        unit (str): Unit of the quantity.
+        out_path (pathlib.Path): Output file.
+        stem (str): Mission name (e.g. ``p2p``), used in the titles.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     fig, ax = plt.subplots(figsize=(6.5, 4.6))
     if not _draw_cat_range(ax, cats, V, stat, key, sym, unit):
         plt.close(fig)
@@ -1202,7 +1534,14 @@ def read_tv_rotors(folder: Path):
     """{(group, rotor): TV over the whole flight per rotor} from tv_windows.csv,
     window=='flight', channels M1..M6 (the TOTAL row is read by
     read_tv_flight). The keys stay those of the CSV (M1..M6); the thesis
-    labels (P1..P6) are applied in tv_rotors_range_section."""
+    labels (P1..P6) are applied in tv_rotors_range_section.
+
+    Args:
+        folder (pathlib.Path): Mission folder analysed by ``analyze_trajectory``.
+
+    Returns:
+        dict: ``{(group, rotor): value}``; empty when the file is missing.
+    """
     path = tables_dir(folder) / "tv_windows.csv"
     if not path.is_file():
         return {}
@@ -1222,7 +1561,14 @@ def tv_rotors_range_section(nom_dir, pert_dir, dirs, stem):
     labelled P1..P6 as in Section 2.4.1.
 
     Write tables/tv_comparison_rotors.csv and
-    propellers/03_tv_rotors_range.pdf."""
+    propellers/03_tv_rotors_range.pdf.
+
+    Args:
+        nom_dir (pathlib.Path): Nominal mission folder.
+        pert_dir (pathlib.Path): Perturbed mission folder.
+        dirs (dict[str, pathlib.Path]): Output folders.
+        stem (str): Mission name, used in the titles.
+    """
     rotor_labels = {f"M{i}": f"P{i}" for i in range(1, 7)}
     Tn, Tp = read_tv_rotors(nom_dir), read_tv_rotors(pert_dir)
     if not Tn or not Tp:
@@ -1271,7 +1617,15 @@ def tv_rotors_range_section(nom_dir, pert_dir, dirs, stem):
 
 def compare_categories_section(nom, pert, dirs, stem, exclude):
     """Comparison by category: tables/comparison_categories.csv and the
-    category figures."""
+    category figures.
+
+    Args:
+        nom (pathlib.Path): Nominal mission folder.
+        pert (pathlib.Path): Perturbed mission folder.
+        dirs (dict[str, pathlib.Path]): Output folders.
+        stem (str): Mission name (e.g. ``p2p``); it selects the categories.
+        exclude (list[str]): Categories left out of the figures (kept in the CSV).
+    """
     Mn, Mp = read_category_metrics(nom), read_category_metrics(pert)
     units = {**Mn.get("_units", {}), **Mp.get("_units", {})}
 
@@ -1554,7 +1908,17 @@ def fig_metric_degradation(metric, c, out_path, stat='RMSE'):
     """One metric, two bars: the degradation of each policy.
 
     D = perturbed / nominal. It is read next to the absolute values, since it
-    penalises the policy that starts from a lower error."""
+    penalises the policy that starts from a lower error.
+
+    Args:
+        metric (str): Name of the metric.
+        c (dict): Derived numbers from ``compare_cell``.
+        out_path (pathlib.Path): Output file.
+        stat (str): Statistic, ``'RMSE'`` or ``'MAE'``.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     dp, ds = c.get('D_ppo', NAN), c.get('D_sppo', NAN)
     if dp != dp and ds != ds:
         return False
@@ -1586,6 +1950,18 @@ def fig_metric_degradation(metric, c, out_path, stat='RMSE'):
 # ===========================================================================
 def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
         cat_exclude=()):
+    """Compare the nominal and perturbed flights of one mission.
+
+    Reads the tables of the two folders, checks that they were analysed with
+    the same parameters, and writes the comparison tables and figures.
+
+    Args:
+        nom_dir (pathlib.Path): Nominal mission folder.
+        pert_dir (pathlib.Path): Perturbed mission folder.
+        out_dir (pathlib.Path): Output folder.
+        floor (float): Relative difference [%] below which no winner is assigned.
+        cat_exclude (list[str]): Categories left out of the figures (kept in the CSV).
+    """
     set_style()
     # Same tree as the single-mission analysis, plus the dimension that
     # only the comparison has: the degradation.
@@ -1890,7 +2266,17 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
 
 
 def default_output(nom_dir: Path, pert_dir: Path) -> Path:
-    """p2p_nominal + p2p_perturbed -> p2p_comparison, next to the two."""
+    """Default output folder, e.g. ``p2p_comparison`` for ``p2p_nominal`` and ``p2p_perturbed``.
+
+    The folder is next to the two inputs.
+
+    Args:
+        nom_dir (pathlib.Path): Nominal mission folder.
+        pert_dir (pathlib.Path): Perturbed mission folder.
+
+    Returns:
+        pathlib.Path: Output folder.
+    """
     a, b = nom_dir.name, pert_dir.name
     i = 0
     while i < min(len(a), len(b)) and a[i] == b[i]:

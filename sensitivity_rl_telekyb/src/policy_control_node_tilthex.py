@@ -39,7 +39,7 @@ class PolicyControlNode(Node):
     Every policy flight is saved in ``logs/<policy>_<timestamp>/data.npz``.
     """
     def __init__(self): 
-        """Declare the parameters, load and compile the policy, connect the components, create services and topics."""
+        """Declare the parameters, load and compile the policy, load the components, and create services and topics."""
         super().__init__('policy_controller') 
         
         self.declare_parameter('custom_log_dir', '')
@@ -161,20 +161,49 @@ class PolicyControlNode(Node):
         self.get_logger().info('Policy control node initialized')
 
     def _read_state(self):
-        """State estimated by pom: position, velocity, quaternion (w, x, y, z), angular velocity (13 values)."""
+        """Read the state estimated by pom, under the components lock.
+
+        Returns:
+            numpy.ndarray: Position, linear velocity, quaternion (w, x, y, z) and
+            angular velocity (13 values).
+        """
         with self.components_lock:
             return read_state_and_rot_w(self.components)
 
     def _set_nhfc_position(self, x, y, z, yaw):
+        """Send a position and yaw reference to nhfc, under the components lock.
+
+        Args:
+            x (float): Position x [m].
+            y (float): Position y [m].
+            z (float): Position z [m].
+            yaw (float): Yaw [rad].
+        """
         with self.components_lock:
             self.components.nhfc.set_position(x, y, float(z), yaw)
 
     def _set_rotor_velocity(self, rotor_speed, ack=False):
+        """Send the rotor speeds to rotorcraft, under the components lock.
+
+        Args:
+            rotor_speed (list[float]): Rotor speeds [rad/s].
+            ack (bool): Wait for the acknowledgement of the component.
+        """
         with self.components_lock:
             self.components.rotorcraft.set_velocity(rotor_speed, ack=ack)
 
     @staticmethod
     def _quat_wxyz_from_rpy(roll, pitch, yaw):
+        """Quaternion of roll, pitch and yaw angles (XYZ convention).
+
+        Args:
+            roll (float): Roll [rad].
+            pitch (float): Pitch [rad].
+            yaw (float): Yaw [rad].
+
+        Returns:
+            numpy.ndarray: Quaternion (w, x, y, z).
+        """
         cr = np.cos(roll / 2.0)
         sr = np.sin(roll / 2.0)
         cp = np.cos(pitch / 2.0)
@@ -189,6 +218,16 @@ class PolicyControlNode(Node):
         ], dtype=np.float64)
 
     def _update_pending_state(self, new_setpoint):
+        """Store a new pending reference and compute its action bias.
+
+        When ``enable_action_bias`` is set, the bias is the difference between the
+        action of the policy at the reference (zero position and velocity errors)
+        and the nominal hover force of each rotor, ``m g / (6 cos(alpha))``. The
+        bias is published on ``/policy/staged_info``.
+
+        Args:
+            new_setpoint (numpy.ndarray): Position [m] and quaternion (w, x, y, z), 7 values.
+        """
         with self.lock:
             self.pending_setpoint = new_setpoint.copy()
             target_quat_wxyz = new_setpoint[3:7].copy()
@@ -223,6 +262,14 @@ class PolicyControlNode(Node):
             self.info_pub.publish(info_msg)
 
     def _set_internal_setpoint(self, x, y, z, quat_wxyz):
+        """Set the active reference and its action bias.
+
+        Args:
+            x (float): Position x [m].
+            y (float): Position y [m].
+            z (float): Position z [m].
+            quat_wxyz (numpy.ndarray): Attitude quaternion (w, x, y, z).
+        """
         new_setpoint = np.array([
             float(x), float(y), float(z),
             float(quat_wxyz[0]), float(quat_wxyz[1]),
@@ -237,6 +284,7 @@ class PolicyControlNode(Node):
             self.action_bias = self.pending_bias.copy()
 
     def _stop_takeoff_ramp(self):
+        """Stop the reference ramp thread, if running."""
         self.takeoff_ramp_stop_event.set()
         if self.takeoff_ramp_thread is not None and self.takeoff_ramp_thread.is_alive():
             self.takeoff_ramp_thread.join(timeout=1.0)
@@ -244,6 +292,21 @@ class PolicyControlNode(Node):
         self.takeoff_ramp_stop_event.clear()
 
     def _start_takeoff_ramp(self, x, y, start_z, target_z, quat_wxyz, yaw, use_pid: bool, label: str):
+        """Move the height reference from ``start_z`` to ``target_z`` at ``takeoff_ramp_rate_mps``, in its own thread.
+
+        If the rate is not positive or the two heights coincide, the reference is
+        set directly to ``target_z``.
+
+        Args:
+            x (float): Position x of the reference [m].
+            y (float): Position y of the reference [m].
+            start_z (float): Initial height [m].
+            target_z (float): Final height [m].
+            quat_wxyz (numpy.ndarray): Attitude quaternion (w, x, y, z) of the reference.
+            yaw (float): Yaw of the reference [rad], sent to nhfc.
+            use_pid (bool): Also send the ramp to nhfc.
+            label (str): Prefix of the log messages.
+        """
         self._stop_takeoff_ramp()
         self.takeoff_ramp_stop_event.clear()
 
@@ -302,7 +365,15 @@ class PolicyControlNode(Node):
         self.takeoff_ramp_thread.start()
 
     def setup_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/setup``: configure and connect the TeleKyb3 components."""
+        """``/control/setup``: configure and connect the TeleKyb3 components.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             self.components.setup() 
             self.hardware_initialized = True 
@@ -316,7 +387,15 @@ class PolicyControlNode(Node):
         return response 
     
     def start_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/start``: start the motors (arm) and wait for a valid state estimate."""
+        """``/control/start``: start the motors (arm) and wait for a valid state estimate.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.hardware_initialized: 
                 raise RuntimeError('Call /control/setup first.') 
@@ -375,7 +454,15 @@ class PolicyControlNode(Node):
         return response
 
     def takeoff_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/takeoff``: take off with the baseline controller (nhfc), along a height ramp."""
+        """``/control/takeoff``: take off with the baseline controller (nhfc), along a height ramp.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Call /control/start first.') 
@@ -439,7 +526,15 @@ class PolicyControlNode(Node):
         return response
 
     def control_land_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/land``: land with the baseline controller (nhfc)."""
+        """``/control/land``: land with the baseline controller (nhfc).
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
@@ -499,7 +594,15 @@ class PolicyControlNode(Node):
         return response 
 
     def pid_go_callback(self, request: Trigger.Request, response: Trigger.Response):
-        """``/policy/pid_go``: fly to the current reference with the baseline controller (nhfc)."""
+        """``/policy/pid_go``: fly to the current reference with the baseline controller (nhfc).
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try:
             if not self.motors_armed: raise RuntimeError('Motors not armed.')
             self.pid_active = True
@@ -521,11 +624,27 @@ class PolicyControlNode(Node):
         return response
 
     def pid_start_callback(self, request: Trigger.Request, response: Trigger.Response):
-        """``/policy/pid_start``: same as ``pid_go_callback``."""
+        """``/policy/pid_start``: same as ``/policy/pid_go``.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         return self.pid_go_callback(request, response)
 
     def pid_stop_callback(self, request: Trigger.Request, response: Trigger.Response):
-        """``/policy/pid_stop``: stop following references with the baseline controller and hold the current position."""
+        """``/policy/pid_stop``: stop following references with the baseline controller and hold the current position.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         self.pid_active = False
 
         state = self._read_state()
@@ -555,7 +674,15 @@ class PolicyControlNode(Node):
         return response
 
     def pid_test_callback(self, request: Trigger.Request, response: Trigger.Response):
-        """``/control/pid_test``: start a test flight with the baseline controller, in its own thread."""
+        """``/control/pid_test``: start a test flight with the baseline controller, in its own thread.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try:
             if not self.motors_armed: 
                 raise RuntimeError('Motors not armed.')
@@ -579,7 +706,15 @@ class PolicyControlNode(Node):
         return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/stop``: emergency stop of the policy loop, the baseline controller, the motors and the logs."""
+        """``/control/stop``: emergency stop of the policy loop, the baseline controller, the motors and the logs.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             self.pid_active = False
             self.pid_test_stop_event.set()
@@ -607,7 +742,14 @@ class PolicyControlNode(Node):
         return response 
     
     def setpoint_callback(self, msg: PoseStamped): 
-        """``/policy/setpoint``: new position and attitude reference, relative to the current pose, or absolute when ``frame_id`` is ``world_absolute``."""
+        """``/policy/setpoint``: new position and attitude reference.
+
+        The pose is relative to the current pose, or absolute when ``frame_id``
+        is ``world_absolute``.
+
+        Args:
+            msg (geometry_msgs.msg.PoseStamped): Reference pose.
+        """
         from scipy.spatial.transform import Rotation
         
         if not self.hardware_initialized:
@@ -689,7 +831,13 @@ class PolicyControlNode(Node):
         )
 
     def attitude_callback(self, msg: Quaternion): 
-        """``/policy/attitude_target``: new attitude reference, relative to the current attitude; the position reference is kept at the current position and reference height."""
+        """``/policy/attitude_target``: new attitude reference, relative to the current attitude.
+
+        The position reference is kept at the current position and reference height.
+
+        Args:
+            msg (geometry_msgs.msg.Quaternion): Attitude change.
+        """
         from scipy.spatial.transform import Rotation
 
         if not self.hardware_initialized:
@@ -738,7 +886,15 @@ class PolicyControlNode(Node):
         )
 
     def policy_start_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/policy/start``: start the policy loop on the pending reference; nhfc is stopped while the policy flies."""
+        """``/policy/start``: start the policy loop on the pending reference; nhfc is stopped while the policy flies.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         activation_start_time = perf_counter()
         try: 
             if not self.motors_armed: 
@@ -782,7 +938,15 @@ class PolicyControlNode(Node):
         return response 
 
     def policy_takeoff_callback(self, request: Trigger.Request, response: Trigger.Response):
-        """``/policy/takeoff``: take off with the policy, along a height ramp on the reference."""
+        """``/policy/takeoff``: take off with the policy, along a height ramp on the reference.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         activation_start_time = perf_counter()
         try:
             if not self.motors_armed:
@@ -875,7 +1039,15 @@ class PolicyControlNode(Node):
         return response
 
     def policy_stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/policy/stop``: stop the policy loop and hand control back to the baseline controller (nhfc)."""
+        """``/policy/stop``: stop the policy loop and hand control back to the baseline controller (nhfc).
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if self.policy_thread is None or not self.policy_thread.is_alive(): 
                 raise RuntimeError('Policy is not running.') 
@@ -894,7 +1066,15 @@ class PolicyControlNode(Node):
         return response 
     
     def land_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/policy/land``: land with the policy, along a descending ramp on the reference."""
+        """``/policy/land``: land with the policy, along a descending ramp on the reference.
+
+        Args:
+            request (std_srvs.srv.Trigger.Request): Empty request.
+            response (std_srvs.srv.Trigger.Response): Response to fill.
+
+        Returns:
+            std_srvs.srv.Trigger.Response: ``success`` and a status ``message``.
+        """
         try: 
             if not self.motors_armed: 
                 raise RuntimeError('Motors must be armed to land.') 
@@ -965,8 +1145,17 @@ class PolicyControlNode(Node):
         return response 
 
     def _build_observation(self, state: np.ndarray) -> Optional[jnp.ndarray]: 
-        """Observation of the policy from the state (17 values): vector to the target and linear velocity in the
-        body frame, attitude quaternion (w, x, y, z), angular velocity, attitude error quaternion in the body frame.
+        """Observation of the policy from the state.
+
+        The 17 values are the vector to the target and the linear velocity in the
+        body frame, the attitude quaternion (w, x, y, z), the angular velocity and
+        the attitude error quaternion in the body frame.
+
+        Args:
+            state (numpy.ndarray): State of 13 values from ``_read_state``.
+
+        Returns:
+            jax.Array | None: Observation, or ``None`` when ``state`` is ``None``.
         """
         if state is None: return None 
         
@@ -1006,7 +1195,7 @@ class PolicyControlNode(Node):
         return jnp.array(obs)
     
     def _pid_test_loop(self):
-        """Test flight with the baseline controller, run by ``pid_test_callback``."""
+        """Test flight with the baseline controller, run by ``/control/pid_test``."""
         frequency = self.get_parameter('frequency_hz').value
         duration = self.get_parameter('policy_duration').value
         rate = self.create_rate(frequency)
@@ -1118,9 +1307,11 @@ class PolicyControlNode(Node):
                 self.get_logger().error(f"Plotting thread failed to start: {e}")
 
     def _policy_loop(self): 
-        """Policy loop, in its own thread at ``frequency_hz``: read the state, compute the action, send the
-        rotor speeds and log. At the end the flight is saved and, unless stopped with ``/control/stop``,
-        control goes back to nhfc.
+        """Policy loop, in its own thread at ``frequency_hz``.
+
+        At each step the loop reads the state, computes the action, sends the
+        rotor speeds and logs. At the end the flight is saved and, unless stopped
+        with ``/control/stop``, control goes back to nhfc.
         """
         frequency = self.get_parameter('frequency_hz').value 
         duration = self.get_parameter('policy_duration').value 
@@ -1332,7 +1523,11 @@ class PolicyControlNode(Node):
             self.get_logger().warn("Not enough data to plot.")
 
 def publish_setpoint_cli(args):
-    """Command line ``--setpoint x y z roll pitch yaw``: publish one reference on ``/policy/setpoint``."""
+    """Command line ``--setpoint x y z roll pitch yaw``: publish one reference on ``/policy/setpoint``.
+
+    Args:
+        args (list[str]): Position [m] and roll, pitch, yaw [deg].
+    """
     import sys
     import time
     from scipy.spatial.transform import Rotation
@@ -1381,7 +1576,11 @@ def publish_setpoint_cli(args):
     rclpy.shutdown()
 
 def publish_attitude_cli(args):
-    """Command line ``--setattitude roll pitch yaw``: publish one attitude reference on ``/policy/attitude_target``."""
+    """Command line ``--setattitude roll pitch yaw``: publish one attitude reference on ``/policy/attitude_target``.
+
+    Args:
+        args (list[str]): Roll, pitch, yaw [deg].
+    """
     import sys
     import time
     from scipy.spatial.transform import Rotation
@@ -1448,7 +1647,11 @@ def trigger_pid_test_cli():
     rclpy.shutdown()
 
 def run_mission_cli(args):
-    """Mission ``--takeoff-to-point-land takeoff_z dx dy dz wait_s``: takeoff, one displacement, landing, motors off."""
+    """Mission ``--takeoff-to-point-land``: takeoff, one displacement, landing, motors off.
+
+    Args:
+        args (list[str]): ``takeoff_z dx dy dz wait_s``, heights and displacement [m], wait [s].
+    """
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -1652,9 +1855,14 @@ def run_mission_cli(args):
 
 
 def run_point_to_point_mission_cli(args):
-    """Point-to-point mission of the thesis, ``--takeoff-zero-point-land takeoff_z x y z wait_s``:
-    takeoff, hold above the origin at ``takeoff_z``, move to (x, y, takeoff_z + z), land below that
-    point, motors off. Each phase lasts ``wait_s`` seconds.
+    """Point-to-point mission of the thesis, ``--takeoff-zero-point-land``.
+
+    Takeoff, hold above the origin at ``takeoff_z``, move to
+    (x, y, takeoff_z + z), land below that point, motors off. Each phase lasts
+    ``wait_s`` seconds.
+
+    Args:
+        args (list[str]): ``takeoff_z x y z wait_s``, positions [m], wait [s].
     """
     import time
     from scipy.spatial.transform import Rotation
@@ -1876,9 +2084,14 @@ def run_point_to_point_mission_cli(args):
     rclpy.shutdown()
 
 def run_zero_attitude_zero_land_cli(args):
-    """Attitude mission of the thesis, ``--takeoff-zero-attitude-zero-land takeoff_z roll pitch yaw wait_s``:
-    takeoff, hold level above the origin, attitude target, back to level keeping the target yaw,
-    landing, motors off. Each phase lasts ``wait_s`` seconds.
+    """Attitude mission of the thesis, ``--takeoff-zero-attitude-zero-land``.
+
+    Takeoff, hold level above the origin, attitude target, back to level
+    keeping the target yaw, landing, motors off. Each phase lasts ``wait_s``
+    seconds.
+
+    Args:
+        args (list[str]): ``takeoff_z roll pitch yaw wait_s``, height [m], angles [deg], wait [s].
     """
     import time
     from scipy.spatial.transform import Rotation
@@ -2107,7 +2320,11 @@ def run_zero_attitude_zero_land_cli(args):
     node.destroy_node()
     rclpy.shutdown()
 def run_attitude_mission_cli(args):
-    """Mission ``--takeoff-attitude-land takeoff_z roll pitch yaw wait_s``: takeoff, attitude target, hover, landing, motors off."""
+    """Mission ``--takeoff-attitude-land``: takeoff, attitude target, hover, landing, motors off.
+
+    Args:
+        args (list[str]): ``takeoff_z roll pitch yaw wait_s``, height [m], angles [deg], wait [s].
+    """
     import time
     from scipy.spatial.transform import Rotation
     from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
@@ -2344,7 +2561,11 @@ def check_telemetry_cli():
         print(f"Failed to read telemetry. Error: {e}")
 
 def main(args=None): 
-    """Start the policy node (with real-time priority when allowed) and spin it until shutdown."""
+    """Start the policy node (with real-time priority when allowed) and spin it until shutdown.
+
+    Args:
+        args (list[str] | None): ROS 2 command line arguments.
+    """
     try:
         os.nice(-10)
     except PermissionError:

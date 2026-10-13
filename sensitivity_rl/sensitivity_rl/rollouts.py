@@ -34,6 +34,16 @@ from pathlib import Path
 
 @dataclass
 class RolloutConfig:
+    """Settings of the rollout evaluation.
+
+    Attributes:
+        num_rollouts (int): Number of trajectories.
+        max_steps (int): Maximum number of steps per trajectory.
+        deterministic (bool): Use the mean action instead of sampling.
+        seed (int): Seed of the random generator.
+        param_samples (int): Number of parameter samples per trajectory; 1 uses only the nominal parameters.
+        plot (bool): Plot the trajectories after the rollouts.
+    """
     num_rollouts: int
     max_steps: int
     deterministic: bool
@@ -43,6 +53,17 @@ class RolloutConfig:
 
 
 def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
+    """Read the configuration and the parameters of a run.
+
+    Args:
+        run_dir (pathlib.Path): Run directory with ``config.json`` and ``policy_params.msgpack``.
+
+    Returns:
+        tuple[dict, bytes]: Configuration and serialised parameters.
+
+    Raises:
+        FileNotFoundError: If one of the two files is missing.
+    """
     cfg_path = run_dir / "config.json"
     params_path = run_dir / "policy_params.msgpack"
     if not cfg_path.exists():
@@ -58,6 +79,20 @@ def load_run_artifacts(run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
 def build_env_from_config(
     config: Dict[str, Any],
 ) -> Tuple[GymnaxWrapper, Any, str, type]:
+    """Build the evaluation environment of a run.
+
+    The episode length is ``EVAL_MAX_STEPS_IN_EPISODE`` when set, and the
+    environments with a target are put in testing mode (fixed targets).
+
+    Args:
+        config (dict): Configuration of the run.
+
+    Returns:
+        tuple[GymnaxWrapper, EnvParams, str, type]: Wrapped environment, parameters, name and environment class.
+
+    Raises:
+        ValueError: If ``ENV_NAME`` is not in ``ENV_REGISTRY``.
+    """
     env_name = config.get("ENV_NAME", "tilthex_v1").lower()
     if env_name not in ENV_REGISTRY:
         raise ValueError(
@@ -85,7 +120,14 @@ def build_env_from_config(
 
 
 def _flatten_value(x):
-    """Flatten a pytree or array/scalar into a 1D JAX array for logging."""
+    """Flatten a pytree, an array or a scalar into a 1D array, for logging.
+
+    Args:
+        x (Any): Value to flatten.
+
+    Returns:
+        jax.Array: Flattened value.
+    """
     try:
         flat, _ = ravel_pytree(x)
     except Exception:
@@ -109,6 +151,21 @@ def rollout_episode(
     deterministic: bool,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
 
+    """Run one episode of the policy and record actions, states and evaluation metrics.
+
+    Args:
+        env (GymnaxWrapper): Evaluation environment.
+        env_params (EnvParams): Environment parameters.
+        graphdef (nnx.GraphDef): Graph definition of the network.
+        params (nnx.State): Network parameters.
+        rng_key (jax.Array): PRNG key.
+        max_steps (int): Horizon; the episode length of ``env_params`` when not positive.
+        deterministic (bool): Whether to apply the mean action instead of sampling.
+
+    Returns:
+        tuple[jax.Array, dict, dict]: Actions, shape ``(T, action_dim)``; logged state
+        fields, each of shape ``(T + 1, ...)``; evaluation metrics, each of shape ``(T + 1,)``.
+    """
     rng_reset, rng = jax.random.split(rng_key)
     obs, env_state = env.reset(rng_reset, env_params)
 
@@ -198,8 +255,24 @@ def rollout_episode_from_state(
     max_steps: int,
     deterministic: bool,
 ) -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-    """Like rollout_episode but starts from an explicitly provided initial state,
-    so multiple env_params samples can share the same starting position."""
+    """Same as ``rollout_episode``, starting from a given state.
+
+    Used to run several parameter samples from the same initial condition.
+
+    Args:
+        env (GymnaxWrapper): Evaluation environment.
+        env_params (EnvParams): Environment parameters.
+        graphdef (nnx.GraphDef): Graph definition of the network.
+        params (nnx.State): Network parameters.
+        initial_obs (jax.Array): First observation.
+        initial_state (EnvState): Initial environment state.
+        rng_key (jax.Array): PRNG key.
+        max_steps (int): Horizon; the episode length of ``env_params`` when not positive.
+        deterministic (bool): Whether to apply the mean action instead of sampling.
+
+    Returns:
+        tuple[jax.Array, dict, dict]: Actions, logged state fields and evaluation metrics.
+    """
 
     rng = rng_key
     obs = initial_obs
@@ -280,6 +353,15 @@ def save_trajectory(
     eval_metrics: Dict[str, np.ndarray] = None,
     env_params=None,
 ) -> None:
+    """Save one trajectory as a msgpack file.
+
+    Args:
+        path (pathlib.Path): Output file.
+        actions (numpy.ndarray): Actions of the episode.
+        state_filtered (dict[str, numpy.ndarray]): Logged state fields.
+        eval_metrics (dict[str, numpy.ndarray], optional): Evaluation metrics.
+        env_params (EnvParams, optional): Unused.
+    """
     to_save = {"actions": actions}
     to_save.update(state_filtered)
     if eval_metrics:
@@ -289,7 +371,14 @@ def save_trajectory(
 
 
 def extract_actor_params(pure_dict: Dict) -> Dict:
-    """Extract actor parameters from a full model's NNX pure dict (debug helper)."""
+    """Keep the actor entries of a full model's NNX pure dict (debug helper).
+
+    Args:
+        pure_dict (dict): Pure dict of the whole model.
+
+    Returns:
+        dict: Entries whose key starts with ``actor``.
+    """
     actor_dict = {}
     for key, value in pure_dict.items():
         if key.startswith("actor_"):
@@ -298,6 +387,17 @@ def extract_actor_params(pure_dict: Dict) -> Dict:
 
 
 def init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes: bytes):
+    """Rebuild the network of a run and restore its parameters.
+
+    Args:
+        config (dict): Configuration of the run (algorithm and network sizes).
+        env (GymnaxWrapper): Evaluation environment, for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        params_bytes (bytes): Content of ``policy_params.msgpack``.
+
+    Returns:
+        tuple[nnx.GraphDef, nnx.State]: Graph definition and restored parameters.
+    """
     actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])
     critic_layer_sizes = tuple(
         config.get("CRITIC_LAYER_SIZES", config["ACTOR_LAYER_SIZES"])
@@ -364,6 +464,15 @@ def init_model_and_params(config: Dict[str, Any], env, env_params, params_bytes:
 
 def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
+    """Run the rollouts of one run and save trajectories, data and plots.
+
+    Writes ``rollouts/traj_*.msgpack``, ``rollout_data.npz`` and, with
+    ``plot``, ``rollouts_nominal.png`` or ``rollouts_perturbed.png``.
+
+    Args:
+        run_dir (pathlib.Path): Run directory.
+        rcfg (RolloutConfig): Rollout settings.
+    """
     config, params_bytes = load_run_artifacts(run_dir)
     env, env_params, env_name, env_cls = build_env_from_config(config)
 
@@ -569,6 +678,11 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
 
 def parse_args() -> argparse.Namespace:
+    """Command-line options of the rollout script.
+
+    Returns:
+        argparse.Namespace: Parsed options.
+    """
     parser = argparse.ArgumentParser(
         description="Generate sequential rollouts from learned policies."
     )
@@ -620,6 +734,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run the rollouts of every run directory given on the command line."""
     args = parse_args()
     rcfg = RolloutConfig(
         num_rollouts=args.num_rollouts,

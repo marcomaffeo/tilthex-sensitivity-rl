@@ -33,7 +33,18 @@ CFG = {'t_ss': 2.0, 'tol_pos': 0.05, 'tol_att_deg': 5.0, 'settle_band': 0.05,
 
 
 def per_rotor(folder):
-    """{group: TV per rotor [rad/s^2]} over the categories other than Step."""
+    """Total variation per rotor over the categories other than Step.
+
+    Runs ``analyze_trajectory`` on the folder and collects, for each block of
+    each category, the total variation rate of each rotor; the blocks are then
+    averaged with their number of samples as weights.
+
+    Args:
+        folder (pathlib.Path): Mission folder.
+
+    Returns:
+        dict[str, numpy.ndarray]: Total variation rate of each rotor [rad/s^2], per group.
+    """
     blocks = {}
     orig = at.metrics_for_category
 
@@ -61,6 +72,7 @@ def per_rotor(folder):
 
 
 def main():
+    """Write ``<mission>_comparison/tables/rotor_tv_regime.csv`` for the mission given on the command line."""
     m = sys.argv[1]
     nom, pert = per_rotor(HERE / f"{m}_nominal"), per_rotor(HERE / f"{m}_perturbed")
     out = HERE / f"{m}_comparison" / "tables" / "rotor_tv_regime.csv"

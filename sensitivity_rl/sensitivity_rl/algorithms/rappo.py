@@ -26,7 +26,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply RAPPO-specific environment wrappers."""
+    """Apply the RAPPO wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -51,6 +60,16 @@ def wrap_env(env, config):
 
 
 def calculate_huber_loss(predictions, targets, delta=1.0):
+    """Element-wise Huber loss between predicted and target quantiles.
+
+    Args:
+        predictions (jax.Array): Predicted quantiles.
+        targets (jax.Array): Target values.
+        delta (float): Threshold between the quadratic and the linear region.
+
+    Returns:
+        jax.Array: Huber loss, same shape as the broadcast of the inputs.
+    """
     error = predictions - targets
     abs_error = jnp.abs(error)
     quadratic = jnp.minimum(abs_error, delta)
@@ -60,6 +79,17 @@ def calculate_huber_loss(predictions, targets, delta=1.0):
 
 
 def calculate_quantile_huber_loss(huber_loss, predictions, targets, taus):
+    """Quantile Huber loss used to train the distributional critic.
+
+    Args:
+        huber_loss (jax.Array): Output of ``calculate_huber_loss``.
+        predictions (jax.Array): Predicted quantiles, shape ``(B, N_TAUS, 1)``.
+        targets (jax.Array): Target values.
+        taus (jax.Array): Quantile fractions.
+
+    Returns:
+        jax.Array: Weighted loss, same shape as ``huber_loss``.
+    """
     return (
         jnp.abs(
             taus.reshape(-1, predictions.shape[1], 1)
@@ -70,10 +100,15 @@ def calculate_quantile_huber_loss(huber_loss, predictions, targets, taus):
 
 
 def make_loss_fn(config, graphdef):
-    """Create PPO loss function.
+    """Create the RAPPO loss function of the policy network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorDCritic network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, targets, rng) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(params, traj_batch, advantages, targets, rng):
@@ -136,15 +171,17 @@ def make_loss_fn(config, graphdef):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for PPO.
+    """Create the step function that collects one transition per environment.
 
     Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', 'train_state', etc.
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that collects transitions.
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
     """
     graphdef = networks["graphdef"]
 
@@ -183,15 +220,17 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for PPO.
+    """Create the function that runs one RAPPO update epoch over the minibatches.
 
     Args:
-        config: Training configuration
-        loss_fn: Loss function created by make_loss_fn
-        shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks (unused in PPO but needed for interface)
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
 
     def _update_epoch(update_state: UpdateState, unused):
@@ -230,7 +269,17 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for PPO."""
+    """Compute the generalised advantage estimates of a rollout.
+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with ``advantages`` and ``targets``, and the runner state.
+    """
     rng, _rng = jax.random.split(collect_state.rng)
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     _, (last_val, _) = model(collect_state.last_obs, _rng)
@@ -249,10 +298,17 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize network and train state for PPO.
+    """Create the networks and their training states.
+
+    Args:
+        config (dict): Training configuration (layer sizes, activation, learning rate).
+        env (GymnaxWrapper): Wrapped environment, used for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        rng (jax.Array): PRNG key for the initialisation.
+        load_params_fn (Callable, optional): Function that loads pre-trained actor weights.
 
     Returns:
-        dict with keys: graphdef, train_state, and any secondary networks/states
+        dict: ``graphdef`` and ``train_state``.
     """
     obs_dim = env.observation_space(env_params).shape[0]
     action_dim = env.action_space(env_params).shape[0]

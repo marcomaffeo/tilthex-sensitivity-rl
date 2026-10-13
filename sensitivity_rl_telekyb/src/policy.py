@@ -27,7 +27,11 @@ class Policy:
     rescaled from the action range used in training to the rotor force range of the vehicle.
     """
     def __init__(self, path: Path):
-        """``path``: run folder with config.json and policy_params.msgpack."""
+        """Load a trained policy and its action bounds.
+
+        Args:
+            path (pathlib.Path): Run folder with ``config.json`` and ``policy_params.msgpack``.
+        """
         config, params_bytes = self.load(path)
         
         self.ACTION_DIM = config["env"]["action_dim"]
@@ -40,7 +44,14 @@ class Policy:
         self.graphdef, self.restored_state = self.init_model_and_params(config, params_bytes)
 
     def rescale_action(self, action: jax.Array) -> jax.Array:
-        """Map an action from [MIN_ACTION, MAX_ACTION] to [MIN_INPUT, MAX_INPUT] (rotor forces)."""
+        """Map an action from ``[MIN_ACTION, MAX_ACTION]`` to ``[MIN_INPUT, MAX_INPUT]``.
+
+        Args:
+            action (jax.Array): Action of the policy.
+
+        Returns:
+            jax.Array: Rotor forces [N].
+        """
         action = jnp.clip(action, self.MIN_ACTION, self.MAX_ACTION)
         action_span = self.MAX_ACTION - self.MIN_ACTION
         input_span = self.MAX_INPUT - self.MIN_INPUT
@@ -49,13 +60,29 @@ class Policy:
 
     @functools.partial(jax.jit, static_argnames=['self'])
     def _get_action_jit(self, observation: jnp.ndarray, state: nnx.State) -> jnp.ndarray:
+        """Mean action of the actor for a batch of observations (JIT-compiled).
+
+        Args:
+            observation (jax.Array): Observations, shape ``(B, obs_dim)``.
+            state (nnx.State): Parameters of the network.
+
+        Returns:
+            jax.Array: Rotor forces [N], shape ``(B, action_dim)``.
+        """
         model = nnx.merge(self.graphdef, state)
         action_mean = model.actor(observation).mean()
         return self.rescale_action(action_mean)
 
     def get_action(self, observation: np.ndarray) -> np.ndarray:
         # Fixed dtype, so that the float64 ROS 2 messages do not trigger a recompilation
-        """Deterministic action for one observation, as a float64 array of rotor forces."""
+        """Deterministic action for one observation.
+
+        Args:
+            observation (numpy.ndarray): Observation, shape ``(obs_dim,)``.
+
+        Returns:
+            numpy.ndarray: Rotor forces [N] as float64, shape ``(action_dim,)``.
+        """
         observation = np.asarray(observation, dtype=np.float32)
         
         if observation.ndim == 1:
@@ -70,7 +97,18 @@ class Policy:
         self.get_action(dummy_obs)
 
     def load(self, run_dir: Path) -> Tuple[Dict[str, Any], bytes]:
-        """Read config.json and policy_params.msgpack from a run folder."""
+        """Read the configuration and the parameters of a run.
+
+        Args:
+            run_dir (pathlib.Path): Run folder.
+
+        Returns:
+            tuple[dict, bytes]: Configuration from ``config.json`` and raw content of
+            ``policy_params.msgpack``.
+
+        Raises:
+            FileNotFoundError: If one of the two files is missing.
+        """
         cfg_path = run_dir / "config.json"
         params_path = run_dir / "policy_params.msgpack"
         if not cfg_path.exists():
@@ -83,7 +121,18 @@ class Policy:
         return config, params_bytes
 
     def init_model_and_params(self, config: Dict[str, Any], params_bytes: bytes):
-        """Rebuild the network of the run and restore its parameters."""
+        """Rebuild the network of the run and restore its parameters.
+
+        ``ActorCriticGRU`` is used for SPPO and SPPO-grad runs, ``ActorCritic``
+        otherwise.
+
+        Args:
+            config (dict): Run configuration.
+            params_bytes (bytes): Content of ``policy_params.msgpack``.
+
+        Returns:
+            tuple[nnx.GraphDef, nnx.State]: Graph definition and restored parameters.
+        """
         full_pure_dict = serialization.msgpack_restore(params_bytes)
 
         actor_layer_sizes = tuple(config["ACTOR_LAYER_SIZES"])

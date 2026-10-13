@@ -24,7 +24,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply PPO-specific environment wrappers."""
+    """Apply the CPPO wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -49,10 +58,15 @@ def wrap_env(env, config):
 
 
 def make_loss_fn(config, graphdef):
-    """Create PPO loss function.
+    """Create the CPPO loss function of the policy network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCritic network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(params, traj_batch, advantages, targets):
@@ -108,9 +122,17 @@ def make_loss_fn(config, graphdef):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for CPPO.
+    """Create the function that runs one CPPO update epoch and updates ``nu`` and ``lambda``.
 
-    Updates Policy/Value networks AND CPPO variables (nu, cvarlam).
+    Args:
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
+
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
 
     def _update_epoch(update_state: UpdateState, unused):
@@ -189,7 +211,18 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for CPPO."""
+    """Create the step function that collects one transition per environment.
+
+    Args:
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
+    """
     graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):
@@ -228,10 +261,20 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE and apply CPPO Risk Penalty to Advantages.
+    """Compute the generalised advantage estimates of a rollout.
 
-    This implements the CPPO Logic: Maximize (Advantage - Penalty)
-    Penalty = lambda / (1 - alpha) * (nu - Return)+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    The advantages are reduced by the CVaR penalty
+    ``lambda / (1 - alpha) * max(nu - return, 0)`` on the transitions whose return
+    is below the VaR threshold ``nu``.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with the penalised ``advantages`` and the ``targets``, and the runner state.
     """
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     _, last_val = model(collect_state.last_obs)
@@ -276,7 +319,14 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def extract_losses(loss_info):
-    """Extract loss metrics from loss_info."""
+    """Turn the loss information of an update into scalar metrics for logging.
+
+    Args:
+        loss_info (tuple): Loss values returned by the update epochs.
+
+    Returns:
+        tuple[dict, dict]: The standard PPO metrics, and the mean ``nu`` and ``cvarlam``.
+    """
     total_losses, (
         value_losses,
         actor_losses,
@@ -300,7 +350,18 @@ def extract_losses(loss_info):
 
 
 def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for CPPO with initial Nu and Lambda."""
+    """Reset the environments and build the initial runner state.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+        rng (jax.Array): PRNG key.
+
+    Returns:
+        RunnerState: Initial runner state, with the algorithm-specific entries in ``extras``.
+    """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
     obsv, env_state = env.reset(reset_rng, env_params)

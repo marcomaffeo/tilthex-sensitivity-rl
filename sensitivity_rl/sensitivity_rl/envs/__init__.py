@@ -1,3 +1,5 @@
+"""Environments of the framework: the Tilthex, a quadrotor and the pendulum used for testing."""
+
 from .pendulum import Pendulum
 from .base import Sensitivity
 from .drone_v3 import DroneV3

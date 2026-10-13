@@ -1,3 +1,5 @@
+"""Helpers of the training loop: normalisation, loading of saved parameters, sampling of environment parameters, batch shuffling."""
+
 import jax
 import jax.numpy as jnp
 import os
@@ -8,26 +10,44 @@ from flax import nnx, serialization
 
 
 def angle_normalize(x: jax.Array) -> jax.Array:
-    """Normalize the angle - radians."""
+    """Wrap an angle to ``[-pi, pi)``.
+
+    Args:
+        x (jax.Array): Angle [rad].
+
+    Returns:
+        jax.Array: Wrapped angle [rad].
+    """
     return ((x + jnp.pi) % (2 * jnp.pi)) - jnp.pi
 
 def normalize(a, a_min, a_max):
-    """
-    Maps input a from [a_min, a_max] to [-1, 1]
+    """Map a value from ``[a_min, a_max]`` to ``[-1, 1]``.
+
+    Args:
+        a (jax.Array): Value to map.
+        a_min (jax.Array): Lower bound.
+        a_max (jax.Array): Upper bound.
+
+    Returns:
+        jax.Array: Mapped value.
     """
     return 2 * (a - a_min) / (a_max - a_min) - 1
 
 def load_actor_params_from_file(params_path: str):
-    """Load actor parameters from a msgpack file saved by the NNX training loop.
+    """Load the parameters saved by the training loop in a msgpack file.
 
-    The saved file contains the pure-dict representation of the full NNX
-    ``State`` produced by ``state.to_pure_dict()``.
+    The file holds the pure-dict representation of the full NNX state
+    (``state.to_pure_dict()``). Relative paths are also searched from the
+    directory where Hydra was launched.
 
-    Returns
-    -------
-    dict
-        The full restored pure-dict (caller should extract actor keys
-        if only the actor is needed).
+    Args:
+        params_path (str): Path to ``policy_params.msgpack``.
+
+    Returns:
+        dict: Restored pure dict of the whole model; the caller extracts the actor keys.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
     """
     params_file = Path(params_path)
     if not params_file.is_absolute():
@@ -52,21 +72,14 @@ def load_actor_params_from_file(params_path: str):
 
 
 def merge_actor_params_with_fresh_critic(loaded_pure_dict, fresh_state):
-    """Merge loaded actor parameters into a freshly initialised NNX State.
+    """Merge loaded actor parameters into a freshly initialised NNX state.
 
-    Parameters
-    ----------
-    loaded_pure_dict : dict
-        Pure-dict restored from a previous training run (full model).
-    fresh_state : nnx.State
-        State obtained from ``nnx.split(model)`` on a freshly
-        initialised model of the *same* architecture.
+    Args:
+        loaded_pure_dict (dict): Pure dict restored from a previous run (whole model).
+        fresh_state (nnx.State): State of a freshly initialised model with the same architecture.
 
-    Returns
-    -------
-    nnx.State
-        State whose actor leaves come from ``loaded_pure_dict`` and
-        whose critic leaves are from ``fresh_state``.
+    Returns:
+        nnx.State: State with the actor leaves from ``loaded_pure_dict`` and the critic leaves from ``fresh_state``.
     """
     treedef = jax.tree.structure(fresh_state)
     fresh_pure = fresh_state.to_pure_dict()
@@ -89,27 +102,21 @@ def sample_env_params(
     num_samples: int,
     rng_key: jax.Array,
 ):
-    """Sample environment parameter pytrees within user-defined ranges.
+    """Sample environment parameter pytrees uniformly within given bounds.
 
-    Parameters
-    ----------
-    env: environment.Environment
-        Environment instance used for context; not mutated.
-    base_params: pytree
-        Reference parameters (usually ``env.default_params``).
-    lows, highs:
-        Lower and upper bounds supplied in the same flattened order as the
-        leaves returned by ``jax.tree_util.tree_flatten(base_params)``.
-        Each entry must broadcast with the corresponding leaf.
-    num_samples: int
-        Number of parameter copies to generate.
-    rng_key: jax.Array
-        PRNG key used for sampling.
+    Args:
+        env (environment.Environment): Environment, used for context only.
+        base_params (EnvParams): Reference parameters, usually ``env.default_params``.
+        lows (EnvParams | list): Lower bounds, in the leaf order of ``base_params``.
+        highs (EnvParams | list): Upper bounds, in the same order.
+        num_samples (int): Number of parameter sets.
+        rng_key (jax.Array): PRNG key.
 
-    Returns
-    -------
-    list
-        List of parameter pytrees sampled within provided bounds.
+    Returns:
+        list[EnvParams]: Sampled parameter sets.
+
+    Raises:
+        ValueError: If the bounds do not match the leaves of ``base_params``.
     """
 
     leaves, treedef = jax.tree_util.tree_flatten(base_params)
@@ -144,20 +151,15 @@ def sample_env_params(
 
 
 def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None = None) -> Path:
-    """Create or refresh the latest symlink for a given environment.
+    """Point ``<runs_root>/latest`` to the most recent run directory.
 
-    Parameters
-    ----------
-    run_dir:
-        The directory containing the results of the most recent PPO run.
-    runs_root:
-        Base directory that contains the per-environment run folders. Defaults to
-        the "runs" folder relative to the current working directory.
+    Args:
+        run_dir (pathlib.Path): Directory of the most recent run.
+        env_name (str): Environment name.
+        runs_root (pathlib.Path, optional): Root folder of the runs, ``runs`` by default.
 
-    Returns
-    -------
-    Path
-        Absolute path to the refreshed latest symlink.
+    Returns:
+        pathlib.Path: Path of the ``latest`` link.
     """
 
     runs_root = runs_root or Path("runs")
@@ -176,23 +178,17 @@ def update_latest_symlink(run_dir: Path, env_name: str, runs_root: Path | None =
 
 
 def init_network_params(model, config):
-    """Optionally load actor weights from a previous run into *model*.
+    """Load actor weights from a previous run into a model, when requested.
 
-    If ``config["LOAD_ACTOR_PARAMS_PATH"]`` is set, the saved pure-dict
-    is loaded and actor leaves are merged into the model's current state
-    (keeping the freshly-initialised critic).
+    If ``config["LOAD_ACTOR_PARAMS_PATH"]`` is set, the actor leaves are
+    replaced by the saved ones and the critic keeps its fresh initialisation.
 
-    Parameters
-    ----------
-    model : nnx.Module
-        Already-initialised NNX model.
-    config : dict
-        Training configuration.
+    Args:
+        model (nnx.Module): Initialised NNX model.
+        config (dict): Training configuration.
 
-    Returns
-    -------
-    nnx.Module
-        The same model, potentially with actor weights replaced.
+    Returns:
+        nnx.Module: The same model, with the actor weights replaced when a path is given.
     """
     load_path = config.get("LOAD_ACTOR_PARAMS_PATH")
     if not load_path:
@@ -211,7 +207,16 @@ def init_network_params(model, config):
 
 
 def shuffle_batch(rng, batch, config):
-    """Shuffle and reshape batch into minibatches."""
+    """Shuffle a rollout batch and split it into minibatches.
+
+    Args:
+        rng (jax.Array): PRNG key.
+        batch (Any): Pytree of arrays with leading shape ``(NUM_STEPS, NUM_ENVS)``.
+        config (dict): Training configuration (``MINIBATCH_SIZE``, ``NUM_MINIBATCHES``, ``NUM_STEPS``, ``NUM_ENVS``).
+
+    Returns:
+        Any: Pytree of arrays with leading shape ``(NUM_MINIBATCHES, MINIBATCH_SIZE)``.
+    """
     batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
     assert (
         batch_size == config["NUM_STEPS"] * config["NUM_ENVS"] 

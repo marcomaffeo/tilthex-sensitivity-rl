@@ -26,7 +26,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply PPO-specific environment wrappers."""
+    """Apply the PPO wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -51,10 +60,15 @@ def wrap_env(env, config):
 
 
 def make_loss_fn(config, graphdef):
-    """Create PPO loss function.
+    """Create the PPO loss function of the policy network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCritic network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(params, traj_batch, advantages, targets):
@@ -110,15 +124,17 @@ def make_loss_fn(config, graphdef):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for PPO.
+    """Create the step function that collects one transition per environment.
 
     Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', 'train_state', etc.
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that collects transitions.
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
     """
     graphdef = networks["graphdef"]
 
@@ -151,15 +167,17 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for PPO.
+    """Create the function that runs one PPO update epoch over the minibatches.
 
     Args:
-        config: Training configuration
-        loss_fn: Loss function created by make_loss_fn
-        shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks (unused in PPO but needed for interface)
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
 
     def _update_epoch(update_state: UpdateState, unused):
@@ -195,7 +213,17 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for PPO."""
+    """Compute the generalised advantage estimates of a rollout.
+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with ``advantages`` and ``targets``, and the runner state.
+    """
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     _, last_val = model(collect_state.last_obs)
     advantages, targets = gae_standard(config, traj_batch, last_val)
@@ -206,10 +234,17 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize network and train state for PPO.
+    """Create the networks and their training states.
+
+    Args:
+        config (dict): Training configuration (layer sizes, activation, learning rate).
+        env (GymnaxWrapper): Wrapped environment, used for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        rng (jax.Array): PRNG key for the initialisation.
+        load_params_fn (Callable, optional): Function that loads pre-trained actor weights.
 
     Returns:
-        dict with keys: graphdef, train_state, and any secondary networks/states
+        dict: ``graphdef`` and ``train_state``.
     """
     obs_dim = env.observation_space(env_params).shape[0]
     action_dim = env.action_space(env_params).shape[0]
@@ -243,7 +278,16 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 
 def _policy_dist_from_model(model, obs, rng):
-    """Return policy distribution while supporting model signatures with/without rng."""
+    """Return the policy distribution of a model, whether or not its call takes a PRNG key.
+
+    Args:
+        model (nnx.Module): Actor-critic network.
+        obs (jax.Array): Observations.
+        rng (jax.Array): PRNG key, passed when the model accepts it.
+
+    Returns:
+        distrax.Distribution: Action distribution of the policy.
+    """
     try:
         model_out = model(obs, rng)
     except TypeError:
@@ -252,7 +296,17 @@ def _policy_dist_from_model(model, obs, rng):
 
 
 def make_eval_step_fn(config, graphdef, env, env_params):
-    """Create deterministic env-step function for evaluation rollouts."""
+    """Create a deterministic environment step for the evaluation rollouts.
+
+    Args:
+        config (dict): Training configuration.
+        graphdef (nnx.GraphDef): Graph definition of the policy network.
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+
+    Returns:
+        Callable: ``eval_step(eval_state, unused) -> (eval_state, info)`` that applies the mean action.
+    """
 
     def _eval_step(eval_state, _unused):
         params, env_state, last_obs, rng = eval_state

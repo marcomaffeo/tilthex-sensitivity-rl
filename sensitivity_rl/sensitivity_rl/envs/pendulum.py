@@ -20,23 +20,45 @@ from utils import angle_normalize
 
 @struct.dataclass
 class ModelState:
+    """State of the pendulum.
+
+    Attributes:
+        theta (jax.Array): Angle [rad].
+        theta_dot (jax.Array): Angular velocity [rad/s].
+    """
     theta: jax.Array
     theta_dot: jax.Array
 
 
 @struct.dataclass
 class EnvState(environment.EnvState):
+    """State of the pendulum environment.
+
+    Attributes:
+        state (ModelState): Pendulum state.
+        last_u (jax.Array): Last torque applied.
+        time (int): Step index in the episode.
+    """
     state: ModelState
     last_u: jax.Array  # Only needed for rendering
     time: int
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
+        """Forward attribute access to the wrapped model state.
+
+        Args:
+            name (str): Attribute name, e.g. ``pos`` or ``attitude``.
+
+        Returns:
+            Any: The attribute of ``self.state``.
+        """
         return getattr(self.state, name)
 
 
 @struct.dataclass
 class EnvParams(environment.EnvParams):
+    """Parameters of the pendulum environment; mass ``m`` and length ``l`` are the uncertain parameters."""
     max_speed: float = struct.field(pytree_node=False, default=8.0)
     max_torque: float = struct.field(pytree_node=False, default=2.0)
     dt: float = struct.field(pytree_node=False, default=0.05)
@@ -50,6 +72,7 @@ class Pendulum(environment.Environment):
     """Pendulum-v0 swing-up task."""
 
     def __init__(self):
+        """Set the dimensions and the ranges of the uncertain parameters (mass and length)."""
         self.type = ""
         self.state_dim = 2
         self.obs_dim = 3
@@ -67,7 +90,11 @@ class Pendulum(environment.Environment):
 
     @property
     def default_params(self) -> EnvParams:
-        """Default environment parameters for Pendulum-v0."""
+        """Default parameters of the pendulum environment.
+
+        Returns:
+            EnvParams: Nominal parameters.
+        """
         return EnvParams()
 
     def step_env(
@@ -77,7 +104,20 @@ class Pendulum(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Integrate pendulum ODE and return transition."""
+        """Apply a torque, integrate the pendulum and compute the reward.
+
+        The reward is ``-(theta^2 + 0.1 theta_dot^2 + 0.001 u^2)``, with ``theta``
+        wrapped to ``[-pi, pi)``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state.
+            action (jax.Array): Torque, shape ``(1,)``.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
 
         u = jnp.clip(action, -params.max_torque, params.max_torque)
 
@@ -115,7 +155,17 @@ class Pendulum(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Step dynamics extracting state from env_state."""
+        """Next model state from the environment state and the actuator input.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state.
+            action (jax.Array): Actuator input.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            ModelState: Next model state.
+        """
         return self._step_dynamics(key, env_state.state, action, params)
 
     def _step_dynamics(
@@ -125,7 +175,17 @@ class Pendulum(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Integrate pendulum ODE and return next state."""
+        """One integration step of the pendulum.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (ModelState): Current angle and angular velocity.
+            action (jax.Array): Torque.
+            params (EnvParams): Environment parameters (mass, length, ``dt``).
+
+        Returns:
+            ModelState: Next angle and angular velocity.
+        """
 
         u = jnp.clip(action, -params.max_torque, params.max_torque)
 
@@ -149,7 +209,15 @@ class Pendulum(environment.Environment):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling theta, theta_dot."""
+        """Reset the pendulum to a random angle and angular velocity.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
+        """
         high = jnp.array([jnp.pi, 1])
         state = jax.random.uniform(key, shape=(2,), minval=-high, maxval=high)
         state = ModelState(theta=state[0], theta_dot=state[1])
@@ -162,12 +230,29 @@ class Pendulum(environment.Environment):
         key: jax.Array | None = None,
         params: EnvParams | None = None,
     ) -> jax.Array:
-        """Observation of an environment state. The key and params arguments
-        keep the signature expected by the sensitivity wrappers."""
+        """Observation of an environment state.
+
+        The key and params arguments keep the signature expected by the sensitivity wrappers.
+
+        Args:
+            env_state (EnvState): Environment state.
+            key (jax.Array, optional): Unused.
+            params (EnvParams, optional): Unused.
+
+        Returns:
+            jax.Array: ``[cos(theta), sin(theta), theta_dot]``.
+        """
         return self._obs_from_model_state(env_state.state)
 
     def _obs_from_model_state(self, state: ModelState) -> jax.Array:
-        """Return angle in polar coordinates and change."""
+        """Observation of a model state.
+
+        Args:
+            state (ModelState): Angle and angular velocity.
+
+        Returns:
+            jax.Array: ``[cos(theta), sin(theta), theta_dot]``.
+        """
         return jnp.array(
             [
                 jnp.cos(state.theta),
@@ -177,20 +262,28 @@ class Pendulum(environment.Environment):
         ).squeeze()
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
-        """Check whether state is terminal."""
+        """Whether the episode has reached its maximum length.
+
+        Args:
+            state (EnvState): Environment state.
+            params (EnvParams): Environment parameters (``max_steps_in_episode``).
+
+        Returns:
+            jax.Array: Boolean done flag.
+        """
         # Check number of steps in episode termination condition
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
     def eval_metrics(self, env_state: EnvState, params: EnvParams) -> dict[str, jax.Array]:
-        """Compute evaluation metrics for the current state.
-        
+        """Evaluation metrics of the current state, logged during the rollouts.
+
         Args:
-            env_state: Current environment state
-            params: Environment parameters
-            
+            env_state (EnvState): Current environment state.
+            params (EnvParams): Environment parameters.
+
         Returns:
-            Dictionary of metric names to scalar values
+            dict[str, jax.Array]: Metric name to scalar value.
         """
         state = env_state.state
         
@@ -207,16 +300,31 @@ class Pendulum(environment.Environment):
 
     @property
     def name(self) -> str:
-        """Environment name."""
+        """Environment name.
+
+        Returns:
+            str: Name used in the logs.
+        """
         return "Pendulum-Sensitivity"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
+        """Number of action components.
+
+        Returns:
+            int: Size of the action vector.
+        """
         return 1
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Box:
-        """Action space of the environment."""
+        """Action space of the environment.
+
+        Args:
+            params (EnvParams, optional): Environment parameters; the defaults when ``None``.
+
+        Returns:
+            spaces.Box: Box between ``min_action`` and ``max_action``.
+        """
         if params is None:
             params = self.default_params
         return spaces.Box(
@@ -227,12 +335,26 @@ class Pendulum(environment.Environment):
         )
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
+        """Observation space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Box: Box with one entry per observation component.
+        """
         high = jnp.array([1.0, 1.0, params.max_speed], dtype=jnp.float32)
         return spaces.Box(-high, high, shape=(self.obs_dim,), dtype=jnp.float32)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
+        """State space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Dict: Spaces of the state components.
+        """
         return spaces.Dict(
             {
                 "state": spaces.Box(
@@ -253,13 +375,12 @@ class Pendulum(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot pendulum rollout trajectories.
-        
+        """Plot the trajectories of a set of rollouts.
+
         Args:
-            series_list: List of trajectory dictionaries with keys:
-                - 'state': array of shape (T+1, 2) with [theta, theta_dot]
-                - 'actions': array of shape (T, action_dim)
-            output: Optional path to save the figure. If None, displays interactively.
+            series_list (list[dict]): One dict per rollout, with ``state`` (shape ``(T+1, 2)``,
+                angle and angular velocity) and ``actions`` (shape ``(T, 1)``).
+            output (pathlib.Path, optional): File to save the figure to; shown interactively when ``None``.
         """
         import matplotlib.pyplot as plt
         

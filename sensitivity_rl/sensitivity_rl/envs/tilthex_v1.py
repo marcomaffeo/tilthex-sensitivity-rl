@@ -21,6 +21,14 @@ from .utils_operations import *
 
 @struct.dataclass
 class ModelState:
+    """Rigid-body state of the Tilthex.
+
+    Attributes:
+        pos (jax.Array): Position in the world frame [m].
+        attitude (jax.Array): Unit quaternion (w, x, y, z), body to world.
+        vel (jax.Array): Linear velocity in the world frame [m/s].
+        omega (jax.Array): Angular velocity in the body frame [rad/s].
+    """
     pos: jax.Array
     attitude: jax.Array  # (unit quaternion [w, x, y, z])
     vel: jax.Array
@@ -29,6 +37,16 @@ class ModelState:
 
 @struct.dataclass
 class EnvState(environment.EnvState):
+    """State of the Tilthex environment: rigid body, target and episode counters.
+
+    Attributes:
+        state (ModelState): Rigid-body state.
+        target_pos (jax.Array): Target position [m].
+        target_attitude (jax.Array): Target attitude quaternion (w, x, y, z).
+        u_optimal_ref (jax.Array): Rotor forces that hold the target pose, reference of the reward [N].
+        last_u (jax.Array): Last rotor forces applied [N].
+        time (int): Step index in the episode.
+    """
     state: ModelState
     target_pos: jax.Array
     target_attitude: jax.Array
@@ -38,11 +56,29 @@ class EnvState(environment.EnvState):
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
+        """Forward attribute access to the wrapped model state.
+
+        Args:
+            name (str): Attribute name, e.g. ``pos`` or ``attitude``.
+
+        Returns:
+            Any: The attribute of ``self.state``.
+        """
         return getattr(self.state, name)
 
 
 @struct.dataclass
 class EnvParams(environment.EnvParams):
+    """Parameters of the Tilthex environment.
+
+    The pytree fields (mass ``m``, inertia ``I``, centre of mass
+    ``com_default``, tilt angles ``alpha``, thrust coefficient ``c_f`` and
+    actuation ``delay``) are the uncertain parameters: they are differentiated
+    by the sensitivity wrappers and resampled by the domain randomisation. The
+    fields with ``pytree_node=False`` are static: action and input bounds,
+    workspace limits, target ranges, rotor geometry, noise levels and reward
+    gains.
+    """
     min_action: jax.Array = struct.field(
         pytree_node=False, default_factory=lambda: jnp.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0]),
     )
@@ -113,6 +149,7 @@ class TilthexV1(environment.Environment):
     """Tilthex reaching a target position and attitude."""
 
     def __init__(self):
+        """Set the dimensions, the nominal target, the hover input and the ranges of the uncertain parameters."""
         self.type = ""
         self.state_dim = 13
         self.obs_dim = 17 # 13 + 4 (quaternion to target)
@@ -147,17 +184,39 @@ class TilthexV1(environment.Environment):
 
     @property
     def default_params(self) -> EnvParams:
-        """Default environment parameters for Tilthex-v1."""
+        """Default parameters of the Tilthex environment.
+
+        Returns:
+            EnvParams: Nominal parameters.
+        """
         return EnvParams()
 
     def rescale_action(self, action: jax.Array, params: EnvParams) -> jax.Array:
+        """Map an action from ``[min_action, max_action]`` to ``[min_input, max_input]``.
+
+        Args:
+            action (jax.Array): Action of the policy.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            jax.Array: Actuator input.
+        """
         action_span = params.max_action - params.min_action
         input_span = params.max_input - params.min_input
         normalized = (action - params.min_action) / action_span
         return params.min_input + normalized * input_span
 
     def solve_allocation_analytical(self, W_des: jax.Array, M: jax.Array, params: EnvParams) -> jax.Array:
-        """Solve Mu = W_des using Least Squares"""
+        """Rotor forces that produce a desired wrench, by least squares.
+
+        Args:
+            W_des (jax.Array): Desired force and torque in the body frame, shape ``(6,)``.
+            M (jax.Array): Allocation matrix, shape ``(6, 6)``.
+            params (EnvParams): Environment parameters (input limits).
+
+        Returns:
+            jax.Array: Rotor forces clipped to ``[min_input, max_input]``, shape ``(6,)``.
+        """
         M_pinv = jnp.linalg.pinv(M)
         u = M_pinv @ W_des
         u_clamped = jnp.clip(u, params.min_input, params.max_input)
@@ -165,7 +224,18 @@ class TilthexV1(environment.Environment):
         return u_clamped
     
     def compute_optimal_u_for_target(self, target_quat: jax.Array, params: EnvParams) -> jax.Array:
-        """Calculate the ideal motor input to maintain balance at target_quat"""
+        """Rotor forces that hold the vehicle still at a target attitude.
+
+        The forces compensate gravity in the body frame with zero torque; they are the
+        reference ``u_optimal_ref`` of the reward.
+
+        Args:
+            target_quat (jax.Array): Target attitude ``[w, x, y, z]``.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            jax.Array: Rotor forces [N], shape ``(6,)``.
+        """
         R_target = quat2rotm(target_quat)
         g_world = jnp.array([0.0, 0.0, params.m * params.g])
         F_body_req = R_target.T @ g_world
@@ -187,7 +257,19 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: TEnvParams | None = None,
     ) -> tuple[jax.Array, TEnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Overload step to remove the reset when done."""
+        """Environment step without the automatic reset at the end of an episode.
+
+        The reset is applied by ``ResetEnvWrapper`` or ``DomainRandomizationWrapper``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current environment state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters; the defaults when ``None``.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
 
         if params is None:
             params = self.default_params
@@ -207,7 +289,24 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Integrate the Tilthex dynamics and return the transition."""
+        """Apply an action, integrate the dynamics and compute the reward.
+
+        The action is rescaled to rotor forces, perturbed with Gaussian noise of scale
+        ``action_noise_scale`` and clipped. The reward combines an angular velocity
+        penalty (``gain_stab``), a distance term with a bonus inside
+        ``reward_pos_tolerance``, an attitude term ``gain_att * exp(-e_att)``, the
+        distance from the hover forces (``gain_ref``) and the variation of the forces
+        (``gain_sm``).
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state.
+            action (jax.Array): Action of the policy, shape ``(6,)``.
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
 
         key_step, key_noise, key_obs = jax.random.split(key, 3)
 
@@ -275,7 +374,20 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Step dynamics handling input delay via intermediate integration."""
+        """Next model state, with the actuation delay.
+
+        The step is split in two: for ``delay`` seconds the previous input is applied,
+        then the new one for the rest of ``dt``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Current environment state (holds the previous input).
+            action (jax.Array): Rotor forces [N].
+            params (EnvParams): Environment parameters (``dt``, ``delay``).
+
+        Returns:
+            ModelState: Next model state.
+        """
         
         state = env_state.state
         last_action = env_state.last_u
@@ -297,7 +409,19 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Tilthex rigid-body dynamics; the CoM offset enters through the allocation matrix."""
+        """Rigid-body dynamics of the Tilthex, one explicit Euler step of length ``params.dt``.
+
+        The centre of mass offset enters through the allocation matrix.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (ModelState): Current model state.
+            action (jax.Array): Rotor forces [N], shape ``(6,)``.
+            params (EnvParams): Environment parameters; ``params.dt`` is the integration step.
+
+        Returns:
+            ModelState: Next model state.
+        """
 
         u = jnp.clip(action, params.min_input, params.max_input)
    
@@ -344,8 +468,12 @@ class TilthexV1(environment.Environment):
     ) -> tuple[jax.Array, EnvState]:
         """Reset the environment by sampling the initial state and the target.
 
-        Separate keys are drawn for the initial position, attitude, linear and
-        angular velocity, the target position and attitude, and the observation noise.
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams): Environment parameters (sampling ranges).
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
         """
         key, key_pos, key_att, key_vel, key_omega, key_target_pos, key_target_att, key_obs = jax.random.split(key, 8)
         
@@ -401,7 +529,20 @@ class TilthexV1(environment.Environment):
         return self.get_obs(env_state, key_obs, params), env_state
 
     def get_obs(self, env_state: EnvState, key: jax.Array, params: EnvParams) -> jax.Array:
-        """Return a vector of observations from the state."""
+        """Observation of the policy, with Gaussian noise.
+
+        The 17 components are the vector to the target and the linear velocity in
+        the body frame, the attitude quaternion, the angular velocity and the
+        attitude error quaternion in the body frame.
+
+        Args:
+            env_state (EnvState): Environment state.
+            key (jax.Array): PRNG key of the observation noise.
+            params (EnvParams): Environment parameters (``obs_noise_stds``).
+
+        Returns:
+            jax.Array: Observation, shape ``(17,)``.
+        """
         state = env_state.state
 
         pos = state.pos
@@ -439,22 +580,45 @@ class TilthexV1(environment.Environment):
         return obs_noisy
 
     def is_terminal(self, state: EnvState, params: EnvParams) -> jax.Array:
-        """Check whether state is terminal."""
+        """Whether the episode has reached its maximum length.
+
+        Args:
+            state (EnvState): Environment state.
+            params (EnvParams): Environment parameters (``max_steps_in_episode``).
+
+        Returns:
+            jax.Array: Boolean done flag.
+        """
         done = state.time >= params.max_steps_in_episode
         return jnp.array(done)
 
     @property
     def name(self) -> str:
-        """Environment name."""
+        """Environment name.
+
+        Returns:
+            str: Name used in the logs.
+        """
         return "Tilthex-v1"
 
     @property
     def num_actions(self) -> int:
-        """Number of actions possible in environment."""
+        """Number of action components.
+
+        Returns:
+            int: Size of the action vector.
+        """
         return 6
 
     def action_space(self, params: EnvParams | None = None) -> spaces.Box:
-        """Action space of the environment."""
+        """Action space of the environment.
+
+        Args:
+            params (EnvParams, optional): Environment parameters; the defaults when ``None``.
+
+        Returns:
+            spaces.Box: Box between ``min_action`` and ``max_action``.
+        """
         if params is None:
             params = self.default_params
         return spaces.Box(
@@ -465,11 +629,25 @@ class TilthexV1(environment.Environment):
         )
 
     def observation_space(self, params: EnvParams) -> spaces.Box:
-        """Observation space of the environment."""
+        """Observation space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Box: Box with one entry per observation component.
+        """
         return spaces.Box(-1, 1, shape=(self.obs_dim,), dtype=jnp.float32)
 
     def state_space(self, params: EnvParams) -> spaces.Dict:
-        """State space of the environment."""
+        """State space of the environment.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Dict: Spaces of the state components.
+        """
         return spaces.Dict(
             {
                 "state": spaces.Box(
@@ -500,15 +678,13 @@ class TilthexV1(environment.Environment):
 
     @staticmethod
     def plot_rollouts(series_list: List[dict], output: Path | None = None) -> None:
-        """Plot tilthex rollout trajectories.
-        
+        """Plot the trajectories of a set of rollouts.
+
         Args:
-            series_list: List of trajectory dictionaries with keys:
-                - 'state': array of shape (T+1, 13) with [pos(3), attitude(4), vel(3), omega(3)]
-                - 'actions': array of shape (T, 6)
-                - 'target_pos': optional target position array
-                - 'target_attitude': optional target quaternion array
-            output: Optional path to save the figure. If None, displays interactively.
+            series_list (list[dict]): One dict per rollout, with ``state`` (shape ``(T+1, 13)``:
+                position, attitude, velocity, angular velocity), ``actions`` (shape ``(T, 6)``)
+                and optionally ``target_pos`` and ``target_attitude``.
+            output (pathlib.Path, optional): File to save the figure to; shown interactively when ``None``.
         """
         import matplotlib.pyplot as plt
         import numpy as np

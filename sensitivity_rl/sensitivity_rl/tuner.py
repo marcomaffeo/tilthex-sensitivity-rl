@@ -191,14 +191,13 @@ EVAL_CONFIG = {
 def generate_param_combinations(
     sweep_params: Dict[str, List[Any]],
 ) -> List[Dict[str, Any]]:
-    """
-    Generate all combinations of parameters from the sweep configuration.
+    """All the combinations of the swept values (Cartesian product).
 
     Args:
-        sweep_params: Dictionary mapping parameter names to lists of values
+        sweep_params (dict[str, list]): Parameter name to the list of its values.
 
     Returns:
-        List of dictionaries, each containing one parameter combination
+        list[dict[str, Any]]: One dict per combination; ``[{}]`` when nothing is swept.
     """
     if not sweep_params:
         return [{}]
@@ -228,7 +227,15 @@ INT_FIELDS = {
 
 
 def normalize_config(config: Dict[str, Any], method: str) -> Dict[str, Any]:
-    """Ensure config types are JSON/JAX friendly and annotate algorithm."""
+    """Copy a configuration, set its algorithm and cast the integer fields.
+
+    Args:
+        config (dict[str, Any]): Configuration of one experiment.
+        method (str): Algorithm name, stored in ``ALGORITHM``.
+
+    Returns:
+        dict[str, Any]: Normalised configuration.
+    """
     cfg = copy.deepcopy(config)
     cfg["ALGORITHM"] = method
 
@@ -244,7 +251,20 @@ def normalize_config(config: Dict[str, Any], method: str) -> Dict[str, Any]:
 def run_experiment_job(
     method: str, config_dict: Dict[str, Any], run_dir: Path, rng: jax.random.PRNGKey
 ):
-    """Run a single experiment using the unified AlgorithmSpec pipeline."""
+    """Train one experiment and save its parameters and configuration.
+
+    Args:
+        method (str): Algorithm name, a key of ``ALGORITHM_REGISTRY``.
+        config_dict (dict[str, Any]): Configuration of the experiment.
+        run_dir (pathlib.Path): Output directory.
+        rng (jax.Array): PRNG key.
+
+    Returns:
+        pathlib.Path: The run directory.
+
+    Raises:
+        ValueError: If the algorithm is unknown.
+    """
     if method not in ALGORITHM_REGISTRY:
         raise ValueError(
             f"Unknown method '{method}'. Available: {list(ALGORITHM_REGISTRY.keys())}"
@@ -329,15 +349,15 @@ def run_experiment_job(
 
 
 def _run_experiment_subprocess(args_tuple):
-    """
-    Wrapper function for running experiment in a subprocess.
-    This function will be called by ProcessPoolExecutor.
+    """Run one experiment in a worker process of ``ProcessPoolExecutor``.
+
+    The GPU memory of the process is limited to its share of ``NUM_PARALLEL_JOBS``.
 
     Args:
-        args_tuple: Tuple of (method, config_dict, experiment_name, run_dir, idx, total)
+        args_tuple (tuple): ``(method, config_dict, experiment_name, run_dir, idx, total)``.
 
     Returns:
-        Tuple of (success, run_dir, error_message, experiment_name)
+        tuple[bool, str, str | None, str]: Success flag, run directory, error message and experiment name.
     """
     method, config_dict, experiment_name, run_dir, idx, total = args_tuple
 
@@ -382,19 +402,18 @@ def _run_experiment_subprocess(args_tuple):
 
 
 def run_single_experiment(method, config_dict, experiment_name, run_dir, idx, total):
-    """
-    Run a single experiment in the current process (for sequential execution).
+    """Run one experiment in the current process (sequential execution).
 
     Args:
-        method: Method script name to import
-        config_dict: Configuration dictionary
-        experiment_name: Name of the experiment
-        run_dir: Directory to save results
-        idx: Experiment index
-        total: Total number of experiments
+        method (str): Algorithm name.
+        config_dict (dict[str, Any]): Configuration of the experiment.
+        experiment_name (str): Name of the experiment.
+        run_dir (pathlib.Path): Output directory.
+        idx (int): Index of the experiment, for the progress messages.
+        total (int): Number of experiments.
 
     Returns:
-        Tuple of (success, run_dir, error_message)
+        tuple[bool, pathlib.Path, str | None]: Success flag, run directory and error message.
     """
     try:
         rng = jax.random.PRNGKey(config_dict.get("SEED", 30))
@@ -420,12 +439,14 @@ def run_single_experiment(method, config_dict, experiment_name, run_dir, idx, to
 
 
 def run_sweep_experiments():
-    """
-    Run experiments for all combinations of methods, environments, and parameters.
+    """Run every combination of methods, environments and parameters of the sweep.
 
-    This function loads configs and runs experiments in parallel for each
-    combination. All experiments are saved in a single sweep directory.
-    Supports method-specific parameter sweeps via METHOD_SPECIFIC_SWEEPS.
+    The configurations are composed from ``config.yaml``, the method file and
+    the environment file, then the swept values are applied. All the runs go
+    into one ``runs/sweep_<timestamp>/`` directory.
+
+    Returns:
+        list: The successful runs.
     """
     # Determine which sweep configuration to use
     use_method_specific = bool(METHOD_SPECIFIC_SWEEPS)

@@ -4,58 +4,8 @@ import distrax
 import jax
 import jax.numpy as jnp
 
-class TanhTransformedNormal:
-    """Gaussian policy with tanh squashing for bounded action spaces.
-
-    Samples are a = tanh(u) with u ~ N(loc, scale), so a lies in (-1, 1)^d.
-    The log-probability includes the change of variables:
-
-        log pi(a) = log N(arctanh(a); loc, scale) - sum_i log(1 - a_i^2)
-
-    ``loc`` is the pre-tanh mean mu, kept as an attribute for the sensitivity
-    Jacobians, which differentiate tanh(mu) through the network; ``scale`` holds
-    the per-dimension standard deviations sigma.
-    """
-
-    def __init__(self, loc: jax.Array, scale: jax.Array):
-        self._normal = distrax.MultivariateNormalDiag(loc, scale)
-        self.loc = loc    # pre-tanh mean
-        self.scale = scale
-
-    def sample(self, seed: jax.Array) -> jax.Array:
-        u = self._normal.sample(seed=seed)
-        return jnp.tanh(u)
-
-    def log_prob(self, a: jax.Array) -> jax.Array:
-        """Log probability with tanh change-of-variables correction."""
-        eps = 1e-6
-        a_safe = jnp.clip(a, -1.0 + eps, 1.0 - eps)
-        u = jnp.arctanh(a_safe)
-        # log N(arctanh(a); loc, scale) - sum log(1 - a_i^2)
-        return self._normal.log_prob(u) - jnp.sum(
-            jnp.log(1.0 - a_safe ** 2 + eps), axis=-1
-        )
-
-    def mode(self) -> jax.Array:
-        """Deterministic mode: tanh of the pre-tanh mean."""
-        return jnp.tanh(self.loc)
-
-    def mean(self) -> jax.Array:
-        """Approximate mean tanh(mu), exact in the limit sigma -> 0."""
-        return jnp.tanh(self.loc)
-
-    def entropy(self) -> jax.Array:
-        """Gaussian entropy H(N(loc, scale)), used as the exploration bonus.
-
-        The entropy of the squashed distribution is H(N) - E[sum log(1 - tanh^2(u_i))],
-        which is at most H(N). H(N) is a differentiable upper bound and needs
-        no Monte Carlo estimate.
-        """
-        return self._normal.entropy()
-
-
-
 class ActorCritic(nnx.Module):
+    """Actor-critic network with separate actor and critic MLPs."""
     def __init__(
         self,
         obs_dim: int,
@@ -66,6 +16,16 @@ class ActorCritic(nnx.Module):
         critic_layer_sizes: tuple = (256, 256),
         rngs: nnx.Rngs,
     ):
+        """Gaussian actor and value critic as two separate MLPs.
+
+        Args:
+            obs_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            actor_layer_sizes (tuple): Hidden layer sizes of the actor.
+            critic_layer_sizes (tuple): Hidden layer sizes of the critic.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.action_dim = action_dim
         self.activation_name = activation
 
@@ -117,26 +77,44 @@ class ActorCritic(nnx.Module):
         )
 
     def __call__(self, x):
-        """Full forward pass with actor and critic."""
+        """Actor and critic forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            tuple[distrax.MultivariateNormalDiag, jax.Array]: Policy and value estimate.
+        """
         pi = self.actor(x)
         value = self.critic(x)
         return pi, value
 
     def actor(self, x):
-        """Actor forward pass."""
+        """Actor forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            distrax.MultivariateNormalDiag: Gaussian policy with state-independent standard deviation.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
         actor_mean = self.actor_output(x)
-        # return TanhTransformedNormal(
-        #     actor_mean, jnp.exp(self.actor_log_std.value)
-        # )
         return distrax.MultivariateNormalDiag(
             actor_mean, jnp.exp(self.actor_log_std.value)
         )
 
     def critic(self, x):
-        """Critic forward pass."""
+        """Critic forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            jax.Array: Value estimate, shape ``(...)``.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.critic_layers:
             x = activation(layer(x))
@@ -163,6 +141,20 @@ class ActorDCritic(nnx.Module):
         ub: float = 1.0,
         rngs: nnx.Rngs,
     ):
+        """Gaussian actor and distributional critic with cosine quantile embeddings (GMAC, https://proceedings.mlr.press/v139/nam21a.html).
+
+        Args:
+            obs_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            actor_layer_sizes (tuple): Hidden layer sizes of the actor.
+            hidden_size (int): Size of the state and cosine embeddings.
+            n_cosines (int): Number of cosine basis functions.
+            n_taus (int): Number of sampled quantile fractions.
+            lb (float): Lower bound of the quantile fractions.
+            ub (float): Scale of the quantile fractions.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.action_dim = action_dim
         self.activation_name = activation
         self.hidden_size = hidden_size
@@ -226,13 +218,28 @@ class ActorDCritic(nnx.Module):
         )
 
     def __call__(self, state, rng_key=None):
-        """Full forward pass with actor and distributional critic."""
+        """Actor and distributional critic forward pass.
+
+        Args:
+            state (jax.Array): Observations, shape ``(B, obs_dim)``.
+            rng_key (jax.Array): PRNG key used to sample the quantile fractions.
+
+        Returns:
+            tuple[distrax.MultivariateNormalDiag, tuple[jax.Array, jax.Array]]: Policy, and quantile values with their fractions.
+        """
         pi = self.actor(state)
         quantile_values, taus = self.critic(state, rng_key)
         return pi, (quantile_values, taus)
 
     def actor(self, x):
-        """Actor forward pass."""
+        """Actor forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            distrax.MultivariateNormalDiag: Gaussian policy with state-independent standard deviation.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
@@ -242,7 +249,18 @@ class ActorDCritic(nnx.Module):
         )
 
     def critic(self, state, rng_key=None):
-        """Distributional critic forward pass."""
+        """Distributional critic forward pass.
+
+        Args:
+            state (jax.Array): Observations, shape ``(B, obs_dim)``.
+            rng_key (jax.Array): PRNG key used to sample the quantile fractions.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: Quantile values, shape ``(B, n_taus, 1)``, and fractions, shape ``(B, n_taus)``.
+
+        Raises:
+            ValueError: If ``rng_key`` is ``None``.
+        """
         if rng_key is None:
             raise ValueError("rng_key is required for sampling taus in DActorCritic")
 
@@ -262,7 +280,15 @@ class ActorDCritic(nnx.Module):
         return out.reshape(bs, self.n_taus, -1), jnp.squeeze(taus, -1)
 
     def calc_cos(self, batch_size, rng_key):
-        """Calculate cosine values for quantile embedding."""
+        """Sample quantile fractions and their cosine features.
+
+        Args:
+            batch_size (int): Batch size.
+            rng_key (jax.Array): PRNG key.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: ``cos(pi i tau)``, shape ``(B, n_taus, n_cosines)``, and the fractions, shape ``(B, n_taus, 1)``.
+        """
         pis = jnp.array([jnp.pi * i for i in range(1, self.n_cosines + 1)])
         pis = pis.reshape(1, 1, self.n_cosines)
 
@@ -283,6 +309,7 @@ class ActorDCritic(nnx.Module):
 
 
 class SoftQNetwork(nnx.Module):
+    """State-action value network."""
     def __init__(
         self,
         state_dim: int,
@@ -292,6 +319,15 @@ class SoftQNetwork(nnx.Module):
         activation: str = "relu",
         rngs: nnx.Rngs,
     ):
+        """State-action value network for off-policy algorithms.
+
+        Args:
+            state_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            layer_sizes (tuple): Hidden layer sizes.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.activation_name = activation
         in_dim = state_dim + action_dim
         _layers = []
@@ -316,6 +352,15 @@ class SoftQNetwork(nnx.Module):
         )
 
     def __call__(self, state, action):
+        """Q-value of state-action pairs.
+
+        Args:
+            state (jax.Array): Observations, shape ``(..., state_dim)``.
+            action (jax.Array): Actions, shape ``(..., action_dim)``.
+
+        Returns:
+            jax.Array: Q-values, shape ``(..., 1)``.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         x = jnp.concatenate([state, action], axis=-1)
         for layer in self.layers:
@@ -324,6 +369,7 @@ class SoftQNetwork(nnx.Module):
 
 
 class SensQNetwork(nnx.Module):
+    """State-action value network conditioned on the sensitivity."""
     def __init__(
         self,
         state_dim: int,
@@ -334,6 +380,16 @@ class SensQNetwork(nnx.Module):
         activation: str = "relu",
         rngs: nnx.Rngs,
     ):
+        """Q-value network that also takes the sensitivity as input.
+
+        Args:
+            state_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            sens_dim (int): Size of the flattened sensitivity.
+            layer_sizes (tuple): Hidden layer sizes.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.activation_name = activation
         in_dim = state_dim + action_dim + sens_dim
         _layers = []
@@ -358,6 +414,16 @@ class SensQNetwork(nnx.Module):
         )
 
     def __call__(self, state, action, sens):
+        """Q-value of state, action and sensitivity.
+
+        Args:
+            state (jax.Array): Observations, shape ``(..., state_dim)``.
+            action (jax.Array): Actions, shape ``(..., action_dim)``.
+            sens (jax.Array): Flattened sensitivity, shape ``(..., sens_dim)``.
+
+        Returns:
+            jax.Array: Q-values, shape ``(..., 1)``.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         x = jnp.concatenate([state, action, sens], axis=-1)
         for layer in self.layers:
@@ -380,6 +446,15 @@ class Actor(nnx.Module):
         activation: str = "tanh",
         rngs: nnx.Rngs,
     ):
+        """Standalone Gaussian actor, with the architecture of the actor in ``ActorCritic`` and ``ActorCriticGRU``.
+
+        Args:
+            obs_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            layer_sizes (tuple): Hidden layer sizes.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.action_dim = action_dim
         self.activation_name = activation
 
@@ -407,6 +482,14 @@ class Actor(nnx.Module):
         self.actor_log_std = nnx.Param(jnp.zeros(action_dim))
 
     def __call__(self, x):
+        """Actor forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            distrax.MultivariateNormalDiag: Gaussian policy with state-independent standard deviation.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.layers:
             x = activation(layer(x))
@@ -417,9 +500,18 @@ class Actor(nnx.Module):
 
 
 def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: bool):
-    """
-    Sample from a Gaussian policy pi, apply tanh squashing, and rescale to the
-    environment action space with (scale_action, bias_action).
+    """Squashed Gaussian action of a SAC actor, rescaled to the action space.
+
+    Args:
+        pi (distrax.Distribution): Pre-tanh Gaussian policy.
+        scale_action (jax.Array): Half-width of the action space.
+        bias_action (jax.Array): Centre of the action space.
+        _rng (jax.Array): PRNG key.
+        action (jax.Array): Pre-tanh action used when ``sample`` is false.
+        sample (bool): Whether to sample a new action.
+
+    Returns:
+        tuple[jax.Array, jax.Array, jax.Array, jax.Array]: Action, log-probability, mean action and pre-tanh action.
     """
     def sample_fn(action):
         return pi.sample(seed=_rng)
@@ -442,12 +534,24 @@ def get_sac_action_dist(pi, scale_action, bias_action, _rng, action, sample: boo
 
 
 def get_ddpg_action_dist(pi, scale_action, bias_action, _rng):
+    """Deterministic action of a DDPG actor, rescaled to the action space.
+
+    Args:
+        pi (distrax.Distribution): Pre-tanh Gaussian policy.
+        scale_action (jax.Array): Half-width of the action space.
+        bias_action (jax.Array): Centre of the action space.
+        _rng (jax.Array): PRNG key, unused.
+
+    Returns:
+        tuple[jax.Array, None, jax.Array]: Action, no log-probability, and the same action as mean.
+    """
     mean_tanh = jnp.tanh(pi.mean())
     mean = mean_tanh * scale_action + bias_action
     return mean, None, mean
 
 
 class ActorCriticDual(nnx.Module):
+    """Actor-critic network with a second critic for the sensitivity return."""
     def __init__(
         self,
         obs_dim: int,
@@ -458,6 +562,16 @@ class ActorCriticDual(nnx.Module):
         critic_layer_sizes: tuple = (256, 256),
         rngs: nnx.Rngs,
     ):
+        """Gaussian actor with a value critic and a sensitivity value critic.
+
+        Args:
+            obs_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            actor_layer_sizes (tuple): Hidden layer sizes of the actor.
+            critic_layer_sizes (tuple): Hidden layer sizes of each critic.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.action_dim = action_dim
         self.activation_name = activation
 
@@ -532,13 +646,27 @@ class ActorCriticDual(nnx.Module):
         )
 
     def __call__(self, x):
-        """Full forward pass with actor and dual critics."""
+        """Actor and both critics forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            tuple[distrax.MultivariateNormalDiag, tuple[jax.Array, jax.Array]]: Policy, value and sensitivity value.
+        """
         pi = self.actor(x)
         value, value_s = self.critic(x)
         return pi, (value, value_s)
 
     def actor(self, x):
-        """Actor forward pass."""
+        """Actor forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            distrax.MultivariateNormalDiag: Gaussian policy with state-independent standard deviation.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
@@ -548,7 +676,14 @@ class ActorCriticDual(nnx.Module):
         )
 
     def critic(self, x):
-        """Dual critic forward pass (value and sensitivity value)."""
+        """Forward pass of the two critics.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: Value and sensitivity value estimates.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
 
         c = x
@@ -576,6 +711,15 @@ class CriticGRU(nnx.Module):
         gru_hidden_size: int = 64,
         rngs: nnx.Rngs,
     ):
+        """Recurrent critic of the sensitivity return: a GRU cell followed by an MLP.
+
+        Args:
+            obs_dim (int): Size of the observation.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            critic_layer_sizes (tuple): Hidden layer sizes after the GRU.
+            gru_hidden_size (int): Size of the GRU hidden state.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.activation_name = activation
         self.gru_hidden_size = gru_hidden_size
 
@@ -608,13 +752,14 @@ class CriticGRU(nnx.Module):
         )
 
     def __call__(self, obs, hidden_state):
-        """
+        """Critic forward pass, one time step.
+
         Args:
-            obs: observation array [batch, obs_dim]
-            hidden_state: GRU hidden state [batch, gru_hidden_size]
+            obs (jax.Array): Observations, shape ``(B, obs_dim)``.
+            hidden_state (jax.Array): GRU hidden state, shape ``(B, gru_hidden_size)``.
+
         Returns:
-            value_s: sensitivity value estimate [batch]
-            new_hidden_state: updated GRU hidden state [batch, gru_hidden_size]
+            tuple[jax.Array, jax.Array]: Sensitivity value, shape ``(B,)``, and the new hidden state.
         """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
 
@@ -646,6 +791,17 @@ class ActorCriticGRU(nnx.Module):
         gru_hidden_size: int = 64,
         rngs: nnx.Rngs,
     ):
+        """Gaussian MLP actor with a recurrent value critic.
+
+        Args:
+            obs_dim (int): Size of the observation.
+            action_dim (int): Size of the action.
+            activation (str): Hidden activation, ``tanh``, ``relu`` or ``elu``.
+            actor_layer_sizes (tuple): Hidden layer sizes of the actor.
+            critic_layer_sizes (tuple): Hidden layer sizes of the critic after the GRU.
+            gru_hidden_size (int): Size of the GRU hidden state.
+            rngs (nnx.Rngs): Random number generators for the initialisation.
+        """
         self.action_dim = action_dim
         self.activation_name = activation
         self.gru_hidden_size = gru_hidden_size
@@ -704,13 +860,28 @@ class ActorCriticGRU(nnx.Module):
         )
 
     def __call__(self, x, hidden_state):
-        """Full forward pass with actor and GRU-based critic."""
+        """Actor and recurrent critic forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(B, obs_dim)``.
+            hidden_state (jax.Array): GRU hidden state, shape ``(B, gru_hidden_size)``.
+
+        Returns:
+            tuple[distrax.MultivariateNormalDiag, jax.Array, jax.Array]: Policy, value and new hidden state.
+        """
         pi = self.actor(x)
         value, new_hidden_state = self.critic(x, hidden_state)
         return pi, value, new_hidden_state
 
     def actor(self, x):
-        """Actor forward pass (no hidden state needed)."""
+        """Actor forward pass; the actor does not use the hidden state.
+
+        Args:
+            x (jax.Array): Observations, shape ``(..., obs_dim)``.
+
+        Returns:
+            distrax.MultivariateNormalDiag: Gaussian policy with state-independent standard deviation.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
         for layer in self.actor_layers:
             x = activation(layer(x))
@@ -720,7 +891,15 @@ class ActorCriticGRU(nnx.Module):
         )
 
     def critic(self, x, hidden_state):
-        """GRU-based critic forward pass."""
+        """Recurrent critic forward pass.
+
+        Args:
+            x (jax.Array): Observations, shape ``(B, obs_dim)``.
+            hidden_state (jax.Array): GRU hidden state, shape ``(B, gru_hidden_size)``.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: Value, shape ``(B,)``, and the new hidden state.
+        """
         activation = nnx.relu if self.activation_name == "relu" else nnx.tanh
 
         new_hidden_state, _ = self.gru_cell(hidden_state, x)

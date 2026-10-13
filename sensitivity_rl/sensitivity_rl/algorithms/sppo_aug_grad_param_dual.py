@@ -28,7 +28,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply SPPO-aug specific environment wrappers."""
+    """Apply the SPPO-aug-grad-param-dual wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -65,13 +74,21 @@ def _sensitivity_loss(graphdef, params, obs, sens_bias, df_du, dobs_dx_S, W):
     """Recompute the sensitivity norm differentiably through the policy.
 
     All environment Jacobians are treated as constants; only the policy
-    Jacobian dμ/dobs carries gradients.
+    Jacobian dmu/dobs carries gradients. The sensitivity update is
+    ``M = sens_bias + df/du (dmu/dobs) (dobs/dx S)``, where
+    ``sens_bias = df/dx S + df/dp`` does not depend on the policy.
 
-    The sensitivity update is:
-        M = sens_bias  +  df/du · (dμ/dobs) · (dobs/dx·S)
-    where sens_bias = df/dx·S + df/dp_norm (precomputed, no policy dependence).
+    Args:
+        graphdef (nnx.GraphDef): Graph definition of the policy network.
+        params (nnx.State): Current network parameters.
+        obs (jax.Array): Observations, shape ``(B, obs_dim)``.
+        sens_bias (jax.Array): Policy-independent part of M, shape ``(B, state_dim, param_dim)``.
+        df_du (jax.Array): Jacobian of the dynamics with respect to the action, shape ``(B, state_dim, action_dim)``.
+        dobs_dx_S (jax.Array): Observation Jacobian times the state sensitivity, shape ``(B, obs_dim, param_dim)``.
+        W (jax.Array): Weight matrix of the sensitivity norm.
 
-    Returns -log(||M||_F + ε) per sample.
+    Returns:
+        jax.Array: ``-log(||M||_F + eps)`` per sample, shape ``(B,)``.
     """
     sens_bias = jax.lax.stop_gradient(sens_bias)
     df_du = jax.lax.stop_gradient(df_du)
@@ -97,7 +114,14 @@ sensitivity_loss = jax.vmap(_sensitivity_loss, in_axes=(None, None, 0, 0, 0, 0, 
 
 
 def _actor_param_leaves(params):
-    """Return only actor-related parameter leaves in a stable traversal order."""
+    """Return the actor parameter leaves in a stable traversal order.
+
+    Args:
+        params (nnx.State): Parameters of the whole actor-critic network.
+
+    Returns:
+        tuple[jax.Array, ...]: Leaves whose path contains ``actor``.
+    """
     leaves_with_paths, _ = jax.tree_util.tree_flatten_with_path(params)
     return tuple(
         leaf
@@ -107,7 +131,15 @@ def _actor_param_leaves(params):
 
 
 def _actor_l2_distance(params, old_actor_params):
-    """Compute L2 distance using actor params only."""
+    """L2 distance between the current and the reference actor parameters.
+
+    Args:
+        params (nnx.State): Current network parameters.
+        old_actor_params (tuple[jax.Array, ...]): Reference actor leaves, from ``_actor_param_leaves``.
+
+    Returns:
+        jax.Array: Scalar Euclidean distance over all actor leaves.
+    """
     actor_params = _actor_param_leaves(params)
     sq_sums = []
     for new_param, old_param in zip(actor_params, old_actor_params):
@@ -124,10 +156,15 @@ def _actor_l2_distance(params, old_actor_params):
 
 
 def make_loss_fn(config, graphdef):
-    """Create SPPO-aug loss function for the main policy network.
+    """Create the SPPO-aug-grad-param-dual loss function of the policy network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, advantages_s, targets) -> (total_loss, aux_metrics)
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCritic network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, advantages_s, targets, old_actor_params) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(
@@ -214,10 +251,14 @@ def make_loss_fn(config, graphdef):
 
 
 def make_loss_fn_vs(config, graphdef_vs):
-    """Create loss function for the sensitivity value network (GRU-based).
+    """Create the loss function of the recurrent sensitivity critic.
 
-    Returns a function with signature:
-        loss_fn_vs(params_vs, traj_batch, targets_s) -> value_loss_s
+    Args:
+        config (dict): Training configuration (``CLIP_EPS``, ``VF_COEF``).
+        graphdef_vs (nnx.GraphDef): Graph definition of the ``CriticGRU`` network.
+
+    Returns:
+        Callable: ``loss_fn_vs(params_vs, traj_batch, targets_s) -> value_loss_s``.
     """
 
     def _loss_fn_vs(params_vs, traj_batch, targets_s):
@@ -243,15 +284,17 @@ def make_loss_fn_vs(config, graphdef_vs):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for SPPO-aug.
+    """Create the step function that collects one transition per environment.
 
     Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', 'network_vs', etc.
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that collects transitions.
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
     """
     graphdef = networks["graphdef"]
     graphdef_vs = networks["graphdef_vs"]
@@ -317,15 +360,17 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for SPPO-aug.
+    """Create the function that runs one SPPO-aug-grad-param-dual update epoch over the minibatches.
 
     Args:
-        config: Training configuration
-        loss_fn: Loss function created by make_loss_fn
-        shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks containing 'loss_fn_vs', etc.
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
     loss_fn_vs = networks["loss_fn_vs"]
 
@@ -391,7 +436,17 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
+    """Compute the generalised advantage estimates of a rollout.
+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with ``advantages``, ``advantages_s``, ``targets`` and ``targets_s``, and the runner state.
+    """
 
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     _, last_val = model(collect_state.last_obs)
@@ -414,7 +469,14 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def extract_losses(loss_info):
-    """Extract loss metrics from loss_info."""
+    """Turn the loss information of an update into scalar metrics for logging.
+
+    Args:
+        loss_info (tuple): Loss values returned by the update epochs.
+
+    Returns:
+        tuple[dict, dict | None]: The standard PPO metrics and the algorithm-specific ones.
+    """
     (
         total_losses,
         (
@@ -445,10 +507,17 @@ def extract_losses(loss_info):
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize networks and train states for SPPO-aug.
+    """Create the networks and their training states.
+
+    Args:
+        config (dict): Training configuration (layer sizes, activation, learning rate).
+        env (GymnaxWrapper): Wrapped environment, used for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        rng (jax.Array): PRNG key for the initialisation.
+        load_params_fn (Callable, optional): Function that loads pre-trained actor weights.
 
     Returns:
-        dict with keys: graphdef, train_state, graphdef_vs, train_state_vs, loss_fn_vs, gru_hidden_size
+        dict: ``graphdef``, ``train_state``, ``graphdef_vs``, ``train_state_vs``, ``loss_fn_vs`` and ``gru_hidden_size``.
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
     obs_dim = env.observation_space(env_params).shape[0]
@@ -506,10 +575,17 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 
 def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for SPPO-aug.
+    """Reset the environments and build the initial runner state.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+        rng (jax.Array): PRNG key.
 
     Returns:
-        RunnerState NamedTuple
+        RunnerState: Initial runner state, with the algorithm-specific entries in ``extras``.
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])

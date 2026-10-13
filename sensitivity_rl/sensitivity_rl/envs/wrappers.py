@@ -1,3 +1,5 @@
+"""Gymnax wrappers: action clipping, vectorisation, reward normalisation, sensitivity propagation, domain randomisation, constraints and logging."""
+
 import jax
 import jax.numpy as jnp
 import jax.flatten_util
@@ -14,10 +16,23 @@ class GymnaxWrapper(object):
     """Base class for Gymnax wrappers."""
 
     def __init__(self, env):
+        """Wrap an environment.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+        """
         self._env = env
 
     # provide proxy access to regular attributes of wrapped object
     def __getattr__(self, name):
+        """Forward attribute access to the wrapped environment.
+
+        Args:
+            name (str): Attribute name.
+
+        Returns:
+            Any: The attribute of the wrapped environment.
+        """
         return getattr(self._env, name)
 
 
@@ -25,9 +40,22 @@ class FlattenObservationWrapper(GymnaxWrapper):
     """Flatten the observations of the environment."""
 
     def __init__(self, env: environment.Environment):
+        """Wrap an environment with Box observations.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+        """
         super().__init__(env)
 
     def observation_space(self, params) -> spaces.Box:
+        """Flattened observation space.
+
+        Args:
+            params (EnvParams): Environment parameters.
+
+        Returns:
+            spaces.Box: Box with the observation flattened to one dimension.
+        """
         assert isinstance(
             self._env.observation_space(params), spaces.Box
         ), "Only Box spaces are supported for now."
@@ -41,6 +69,15 @@ class FlattenObservationWrapper(GymnaxWrapper):
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
+        """Reset and flatten the first observation.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
+        """
         obs, state = self._env.reset(key, params)
         obs = jnp.reshape(obs, (-1,))
         return obs, state
@@ -52,12 +89,35 @@ class FlattenObservationWrapper(GymnaxWrapper):
         action: Union[int, float],
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
+        """Step and flatten the observation.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, state, reward, done, info = self._env.step(key, state, action, params)
         obs = jnp.reshape(obs, (-1,))
         return obs, state, reward, done, info
 
 
 class LogEnvState(NamedTuple):
+    """State of ``LogWrapper``.
+
+    Attributes:
+        env_state (EnvState): State of the wrapped environment.
+        episode_returns_true (float): Running return of the task reward alone.
+        episode_returns (float): Running return of the reward seen by the agent.
+        episode_lengths (int): Running episode length.
+        returned_episode_returns (float): Return of the last finished episode.
+        returned_episode_returns_true (float): Task return of the last finished episode.
+        returned_episode_lengths (int): Length of the last finished episode.
+        timestep (int): Total number of steps.
+    """
     env_state: environment.EnvState
     episode_returns_true: float
     episode_returns: float
@@ -72,11 +132,25 @@ class LogWrapper(GymnaxWrapper):
     """Log the episode returns and lengths."""
 
     def __init__(self, env: environment.Environment):
+        """Wrap an environment to log episode returns and lengths.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+        """
         super().__init__(env)
 
     def reset(
         self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None
     ) -> Tuple[chex.Array, environment.EnvState]:
+        """Reset the environment and the episode counters.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, LogEnvState]: First observation and initial state.
+        """
         obs, env_state = self._env.reset(key, params)
         state = LogEnvState(env_state, 0.0, 0.0, 0, 0.0, 0.0, 0, 0)
         return obs, state
@@ -88,6 +162,21 @@ class LogWrapper(GymnaxWrapper):
         action: Union[int, float],
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, LogEnvState, float, bool, dict]:
+        """Step and update the episode return and length.
+
+        At the end of an episode the info dict carries ``returned_episode_returns``,
+        ``returned_episode_lengths`` and ``returned_episode``. The true return uses
+        ``info['trw']`` when a sensitivity wrapper adds it.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (LogEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, LogEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
@@ -117,12 +206,31 @@ class LogWrapper(GymnaxWrapper):
 
 
 class ClipAction(GymnaxWrapper):
+    """Clip the actions to the action space of the environment."""
     def __init__(self, env, low=-1.0, high=1.0):
+        """Wrap an environment to clip the actions to its action space.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+            low (float): Unused lower bound, kept for compatibility.
+            high (float): Unused upper bound, kept for compatibility.
+        """
         super().__init__(env)
         self.low = low
         self.high = high
 
     def step(self, key, state, action, params=None):
+        """Clip the action to the action space of the environment and step.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         action = jnp.clip(
             action,
             self._env.action_space(params).low,
@@ -132,13 +240,31 @@ class ClipAction(GymnaxWrapper):
 
 
 class VecEnv(GymnaxWrapper):
+    """Run a batch of environments in parallel."""
     def __init__(self, env):
+        """Vectorise ``reset`` and ``step`` over a batch of environments with ``jax.vmap``.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+        """
         super().__init__(env)
         self.reset = jax.vmap(self._env.reset, in_axes=(0, None))
         self.step = jax.vmap(self._env.step, in_axes=(0, 0, 0, None))
 
 
 class NormalizeVecRewSensEnvState(NamedTuple):
+    """State of ``NormalizeVecRewardSensitivity``.
+
+    Attributes:
+        mean (jax.Array): Running mean of the task return.
+        var (jax.Array): Running variance of the task return.
+        mean_sens (jax.Array): Running mean of the sensitivity return.
+        var_sens (jax.Array): Running variance of the sensitivity return.
+        count (float): Number of samples of the running statistics.
+        return_val (float): Discounted task return of each environment.
+        return_val_sens (jax.Array): Discounted sensitivity return of each environment.
+        env_state (EnvState): State of the wrapped environment.
+    """
     mean: jnp.ndarray
     var: jnp.ndarray
     mean_sens: jnp.ndarray
@@ -150,11 +276,27 @@ class NormalizeVecRewSensEnvState(NamedTuple):
 
 
 class NormalizeVecRewardSensitivity(GymnaxWrapper):
+    """Normalise the task and sensitivity rewards separately."""
     def __init__(self, env, gamma):
+        """Normalise the task and sensitivity rewards by running estimates of the return variance.
+
+        Args:
+            env (VecEnv): Vectorised environment.
+            gamma (float): Discount factor of the returns.
+        """
         super().__init__(env)
         self.gamma = gamma
 
     def reset(self, key, params=None):
+        """Reset the environments and the running statistics.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, NormalizeVecRewSensEnvState]: First observation and initial state.
+        """
         obs, state = self._env.reset(key, params)
         batch_count = obs.shape[0]
         state = NormalizeVecRewSensEnvState(
@@ -170,6 +312,19 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
         return obs, state
 
     def step(self, key, state, action, params=None):
+        """Step and divide the rewards by the running return standard deviation.
+
+        The sensitivity reward ``info['sensitivity_state_rw']`` is normalised with its own statistics.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (NormalizeVecRewSensEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, NormalizeVecRewSensEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
@@ -225,6 +380,15 @@ class NormalizeVecRewardSensitivity(GymnaxWrapper):
 
 
 class NormalizeVecRewEnvState(NamedTuple):
+    """State of ``NormalizeVecReward``.
+
+    Attributes:
+        mean (jax.Array): Running mean of the return.
+        var (jax.Array): Running variance of the return.
+        count (float): Number of samples of the running statistics.
+        return_val (float): Discounted return of each environment.
+        env_state (EnvState): State of the wrapped environment.
+    """
     mean: jnp.ndarray
     var: jnp.ndarray
     count: float
@@ -233,11 +397,27 @@ class NormalizeVecRewEnvState(NamedTuple):
 
 
 class NormalizeVecReward(GymnaxWrapper):
+    """Normalise the reward."""
     def __init__(self, env, gamma):
+        """Normalise the reward by a running estimate of the return variance.
+
+        Args:
+            env (VecEnv): Vectorised environment.
+            gamma (float): Discount factor of the returns.
+        """
         super().__init__(env)
         self.gamma = gamma
 
     def reset(self, key, params=None):
+        """Reset the environments and the running statistics.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, NormalizeVecRewEnvState]: First observation and initial state.
+        """
         obs, state = self._env.reset(key, params)
         batch_count = obs.shape[0]
         state = NormalizeVecRewEnvState(
@@ -250,6 +430,17 @@ class NormalizeVecReward(GymnaxWrapper):
         return obs, state
 
     def step(self, key, state, action, params=None):
+        """Step and divide the reward by the running return standard deviation.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (NormalizeVecRewEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, NormalizeVecRewEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(
             key, state.env_state, action, params
         )
@@ -280,13 +471,31 @@ class NormalizeVecReward(GymnaxWrapper):
 
 
 class SensitivityEnvState(NamedTuple):
+    """State of ``SensitivityWrapper``.
+
+    Attributes:
+        env_state (EnvState): State of the wrapped environment.
+        sensitivity (Sensitivity): Sensitivity carried along the trajectory.
+        sens_steps (int): Steps since the last reset of the sensitivity.
+    """
     env_state: environment.EnvState
     sensitivity: Sensitivity
     sens_steps: int
 
 
 class SensitivityWrapper(GymnaxWrapper):
+    """Propagate the parametric sensitivity of the closed loop."""
     def __init__(self, env, config=None, expose_jacobians: bool = False):
+        """Propagate the parametric sensitivity of the closed loop along the trajectory.
+
+        The Jacobians of the dynamics and of the observation are computed with
+        ``jax.jacfwd``, through ``step_dynamics`` when the environment provides it.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+            config (dict, optional): Training configuration (``SENSITIVITY_NUM_STEPS``).
+            expose_jacobians (bool): Whether to add the Jacobians needed by the gradient-based losses to the info dict.
+        """
         super().__init__(env)
         self.config = config or {}
         self._expose_jacobians = expose_jacobians
@@ -318,19 +527,50 @@ class SensitivityWrapper(GymnaxWrapper):
 
     def set_actor(self, graphdef, network_params):
         # Should add a check for dimension compatibility
+        """Set the policy network used to compute the action gains.
+
+        Args:
+            graphdef (nnx.GraphDef): Graph definition of the network.
+            network_params (nnx.State): Network parameters.
+        """
         self.graphdef = graphdef
         self.network_params = network_params
 
     def update_network_params(self, network_params):
+        """Replace the network parameters used for the action gains.
+
+        Args:
+            network_params (nnx.State): New network parameters.
+        """
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
+        """Sample an action of the policy.
+
+        Args:
+            rng (jax.Array): PRNG key.
+            obs (jax.Array): Observation.
+            network_params (nnx.State): Network parameters.
+
+        Returns:
+            jax.Array: Sampled action.
+        """
         model = nnx.merge(self.graphdef, network_params)
         pi = model.actor(obs)
         action = pi.sample(seed=rng)
         return action
 
     def compute_action_mean(self, rng, obs, network_params):
+        """Deterministic action of the policy (mode of the distribution).
+
+        Args:
+            rng (jax.Array): PRNG key, unused.
+            obs (jax.Array): Observation.
+            network_params (nnx.State): Network parameters.
+
+        Returns:
+            jax.Array: Mean action.
+        """
         model = nnx.merge(self.graphdef, network_params)
         pi = model.actor(obs)
         action = pi.mode()
@@ -345,7 +585,23 @@ class SensitivityWrapper(GymnaxWrapper):
         obs,
         done,
     ):
-        """Compute the next environment state and update sensitivities."""
+        """Propagate the state sensitivity by one step with the chain rule.
+
+        ``S' = df/dx S + df/du (dmu/dobs dobs/dx S) + df/dp``, normalised by its
+        weighted Frobenius norm, whose logarithm is accumulated in ``log_norm``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            sens_state (SensitivityEnvState): Current state with the sensitivity.
+            action (jax.Array): Action applied in this step.
+            params (EnvParams): Environment parameters at which the Jacobians are taken.
+            obs (jax.Array): Observation after the step.
+            done (jax.Array): Done flag of the step.
+
+        Returns:
+            tuple[Sensitivity, dict]: Updated sensitivity, and the Jacobian terms
+            ``sens_bias``, ``df_du`` and ``dobs_dx_sens`` used by the gradient-based losses.
+        """
         state = jax.flatten_util.ravel_pytree(sens_state.env_state.state)[0]
         params_flat = jax.flatten_util.ravel_pytree(params)[0]
         # params_flat = self._nominal_params_flat
@@ -406,6 +662,15 @@ class SensitivityWrapper(GymnaxWrapper):
         return sensitivity, jac_info
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        """Reset the environment and set the sensitivity to zero.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityEnvState]: First observation and initial state.
+        """
         obs, env_state = self._env.reset(key, params)
         sensitivity = Sensitivity.default(self._env)
         state = SensitivityEnvState(env_state=env_state, sensitivity=sensitivity, sens_steps=0)
@@ -419,6 +684,21 @@ class SensitivityWrapper(GymnaxWrapper):
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
+        """Step the environment and propagate the sensitivity.
+
+        The sensitivity is reset at the end of an episode and every
+        ``SENSITIVITY_NUM_STEPS`` steps (``info['done_sens']``). The info dict also
+        receives ``trw`` (task reward) and ``sensitivity_state`` (weighted log-norm).
+
+        Args:
+            key (jax.Array): PRNG key.
+            sens_state (SensitivityEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(
             key, sens_state.env_state, action, params
         )
@@ -461,6 +741,18 @@ class SensitivityWrapper(GymnaxWrapper):
 
     # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
     def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
+        """Next flattened state as a function of flattened state and parameters, for ``jax.jacfwd``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Environment state that provides the non-differentiated fields.
+            state_flat (jax.Array): Flattened model state.
+            action (jax.Array): Action.
+            params_flat (jax.Array): Flattened environment parameters.
+
+        Returns:
+            jax.Array: Flattened next model state.
+        """
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         env_state = env_state.replace(state=state)
@@ -478,6 +770,18 @@ class SensitivityWrapper(GymnaxWrapper):
         return jax.flatten_util.ravel_pytree(next_state)[0]
 
     def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
+        """Flattened observation as a function of flattened state and parameters, for ``jax.jacfwd``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Environment state that provides the non-differentiated fields.
+            state_flat (jax.Array): Flattened model state.
+            action (jax.Array): Action.
+            params_flat (jax.Array): Flattened environment parameters.
+
+        Returns:
+            jax.Array: Flattened observation.
+        """
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
 
@@ -490,7 +794,13 @@ class SensitivityWrapper(GymnaxWrapper):
 
 
 class ComputeSensitivityReward(GymnaxWrapper):
+    """Compute the sensitivity reward and store it in the info dict."""
     def __init__(self, env):
+        """Compute the sensitivity reward without adding it to the task reward.
+
+        Args:
+            env (SensitivityWrapper): Environment wrapped with the sensitivity.
+        """
         super().__init__(env)
 
     def step(
@@ -501,6 +811,17 @@ class ComputeSensitivityReward(GymnaxWrapper):
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
+        """Step and store ``-log ||W S||_F`` in ``info['sensitivity_state_rw']``.
+
+        Args:
+            key (jax.Array): PRNG key.
+            current_state (SensitivityEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, next_state, reward, done, info = self._env.step(
             key, current_state, action, params
         )
@@ -517,7 +838,14 @@ class ComputeSensitivityReward(GymnaxWrapper):
 
 
 class AddSensitivityToReward(GymnaxWrapper):
+    """Add the weighted sensitivity reward to the task reward."""
     def __init__(self, env, regularization_weight=0.0):
+        """Add a weighted sensitivity penalty to the task reward.
+
+        Args:
+            env (SensitivityWrapper): Environment wrapped with the sensitivity.
+            regularization_weight (float): Weight of the sensitivity term.
+        """
         super().__init__(env)
         self.regularization_weight = regularization_weight
 
@@ -529,6 +857,17 @@ class AddSensitivityToReward(GymnaxWrapper):
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
+        """Step and add the weighted sensitivity reward to the task reward.
+
+        Args:
+            key (jax.Array): PRNG key.
+            current_state (SensitivityEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, next_state, reward, done, info = self._env.step(
             key, current_state, action, params
         )
@@ -548,6 +887,12 @@ class MinMaxObservationWrapper(GymnaxWrapper):
     """Normalize the observations of the environment to [-1, 1]."""
 
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
+        """Rescale the observations to ``[-1, 1]`` with the bounds of the observation space.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+            params (EnvParams, optional): Parameters used to read the observation space.
+        """
         super().__init__(env)
         self._obs_min = jnp.array(self._env.observation_space(params).low)
         self._obs_max = jnp.array(self._env.observation_space(params).high)
@@ -556,6 +901,15 @@ class MinMaxObservationWrapper(GymnaxWrapper):
         assert jnp.isinf(self._obs_min).sum() == 0, "Obs space has infinities"
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        """Reset and rescale the first observation.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
+        """
         obs, env_state = self._env.reset(key, params)
         obs = normalize(obs, self._obs_min, self._obs_max)
         return obs, env_state
@@ -567,6 +921,17 @@ class MinMaxObservationWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
+        """Step and rescale the observation.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(key, state, action, params)
         obs = normalize(obs, self._obs_min, self._obs_max)
         return obs, env_state, reward, done, info
@@ -576,9 +941,24 @@ class ResetEnvWrapper(GymnaxWrapper):
     """Call reset when done is True."""
 
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
+        """Reset the environment automatically at the end of an episode.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+            params (EnvParams, optional): Unused.
+        """
         super().__init__(env)
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        """Reset the wrapped environment.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState]: First observation and initial state.
+        """
         obs, env_state = self._env.reset(key, params)
         return obs, env_state
 
@@ -589,6 +969,17 @@ class ResetEnvWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
+        """Step, and return the reset state and observation when the episode ends.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs_st, state_st, reward, done, info = self._env.step(
             key, state, action, params
         )
@@ -626,6 +1017,17 @@ class ConstraintEvalWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
+        """Step and store the hard and soft constraint values in the info dict.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, state_st, reward, done, info = self._env.step(
             key, state, action, params
         )
@@ -646,16 +1048,15 @@ class ConstraintPenaltyWrapper(GymnaxWrapper):
 
     Must be placed **after** ``ConstraintEvalWrapper`` in the wrapper stack so
     that ``info`` already contains ``hard_constraints`` / ``soft_constraints``.
-
-    Parameters
-    ----------
-    env : GymnaxWrapper
-        Wrapped environment (must already have constraint info populated).
-    penalty : float
-        Value subtracted from the reward at each violating timestep.
     """
 
     def __init__(self, env, penalty: float = 1.0):
+        """Set the wrapped environment and the penalty.
+
+        Args:
+            env (ConstraintEvalWrapper): Environment with the constraint values in the info dict.
+            penalty (float): Penalty per violating step.
+        """
         super().__init__(env)
         self._penalty = penalty
 
@@ -666,6 +1067,19 @@ class ConstraintPenaltyWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
+        """Step and subtract the penalty when any constraint is positive.
+
+        The info dict receives ``constraint_violated`` and ``constraint_violation`` (largest violation).
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (EnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, EnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, state_st, reward, done, info = self._env.step(
             key, state, action, params
         )
@@ -686,6 +1100,12 @@ class ConstraintPenaltyWrapper(GymnaxWrapper):
 
 
 class DomainRandomizationEnvState(NamedTuple):
+    """State of ``DomainRandomizationWrapper``.
+
+    Attributes:
+        env_state (EnvState): State of the wrapped environment.
+        params (EnvParams): Parameters sampled at the last reset.
+    """
     env_state: environment.EnvState
     params: environment.EnvParams
 
@@ -694,9 +1114,24 @@ class DomainRandomizationWrapper(GymnaxWrapper):
     """Resample the uncertain parameters at every reset."""
 
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
+        """Resample the uncertain parameters at every reset.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap. It must define ``params_min`` and ``params_max``.
+            params (EnvParams, optional): Unused.
+        """
         super().__init__(env)
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        """Sample new parameters and reset the environment with them.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, DomainRandomizationEnvState]: First observation and initial state.
+        """
         min_params = self._env.params_min
         max_params = self._env.params_max
 
@@ -714,9 +1149,16 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         return obs, state
 
     def sample_params(self, key, params, low_list, high_list):
-        """
-        Samples new params where each leaf is drawn from U(low[i], high[i]).
-        Assumes low_list and high_list follow the order of jax.tree_util.tree_leaves(params).
+        """Sample each parameter leaf uniformly between its bounds.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams): Parameters that give the tree structure and the leaf shapes.
+            low_list (list): Lower bounds, in the leaf order of ``params``.
+            high_list (list): Upper bounds, in the same order.
+
+        Returns:
+            EnvParams: Sampled parameters.
         """
         # Flatten the params to get the tree structure and the leaf shapes
         leaves, treedef = jax.tree_util.tree_flatten(params)
@@ -748,6 +1190,17 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         action: Union[int, float, jax.Array],
         params: Optional[environment.EnvParams] = None,
     ):
+        """Step with the parameters of the episode, and resample them at the end of the episode.
+
+        Args:
+            key (jax.Array): PRNG key.
+            state (DomainRandomizationEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, DomainRandomizationEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs_st, env_state_st, reward, done, info = self._env.step(
             key, state.env_state, action, state.params
         )
@@ -773,12 +1226,26 @@ Off-policy sensitivity wrappers
 
 
 class SensitivityOffEnvState(NamedTuple):
+    """State of ``SensitivityOffWrapper``.
+
+    Attributes:
+        env_state (EnvState): State of the wrapped environment.
+        sensitivity (SensitivityOff): Sensitivity carried along the trajectory.
+    """
     env_state: environment.EnvState
     sensitivity: SensitivityOff
 
 
 class SensitivityOffWrapper(GymnaxWrapper):
+    """Propagate the parametric sensitivity for the off-policy algorithms."""
     def __init__(self, env, regularization_weight=0.0, add_sensitivity_to_info=False):
+        """Sensitivity propagation for off-policy algorithms with a squashed Gaussian actor.
+
+        Args:
+            env (GymnaxWrapper | environment.Environment): Environment to wrap.
+            regularization_weight (float): Weight of the sensitivity term.
+            add_sensitivity_to_info (bool): Whether to report the sensitivity in the info dict.
+        """
         super().__init__(env)
 
         self.state_unravel = jax.flatten_util.ravel_pytree(
@@ -800,6 +1267,15 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self, graphdef, network_params, get_action, action_scale, action_bias
     ):
         # Should add a check for dimension compatibility
+        """Set the actor network and the function that maps its output to an action.
+
+        Args:
+            graphdef (nnx.GraphDef): Graph definition of the network.
+            network_params (nnx.State): Network parameters.
+            get_action (Callable): Function that returns the sampled action, log-probability and mean.
+            action_scale (jax.Array): Scale of the action space.
+            action_bias (jax.Array): Offset of the action space.
+        """
         self.graphdef = graphdef
         self.network_params = network_params
         self.get_action = get_action
@@ -807,9 +1283,24 @@ class SensitivityOffWrapper(GymnaxWrapper):
         self.action_bias = action_bias
 
     def update_network_params(self, network_params):
+        """Replace the network parameters used for the action gains.
+
+        Args:
+            network_params (nnx.State): New network parameters.
+        """
         self.network_params = network_params
 
     def compute_action(self, rng, obs, network_params):
+        """Sample an action of the actor.
+
+        Args:
+            rng (jax.Array): PRNG key.
+            obs (jax.Array): Observation.
+            network_params (nnx.State): Network parameters.
+
+        Returns:
+            jax.Array: Sampled action.
+        """
         model = nnx.merge(self.graphdef, network_params)
         pi = model.actor(obs)
         action, _, _, _ = self.get_action(
@@ -823,6 +1314,16 @@ class SensitivityOffWrapper(GymnaxWrapper):
         return action
 
     def compute_action_mean(self, rng, obs, network_params):
+        """Mean action of the actor.
+
+        Args:
+            rng (jax.Array): PRNG key.
+            obs (jax.Array): Observation.
+            network_params (nnx.State): Network parameters.
+
+        Returns:
+            jax.Array: Mean action.
+        """
         model = nnx.merge(self.graphdef, network_params)
         pi = model.actor(obs)
         _, _, mean, _ = self.get_action(
@@ -844,7 +1345,19 @@ class SensitivityOffWrapper(GymnaxWrapper):
         obs,
         done,
     ):
-        """Compute the next environment state and update sensitivities."""
+        """Propagate the state sensitivity by one step.
+
+        Args:
+            key (jax.Array): PRNG key.
+            sens_state (SensitivityOffEnvState): Current state with the sensitivity.
+            action (jax.Array): Action applied in this step.
+            params (EnvParams): Environment parameters.
+            obs (jax.Array): Observation after the step.
+            done (jax.Array): Done flag of the step.
+
+        Returns:
+            SensitivityOff: Updated sensitivity.
+        """
         state = jax.flatten_util.ravel_pytree(sens_state.env_state.state)[0]
         params_flat = jax.flatten_util.ravel_pytree(params)[0]
         # Compute Jacobians
@@ -917,6 +1430,20 @@ class SensitivityOffWrapper(GymnaxWrapper):
         F_sens_x,
     ):
 
+        """Sensitivity update for given network parameters, differentiable with respect to them.
+
+        Args:
+            key (jax.Array): PRNG key.
+            network_params (nnx.State): Network parameters.
+            df_du (jax.Array): Jacobian of the dynamics with respect to the action.
+            dobs_dx (jax.Array): Observation Jacobian times the state sensitivity.
+            obs (jax.Array): Observation.
+            sens_log_norm (jax.Array): Accumulated log-norm of the sensitivity.
+            F_sens_x (jax.Array): Policy-independent part of the update.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: Next sensitivity and its accumulated log-norm.
+        """
         dmu_dobs = self.action_gains_mean(key, obs, network_params)  # dmu/dobs
         dmu_dobs = jax.lax.stop_gradient(dmu_dobs)
         sens_a = df_du @ dmu_dobs @ dobs_dx  # du/dp
@@ -933,6 +1460,15 @@ class SensitivityOffWrapper(GymnaxWrapper):
         return sens_s_next, sens_log_norm + jnp.log(norm_next + 1e-6)
 
     def reset(self, key: chex.PRNGKey, params: Optional[environment.EnvParams] = None):
+        """Reset the environment and set the sensitivity to zero.
+
+        Args:
+            key (jax.Array): PRNG key.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityOffEnvState]: First observation and initial state.
+        """
         obs, env_state = self._env.reset(key, params)
         sensitivity = SensitivityOff.default(self._env)
         state = SensitivityOffEnvState(env_state=env_state, sensitivity=sensitivity)
@@ -946,6 +1482,17 @@ class SensitivityOffWrapper(GymnaxWrapper):
         params: Optional[environment.EnvParams] = None,
     ) -> Tuple[chex.Array, environment.EnvState, float, bool, dict]:
 
+        """Step the environment and propagate the sensitivity.
+
+        Args:
+            key (jax.Array): PRNG key.
+            sens_state (SensitivityOffEnvState): Current state.
+            action (jax.Array): Action of the policy.
+            params (EnvParams, optional): Environment parameters.
+
+        Returns:
+            tuple[jax.Array, SensitivityOffEnvState, jax.Array, jax.Array, dict]: Observation, next state, reward, done flag and info.
+        """
         obs, env_state, reward, done, info = self._env.step(
             key, sens_state.env_state, action, params
         )
@@ -968,6 +1515,18 @@ class SensitivityOffWrapper(GymnaxWrapper):
     def _step_to_state_and_obs_wrapped(
         self, key, env_state, state_flat, action, params_flat
     ):
+        """Flattened next state and observation as a function of flattened state and parameters.
+
+        Args:
+            key (jax.Array): PRNG key.
+            env_state (EnvState): Environment state that provides the non-differentiated fields.
+            state_flat (jax.Array): Flattened model state.
+            action (jax.Array): Action.
+            params_flat (jax.Array): Flattened environment parameters.
+
+        Returns:
+            tuple[jax.Array, jax.Array]: Flattened next state and observation.
+        """
         state = self.state_unravel(state_flat)
         params = self.param_unravel(params_flat)
         env_state = env_state.replace(state=state)

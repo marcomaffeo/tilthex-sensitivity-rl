@@ -135,13 +135,29 @@ _ESC_SPACE = "\\ "
 
 
 def tex(s):
-    """'Position Error X' -> 'Position\\ Error\\ X'. Done outside the f-strings,
-    which accept a backslash only from Python 3.12."""
+    r"""Escape the spaces of a label for matplotlib mathtext.
+
+    The escape is done outside the f-strings, which accept a backslash only
+    from Python 3.12.
+
+    Args:
+        s (str): Label, e.g. ``'Position Error X'``.
+
+    Returns:
+        str: Label with escaped spaces, e.g. ``'Position\ Error\ X'``.
+    """
     return s.replace(" ", _ESC_SPACE)
 
 
 def nan_to_blank(v):
-    """nan -> '' in the CSV files: an empty cell reads as 'not computable'."""
+    """Turn ``nan`` into an empty CSV cell, which reads as "not computable".
+
+    Args:
+        v (object): Cell value.
+
+    Returns:
+        object: ``''`` for ``nan``, otherwise ``v`` unchanged.
+    """
     return '' if isinstance(v, float) and v != v else v
 
 
@@ -221,14 +237,32 @@ STEP_TOL_ANG = 2.0           # [deg]
 
 
 def to_scipy_quat(q_wxyz):
-    """wxyz (log order) -> xyzw (scipy order)."""
+    """Reorder quaternions from the log order (w, x, y, z) to the SciPy order (x, y, z, w).
+
+    Args:
+        q_wxyz (numpy.ndarray): Quaternions, shape ``(N, 4)``.
+
+    Returns:
+        numpy.ndarray: Quaternions (x, y, z, w), shape ``(N, 4)``.
+    """
     q = np.asarray(q_wxyz, dtype=float)
     return np.column_stack([q[:, 1], q[:, 2], q[:, 3], q[:, 0]])
 
 
 def _blocks(mask, t, min_dur):
-    """Boolean mask -> list of (start, end, value), with the blocks shorter
-    than min_dur merged into the previous one."""
+    """Split a boolean mask into contiguous blocks.
+
+    Blocks shorter than ``min_dur`` are merged into the previous one, and
+    adjacent blocks with the same value are joined.
+
+    Args:
+        mask (numpy.ndarray): Boolean mask over the samples.
+        t (numpy.ndarray): Time stamps [s].
+        min_dur (float): Minimum block duration [s].
+
+    Returns:
+        list[tuple[int, int, bool]]: ``(start, end, value)`` of each block, with ``end`` exclusive.
+    """
     idx = np.flatnonzero(np.diff(mask.astype(int))) + 1
     edges = np.concatenate([[0], idx, [len(mask)]])
     raw = [(edges[i], edges[i + 1], bool(mask[edges[i]])) for i in range(len(edges) - 1)]
@@ -249,9 +283,17 @@ def _blocks(mask, t, min_dur):
 
 
 def detect_phases(f, cfg):
-    """Detect the phases from the reference. Return a list of dicts with type
-    ('hold'/'move'), indices, times, duration, target and, for the ramps, the
-    commanded displacement."""
+    """Detect the phases of a mission from the reference.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        cfg (dict): Analysis settings (thresholds ``v_thr``, ``w_thr``, ``min_block``, ``step_pos``, ``step_ang``).
+
+    Returns:
+        list[dict]: One dict per phase with type (``'hold'`` or ``'move'``),
+        label, sample indices, times, duration, target and, for the ramps, the
+        commanded displacement.
+    """
     t = f['t']
     dt = np.diff(t)
     R = f['R_ref']
@@ -343,23 +385,47 @@ def detect_phases(f, cfg):
 
 
 def setpoint_phases(phases):
-    """Only the commanded setpoints, without takeoff and landing."""
+    """Only the commanded setpoints, without takeoff and landing.
+
+    Args:
+        phases (list[dict]): Phases from ``detect_phases``.
+
+    Returns:
+        list[dict]: Phases labelled ``SETPOINT``.
+    """
     return [p for p in phases if p['label'].startswith('SETPOINT')]
 
 
 def analysed_phases(phases):
     """All the phases where the metrics are computed: takeoff, the setpoints,
     landing. The policy also flies the takeoff and the landing, which are the
-    most demanding phases. Unclassified fragments are left out."""
+    most demanding phases. Unclassified fragments are left out.
+
+    Args:
+        phases (list[dict]): Phases from ``detect_phases``.
+
+    Returns:
+        list[dict]: Takeoff, setpoint and landing phases, in time order.
+    """
     return [p for p in phases
             if p['label'] in ('TAKEOFF', 'LANDING')
             or p['label'].startswith('SETPOINT')]
 
 
 def step_into(f, sp, j):
-    """Amplitude of the command entering phase j: (displacement [m], rotation
-    [deg]). For the first phase, a ramp from the ground, it is the displacement
-    commanded by the ramp."""
+    """Amplitude of the command entering a phase.
+
+    For the first phase, a ramp from the ground, it is the displacement
+    commanded by the ramp.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        sp (list[dict]): Analysed phases of the flight.
+        j (int): Index of the phase in ``sp``.
+
+    Returns:
+        tuple[float, float]: Displacement [m] and rotation [deg]; ``nan`` where not defined.
+    """
     ph = sp[j]
     if j == 0:
         if ph['type'] != 'move':
@@ -381,6 +447,17 @@ def flag_comparability(flights, cfg):
     setpoint, which is the same, and stays valid.
 
     The flags come from the data, flight by flight and folder by folder.
+
+    Sets the key ``comparable`` of every phase of every flight.
+
+    Args:
+        flights (list[dict]): Flights from ``process_log``, with their phases.
+        cfg (dict): Analysis settings (``step_tol_pos`` [m], ``step_tol_ang`` [deg]).
+
+    Returns:
+        tuple[dict, list[dict]]: The phases with different steps, keyed by label
+        with the displacements, rotations and worst differences, and the step of
+        each phase in each flight.
     """
     per = []
     for f in flights:
@@ -406,8 +483,19 @@ def flag_comparability(flights, cfg):
 
 # ===========================================================================
 def process_log(npz_path: Path, cfg):
-    """Return (res, None), or (None, reason) when the file is discarded.
-    Every discarded file is listed in the manifest."""
+    """Load one flight log and compute the tracking errors.
+
+    The position error is expressed in the reference frame, the attitude error
+    as the rotation vector of ``R_ref^T R``.
+
+    Args:
+        npz_path (pathlib.Path): ``data.npz`` of the flight.
+        cfg (dict): Analysis settings (not used).
+
+    Returns:
+        tuple[dict | None, str | None]: ``(flight, None)``, or ``(None, reason)``
+        when the file is discarded. Every discarded file is listed in the manifest.
+    """
     try:
         data = np.load(npz_path, allow_pickle=True)
     except Exception as e:
@@ -492,6 +580,13 @@ def compute_tv(f, mask):
     the time span. The mask may have gaps (the windows excluded from the
     comparison): the variation is summed within each contiguous stretch, never
     across a gap, where the jump between the two edges would be artificial.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        mask (numpy.ndarray): Boolean mask of the selected samples.
+
+    Returns:
+        float | None: Total variation rate [rad/s^2], or ``None`` without rotor data or with fewer than two samples.
     """
     if 'forces' not in f:
         return None
@@ -510,7 +605,14 @@ def compute_tv(f, mask):
 
 def rms(x):
     """RMS of a set of values without time: used to aggregate scalars (e.g. a
-    bias per sub-block), not time series."""
+    bias per sub-block), not time series.
+
+    Args:
+        x (array_like): Values.
+
+    Returns:
+        float: Root mean square, ``nan`` for an empty input.
+    """
     x = np.asarray(x, float)
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float('nan')
 
@@ -532,6 +634,14 @@ def seg_mean_t(t, y, mask=None):
     The mask may have gaps (the windows excluded from the comparison): the
     integral is taken within each contiguous stretch and numerators and
     durations are summed, never across a gap, as in compute_tv().
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        y (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: Time average of ``y``, ``nan`` for an empty mask.
     """
     t = np.asarray(t, float)
     y = np.asarray(y, float)
@@ -550,13 +660,31 @@ def seg_mean_t(t, y, mask=None):
 
 
 def rms_t(t, x, mask=None):
-    """RMS over time: sqrt( (1/T) * integral of x^2 dt )."""
+    """RMS over time, ``sqrt((1/T) * integral of x^2 dt)``.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        x (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: RMS of ``x`` over time.
+    """
     v = seg_mean_t(t, np.asarray(x, float) ** 2, mask)
     return float(np.sqrt(v)) if v == v and v >= 0 else float('nan')
 
 
 def mae_t(t, x, mask=None):
-    """Mean absolute error over time: ``(1/T) * integral of |x| dt``."""
+    """Mean absolute value over time, ``(1/T) * integral of |x| dt``.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        x (numpy.ndarray): Signal.
+        mask (numpy.ndarray | None): Boolean mask of the samples; ``None`` uses all of them.
+
+    Returns:
+        float: Mean absolute value of ``x`` over time.
+    """
     return seg_mean_t(t, np.abs(np.asarray(x, float)), mask)
 
 
@@ -570,7 +698,18 @@ def settling_time(t, e, t0, tol, smooth_s=0.25):
     value is also the convention of classical control (stepinfo). The error
     is first smoothed with a moving average over smooth_s, so that a single
     noise spike at the end of the phase does not set the settling time to
-    the whole phase."""
+    the whole phase.
+
+    Args:
+        t (numpy.ndarray): Time stamps of the phase [s].
+        e (numpy.ndarray): Deviation from the final value.
+        t0 (float): Start of the measurement [s].
+        tol (float): Half-width of the band; ``nan`` when the channel has no step.
+        smooth_s (float): Width of the moving average [s].
+
+    Returns:
+        float: Settling time from ``t0`` [s], ``nan`` when not reached or not defined.
+    """
     if len(t) < 3 or tol != tol:       # nan band: no step in this
         return float('nan')              # channel, nothing to
     dt = float(np.median(np.diff(t)))    # measure
@@ -593,7 +732,17 @@ def settling_time(t, e, t0, tol, smooth_s=0.25):
 def phase_metrics(f, sp, j, cfg):
     """Metrics of a single phase. When the transient is not comparable (step of
     different amplitude in the two flights) every field that depends on it is
-    nan, written as an empty cell."""
+    nan, written as an empty cell.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        sp (list[dict]): Analysed phases of the flight.
+        j (int): Index of the phase in ``sp``.
+        cfg (dict): Analysis settings.
+
+    Returns:
+        dict: Metrics of the phase, one key per column of the phase table.
+    """
     ph = sp[j]
     i0, i1 = ph['i0'], ph['i1']
     sl = slice(i0, i1 + 1)
@@ -758,7 +907,16 @@ def phase_metrics(f, sp, j, cfg):
 
 
 def _smooth(t, y, win_s):
-    """Moving average over win_s seconds, edges left raw."""
+    """Moving average over win_s seconds, edges left raw.
+
+    Args:
+        t (numpy.ndarray): Time stamps [s].
+        y (numpy.ndarray): Signal.
+        win_s (float): Window width [s].
+
+    Returns:
+        numpy.ndarray: Smoothed signal.
+    """
     if win_s <= 0 or y.size < 3:
         return y
     dt = float(np.median(np.diff(t)))
@@ -771,21 +929,28 @@ def _smooth(t, y, win_s):
 
 
 def step_response(f, sp, j, cfg, kind, smooth_s=0.10):
-    """stepinfo of a phase: overshoot, 10-90% rise time, settling time.
+    """Step response of a phase: overshoot, 10-90% rise time and settling time.
 
-    The error is PROJECTED on the direction of the command. The overshoot is
-    not visible on the norm ||e||, which starts from Delta and decreases, so
-    that its maximum is Delta by construction.
+    The error is projected on the direction of the command. The overshoot is
+    not visible on the norm ``||e||``, which starts from the step amplitude
+    ``Delta`` and decreases, so that its maximum is ``Delta`` by construction.
 
-    Along the command direction the progress variable
+    Along the command direction ``u`` the progress variable
+    ``p(t) = (e(t) . u + Delta) / Delta`` is 0 at the instant of the step and 1
+    on the target; ``p > 1`` means that the vehicle went past the target, which
+    is the overshoot.
 
-        p(t) = (e(t) . u + Delta) / Delta
+    Args:
+        f (dict): Flight from ``process_log``.
+        sp (list[dict]): Analysed phases of the flight.
+        j (int): Index of the phase in ``sp``.
+        cfg (dict): Analysis settings.
+        kind (str): ``'pos'`` for a position step, ``'att'`` for a commanded rotation.
+        smooth_s (float): Width of the moving average applied to the progress [s].
 
-    is 0 at the instant of the step and 1 on the target; p > 1 means that the
-    vehicle went past the target, which is the overshoot.
-
-    kind: 'pos' (position step) or 'att' (commanded rotation).
-    Return None when the phase has no step in that channel.
+    Returns:
+        dict | None: Step metrics and the progress profile (``t``, ``prog``),
+        or ``None`` when the phase has no step in that channel.
     """
     ph = sp[j]
     if j == 0 or ph['type'] != 'hold':
@@ -871,6 +1036,16 @@ def touchdown_metrics(f, sp, cfg, tail_s=0.20):
 
     After the reference stops descending the vehicle is on the ground, so the
     end of the log is not used. Mean over the last tail_s of the ramp.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        sp (list[dict]): Analysed phases of the flight (not used).
+        cfg (dict): Analysis settings (not used).
+        tail_s (float): Averaging window before the end of the ramp [s].
+
+    Returns:
+        dict | None: Horizontal, vertical and total position error [m] at
+        touchdown, or ``None`` without a landing phase.
     """
     lan = [p_ for p_ in f['phases'] if p_['label'] == 'LANDING']
     if not lan:
@@ -900,6 +1075,17 @@ def coupling_metrics(f, sp, j, cfg):
     The position reference does not move, so all the position error in the
     phase is induced by the commanded rotation. The position step is zero in
     both flights, so this transient metric is always comparable.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+        sp (list[dict]): Analysed phases of the flight.
+        j (int): Index of the phase in ``sp``.
+        cfg (dict): Analysis settings (``t_ss``).
+
+    Returns:
+        dict | None: Peak and steady-state position error [m] and the same
+        values per degree of rotation [mm/deg], or ``None`` when the phase is
+        not a pure rotation.
     """
     ph = sp[j]
     if j == 0 or ph['type'] != 'hold':
@@ -924,6 +1110,7 @@ def coupling_metrics(f, sp, j, cfg):
 
 # ===========================================================================
 def set_style():
+    """Set the matplotlib style of the figures (serif fonts, light grid, minimal frame)."""
     plt.rcParams.update({
         "text.usetex": False,
         "mathtext.fontset": "cm",
@@ -956,6 +1143,13 @@ def set_style():
 
 
 def save(fig, path, pad_inches=None):
+    """Save a figure as a transparent PDF and close it.
+
+    Args:
+        fig (matplotlib.figure.Figure): Figure.
+        path (pathlib.Path): Output file.
+        pad_inches (float | None): Padding around the figure; ``None`` keeps the default.
+    """
     kw = {} if pad_inches is None else {'pad_inches': pad_inches}
     fig.savefig(path, format='pdf', transparent=True, bbox_inches='tight', **kw)
     plt.close(fig)
@@ -966,6 +1160,11 @@ def tight_x(ax, lo, hi):
 
     The limits are passed explicitly: axhline and axvline have xdata in axes
     coordinates and would distort limits inferred from the drawn lines.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        lo (float): Left limit.
+        hi (float): Right limit.
     """
     if hi > lo:
         ax.set_xlim(lo, hi)
@@ -973,7 +1172,13 @@ def tight_x(ax, lo, hi):
 
 
 def mark_phases(ax, ref, lw=0.9):
-    """Vertical lines at the phase boundaries, over the whole flight."""
+    """Vertical lines at the phase boundaries, over the whole flight.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        ref (dict): Flight whose phases are marked.
+        lw (float): Line width.
+    """
     for p in analysed_phases(ref['phases'])[1:]:
         ax.axvline(p['t0'], color='#999', lw=lw, ls=':')
 
@@ -1056,7 +1261,14 @@ CAT_UNITS = {"rmse_pos": "m", "rmse_att": "rad", "lag_z": "m", "err_xy": "m",
 
 
 def cellf(s):
-    """CSV cell or number -> float; non-numeric -> nan."""
+    """Convert a CSV cell to a float; a non-numeric cell gives ``nan``.
+
+    Args:
+        s (object): Cell value.
+
+    Returns:
+        float: Numeric value or ``nan``.
+    """
     try:
         return float(s)
     except (TypeError, ValueError):
@@ -1064,9 +1276,17 @@ def cellf(s):
 
 
 def cat_view(f):
-    """Adapt the flight dictionary of process_log to the category section.
-    No error is recomputed: e_pos, e_att and the components are those defined
-    above, so there is a single error definition in the file."""
+    """Adapt a flight from ``process_log`` to the category section.
+
+    No error is recomputed: the errors and their components are those of
+    ``process_log``, so there is a single error definition in the file.
+
+    Args:
+        f (dict): Flight from ``process_log``.
+
+    Returns:
+        dict: Time, errors, velocities and rotor forces with the keys used by the category section.
+    """
     e_w = f['pos'] - f['pos_ref']
     dref = np.linalg.norm(np.diff(f['pos_ref'], axis=0), axis=1)
     return {
@@ -1093,7 +1313,15 @@ def tv_rotor(t_blk, forces):
     The duration is the ELAPSED TIME of the window, t[-1] - t[0]: the loop
     period is not constant (9.998-10.032 ms), and (n-1)*mean_dt would differ by
     0.5% on the same window. Same convention as compute_tv(), used in the
-    tables."""
+    tables.
+
+    Args:
+        t_blk (numpy.ndarray): Time stamps of the window [s].
+        forces (numpy.ndarray | None): Rotor forces [N], shape ``(N, 6)``.
+
+    Returns:
+        float: Total variation rate [rad/s^2], ``nan`` when not computable.
+    """
     if forces is None or forces.shape[0] < 2:
         return float("nan")
     w = np.sqrt(np.clip(forces, F_MIN, F_MAX) / CF)
@@ -1102,10 +1330,21 @@ def tv_rotor(t_blk, forces):
 
 
 def build_blocks(f, phase_rows, delta, mission=None):
-    """[(category, label, t0, t1, info)] for one flight.
+    """Split a flight into manoeuvre categories.
 
-    'mission' is 'p2p' or 'rpy' and selects the HOLD_PHASES names for the hold
-    bucket. None (or an unknown mission) keeps the generic name 'Hover'."""
+    ``mission`` is ``'p2p'`` or ``'rpy'`` and selects the ``HOLD_PHASES``
+    names for the hold category; ``None`` or an unknown mission keeps the
+    generic name ``Hover``.
+
+    Args:
+        f (dict): Flight from ``cat_view``.
+        phase_rows (list[dict]): Rows of the phase table of this flight.
+        delta (float): Duration of the transient after a step [s].
+        mission (str | None): Mission type.
+
+    Returns:
+        list[tuple[str, str, float, float, dict]]: ``(category, label, t0, t1, info)`` of each block.
+    """
     t = f["t"]
     out = []
     for r in phase_rows:
@@ -1148,6 +1387,16 @@ def build_blocks(f, phase_rows, delta, mission=None):
 
 
 def window(f, t0, t1):
+    """Boolean mask of the samples between two instants, ends included.
+
+    Args:
+        f (dict): Flight from ``cat_view``.
+        t0 (float): Start [s].
+        t1 (float): End [s].
+
+    Returns:
+        numpy.ndarray: Boolean mask over the samples.
+    """
     m = (f["t"] >= t0) & (f["t"] <= t1)
     return m
 
@@ -1160,7 +1409,16 @@ cfg_min_step_ang = float(np.deg2rad(2.0))   # [rad]
 
 
 def metrics_for_category(f, blocks, cat):
-    """dict metric -> value, for one category of one flight."""
+    """Metrics of one manoeuvre category of one flight.
+
+    Args:
+        f (dict): Flight from ``cat_view``.
+        blocks (list[tuple]): Blocks from ``build_blocks``.
+        cat (str): Category.
+
+    Returns:
+        dict | None: Value of each metric, or ``None`` when the category is absent.
+    """
     sel = [b for b in blocks if b[0] == cat]
     if not sel:
         return None
@@ -1406,7 +1664,15 @@ def _scale_limit(cat_max, factor=2.5):
 
     The comparison is between the maxima PER CATEGORY: on the single values a
     continuous distribution without outliers would cut half of the plot. The
-    axis is cut only when the highest category exceeds the second by `factor`."""
+    axis is cut only when the highest category exceeds the second by `factor`.
+
+    Args:
+        cat_max (list[float]): Maximum value of each category.
+        factor (float): Ratio between the two highest categories that triggers the cut.
+
+    Returns:
+        float | None: Upper y limit, or ``None`` when the axis is not cut.
+    """
     v = sorted((x for x in cat_max if x == x), reverse=True)
     if len(v) < 2 or v[1] <= 0:
         return None
@@ -1456,10 +1722,19 @@ STATS = (("RMSE", rms_t),
 
 
 def category_series_stats(f, blocks, cats):
-    """{statistic: {category: {quantity: value}}} for one flight.
+    """RMSE and MAE of each quantity of ``CAT_SERIES``, per category, for one flight.
 
-    As in metrics_for_category, the sub-blocks with a non-comparable step are
-    left out, since RMSE and MAE of these series are absolute values."""
+    As in ``metrics_for_category``, the blocks with a non-comparable step are
+    left out, since RMSE and MAE of these series are absolute values.
+
+    Args:
+        f (dict): Flight from ``cat_view``.
+        blocks (list[tuple]): Blocks from ``build_blocks``.
+        cats (list[str]): Categories.
+
+    Returns:
+        dict: ``{statistic: {category: {quantity: value}}}``.
+    """
     out = {st: {} for st, _fn in STATS}
     for cat in cats:
         sel = [b for b in blocks
@@ -1488,7 +1763,20 @@ def cat_bar_figure(cats, stats, groups, key, stat, out_path, clip=False):
     Every manoeuvre is shown. Where one dominates the others (typically Step,
     with errors five times larger) --cat-clip keeps the axis on the small bars
     and CUTS the bar out of scale, writing its value above it. By default the
-    proportions are kept."""
+    proportions are kept.
+
+    Args:
+        cats (list[str]): Categories on the x axis.
+        stats (dict): ``{group: category_series_stats(...)}``.
+        groups (list[str]): Groups, one bar each (PPO, SPPO).
+        key (str): Quantity of ``CAT_SERIES``.
+        stat (str): ``'RMSE'`` or ``'MAE'``.
+        out_path (pathlib.Path): Output PDF.
+        clip (bool): Cut the bar of a dominating category.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     spec = next(x for x in CAT_SERIES if x[0] == key)
     _k, _get, sym, unit, _fname, fmt = spec
     vals = [stats[g][stat].get(c, {}).get(key, float("nan"))
@@ -1531,7 +1819,19 @@ def cat_bar_figure(cats, stats, groups, key, stat, out_path, clip=False):
 
 
 def cat_bar_figure_pair(cats, stats, groups, stat, out_path, clip=False):
-    """1x2 grid: position (e_p) and attitude (e_R) side by side."""
+    """1x2 grid: position (e_p) and attitude (e_R) side by side.
+
+    Args:
+        cats (list[str]): Categories on the x axis.
+        stats (dict): ``{group: category_series_stats(...)}``.
+        groups (list[str]): Groups, one bar each (PPO, SPPO).
+        stat (str): ``'RMSE'`` or ``'MAE'``.
+        out_path (pathlib.Path): Output PDF.
+        clip (bool): Cut the bar of a dominating category.
+
+    Returns:
+        bool: ``True`` when the figure is written.
+    """
     keys = ["e_p", "e_R"]
     specs = [next(x for x in CAT_SERIES if x[0] == k) for k in keys]
 
@@ -1577,7 +1877,15 @@ def cat_bar_figure_pair(cats, stats, groups, stat, out_path, clip=False):
 
 
 def export_categories(flights, rows, dirs, folder_name, cfg):
-    """Write tables/category_metrics.csv and the category figures."""
+    """Write tables/category_metrics.csv and the category figures.
+
+    Args:
+        flights (list[dict]): Flights from ``process_log``.
+        rows (list[dict]): Rows of the phase table.
+        dirs (dict[str, pathlib.Path]): Output folders.
+        folder_name (str): Name of the mission folder; its prefix (``p2p`` or ``rpy``) selects the categories.
+        cfg (dict): Analysis settings (``cat_delta``, ``cat_clip``, ``cat_exclude``).
+    """
     if not rows or len(flights) < 2:
         return
     mission = ("p2p" if folder_name.startswith("p2p") else
@@ -1787,7 +2095,22 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
 
 def _bars_on_ax(ax, labels, vals, title, ylabel, hatch_flags=None,
                 fmt='{:.3f}', zero_line=False, legend=True):
-    """PPO/SPPO bars side by side on a given axis, one pair per label."""
+    """PPO/SPPO bars side by side on a given axis, one pair per label.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        labels (list[str]): Labels on the x axis.
+        vals (dict[str, list[float]]): Values per group, one per label.
+        title (str): Axis title.
+        ylabel (str): Label of the y axis.
+        hatch_flags (list[bool] | None): Comparability of each label; the bars of a label set to ``False`` are hatched.
+        fmt (str): Format of the values written above the bars.
+        zero_line (bool): Draw a horizontal line at zero.
+        legend (bool): Draw the legend.
+
+    Returns:
+        bool: ``True`` when at least one bar is drawn.
+    """
     have = [g for g in GROUPS if g in vals and any(v == v for v in vals[g])]
     if not labels or not have:
         return False
@@ -1822,7 +2145,17 @@ def _bars_on_ax(ax, labels, vals, title, ylabel, hatch_flags=None,
 
 
 def _panel_figure(out_path, suptitle, panels, labels):
-    """One figure, several panels side by side on the same labels."""
+    """One figure, several panels side by side on the same labels.
+
+    Args:
+        out_path (pathlib.Path): Output PDF.
+        suptitle (str): Title of the figure.
+        panels (list[dict]): Panels, each with ``vals`` and the arguments of ``_bars_on_ax``.
+        labels (list[str]): Labels on the x axis.
+
+    Returns:
+        int: Number of figures written (0 or 1).
+    """
     panels = [q for q in panels
               if any(v == v for g in q['vals'] for v in q['vals'][g])]
     if not labels or not panels:
@@ -1840,12 +2173,31 @@ def _panel_figure(out_path, suptitle, panels, labels):
 
 
 def _slug(label):
-    """'SETPOINT 2' -> 'SETPOINT_2', for file names."""
+    """Turn a phase label into a file name, e.g. ``'SETPOINT 2'`` into ``'SETPOINT_2'``.
+
+    Args:
+        label (str): Phase label.
+
+    Returns:
+        str: Label with underscores in place of spaces.
+    """
     return "_".join(str(label).split())
 
 
 def _step_profile_ax(ax, per, label, finals=True, bands=True, title=True):
-    """Progress profile of ONE phase, PPO against SPPO."""
+    """Progress profile of ONE phase, PPO against SPPO.
+
+    Args:
+        ax (matplotlib.axes.Axes): Axis.
+        per (dict): Step responses keyed by ``(label, group)``.
+        label (str): Phase label.
+        finals (bool): Draw a line at the final progress of each flight.
+        bands (bool): Draw the 10% and 90% lines of the rise time.
+        title (bool): Write the axis title.
+
+    Returns:
+        bool: ``True`` when at least one profile is drawn.
+    """
     drawn = False
     for g in GROUPS:
         if (label, g) not in per:
@@ -1868,7 +2220,19 @@ def _step_profile_ax(ax, per, label, finals=True, bands=True, title=True):
 
 
 def _step_table_figure(out_path, per, label, kind, tag, cfg):
-    """Table of the step response numbers, PPO against SPPO."""
+    """Table of the step response numbers, PPO against SPPO.
+
+    Args:
+        out_path (pathlib.Path): Output PDF.
+        per (dict): Step responses keyed by ``(label, group)``.
+        label (str): Phase label.
+        kind (str): ``'pos'`` or ``'att'``.
+        tag (str): Name of the channel used in the title.
+        cfg (dict): Analysis settings.
+
+    Returns:
+        int: Number of figures written (0 or 1).
+    """
     have = {g: per[(label, g)] for g in GROUPS if (label, g) in per}
     if len(have) < 2:
         return 0
@@ -1928,7 +2292,17 @@ def _step_table_figure(out_path, per, label, kind, tag, cfg):
 
 
 def export_assets(flights, dirs, cfg, phase_rows=()):
-    """Manoeuvre-specific metrics, per phase, PPO against SPPO."""
+    """Manoeuvre-specific metrics, per phase, PPO against SPPO.
+
+    Args:
+        flights (list[dict]): Flights from ``process_log``.
+        dirs (dict[str, pathlib.Path]): Output folders.
+        cfg (dict): Analysis settings.
+        phase_rows (list[dict]): Rows of the phase table.
+
+    Returns:
+        list[dict]: Rows of the manoeuvre table.
+    """
     rows = []
     n_fig = 0
 
@@ -2114,6 +2488,15 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
 
 # ===========================================================================
 def export_analysis(input_dir: Path, cfg):
+    """Run the whole analysis of one mission folder.
+
+    Loads the flights, detects the phases, computes the metrics and writes the
+    figures and the tables under ``<input_dir>/data_analysis``.
+
+    Args:
+        input_dir (pathlib.Path): Mission folder, e.g. ``p2p_nominal``.
+        cfg (dict): Analysis settings from the command line.
+    """
     set_style()
 
     out_dir = input_dir / "data_analysis"

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Plot the nominal and perturbed rollouts saved in ``rollout_data.npz``: 3D trajectories, tracking errors and inputs, as PDF or SVG figures."""
+
 import argparse 
 import numpy as np 
 from pathlib import Path 
@@ -7,6 +9,17 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt 
 
 def process_error_data(errors): 
+    """Mean and standard deviation over rollouts of error series of different length.
+
+    Shorter series are padded with their last value.
+
+    Args:
+        errors (list[numpy.ndarray]): One error series per rollout.
+
+    Returns:
+        tuple[numpy.ndarray, numpy.ndarray, numpy.ndarray]: Time steps, mean and standard deviation;
+        ``(None, None, None)`` when the list is empty.
+    """
     if not errors: return None, None, None 
     max_len = max(len(e) for e in errors) 
     padded = np.array([np.pad(e, (0, max_len - len(e)), mode='edge') for e in errors]) 
@@ -16,6 +29,15 @@ def process_error_data(errors):
     return t, mean, std 
 
 def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=None, ext="svg"): 
+    """Save the 3D trajectory, error and input figures of a set of rollouts.
+
+    Args:
+        data_dict (dict): Rollout data (``state``, ``actions``, targets) of one condition.
+        output_dir (pathlib.Path): Output folder.
+        base_name (str): Prefix of the file names.
+        nominal_dict (dict, optional): Nominal rollouts, drawn as an overlay on the perturbed ones.
+        ext (str): File format, ``svg`` or ``pdf``.
+    """
     # ========================================== 
     # Plot style for the thesis figures
     # ========================================== 
@@ -192,7 +214,15 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     print(f"[{base_name.upper()}] Plots saved in: {output_dir}") 
 
 def extract_data_dict(data, suffix):
-    """Extract the nominal or perturbed dictionaries from the unified file."""
+    """Nominal or perturbed data from the unified ``rollout_data.npz`` file.
+
+    Args:
+        data (numpy.lib.npyio.NpzFile): Content of the file.
+        suffix (str): ``nom`` or ``pert``.
+
+    Returns:
+        dict | None: The arrays of that condition, or ``None`` if absent.
+    """
     if f"state_{suffix}" not in data:
         return None
     res = {

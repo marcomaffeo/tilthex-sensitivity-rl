@@ -17,7 +17,17 @@ import numpy as np
 from flax import serialization
 
 def get_final_errors(traj_data):
-    """Position and attitude error at the last time step of the trajectory."""
+    """Position and attitude error at the last time step of a trajectory.
+
+    Args:
+        traj_data (dict): Trajectory with ``state``, ``target_pos`` and ``target_attitude``.
+
+    Returns:
+        tuple[float, float]: Position error [m] and geodesic attitude error [rad].
+
+    Raises:
+        ValueError: If keys are missing or the state is empty.
+    """
     # The file may be partial and miss some keys
     if not all(k in traj_data for k in ("state", "target_pos", "target_attitude")):
         raise ValueError("Missing keys in the trajectory data")
@@ -46,6 +56,14 @@ def get_final_errors(traj_data):
     return float(pos_err), float(att_err)
 
 def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
+    """Rank the experiments of a sweep by the final error of their rollouts.
+
+    Prints the nominal and the perturbed rankings and writes them to a JSON file in the sweep directory.
+
+    Args:
+        sweep_dir (pathlib.Path): Sweep directory.
+        top_n (int): Number of experiments shown per ranking.
+    """
     if not sweep_dir.exists():
         print(f"Error: Directory {sweep_dir} does not exist.")
         return

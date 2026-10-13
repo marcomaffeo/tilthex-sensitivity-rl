@@ -10,6 +10,7 @@ sphinx = "*"
 myst-parser = "*"
 sphinx-autoapi = "*"
 furo = "*"
+graphviz = "*"   # `dot`, for the class inheritance diagrams
 
 [tasks]
 # Build the website: open _build/html/index.html in a browser.

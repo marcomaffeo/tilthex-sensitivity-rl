@@ -61,20 +61,45 @@ _ESC_SPACE = "\\ "
 
 
 def tex(s):
-    """'Position Error X' -> 'Position\\ Error\\ X'. Done outside the f-strings,
-    which accept a backslash only from Python 3.12."""
+    r"""Escape the spaces of a label for matplotlib mathtext.
+
+    The escape is done outside the f-strings, which accept a backslash only
+    from Python 3.12.
+
+    Args:
+        s (str): Label, e.g. ``'Position Error X'``.
+
+    Returns:
+        str: Label with escaped spaces, e.g. ``'Position\ Error\ X'``.
+    """
     return s.replace(" ", _ESC_SPACE)
 
 
 def to_scipy_quat(q_wxyz):
-    """wxyz (log order) -> xyzw (scipy order)."""
+    """Reorder quaternions from the log order (w, x, y, z) to the SciPy order (x, y, z, w).
+
+    Args:
+        q_wxyz (numpy.ndarray): Quaternions, shape ``(N, 4)``.
+
+    Returns:
+        numpy.ndarray: Quaternions (x, y, z, w), shape ``(N, 4)``.
+    """
     q = np.asarray(q_wxyz, dtype=float)
     return np.column_stack([q[:, 1], q[:, 2], q[:, 3], q[:, 0]])
 
 
 def wilson(k, n, z=1.96):
     """Wilson confidence interval of a proportion. With few flights per group
-    and p close to 1 the normal approximation does not hold."""
+    and p close to 1 the normal approximation does not hold.
+
+    Args:
+        k (int): Number of successes.
+        n (int): Number of trials.
+        z (float): Quantile of the normal distribution (1.96 for 95%).
+
+    Returns:
+        tuple[float, float]: Lower and upper bound of the interval, in ``[0, 1]``.
+    """
     if n == 0:
         return 0.0, 0.0
     p = k / n
@@ -111,10 +136,20 @@ SHORT = {t: rf'${s}$' for _k, s, _u, t, _f, _o in METRICS}
 
 # ===========================================================================
 def process_log(npz_path: Path, cfg):
-    """Return (res, None), or (None, reason) when the file is discarded.
+    """Load one hovering flight and compute the tracking errors.
 
-    Every discarded file has a reason, written in the manifest and in the
-    printed summary."""
+    The position error is expressed in the reference frame, the attitude
+    error as the rotation vector of ``R_ref^T R``. Every discarded file has a
+    reason, written in the manifest and in the printed summary.
+
+    Args:
+        npz_path (pathlib.Path): ``data.npz`` of the flight.
+        cfg (dict): Analysis settings (``t_success``).
+
+    Returns:
+        tuple[dict | None, str | None]: ``(flight, None)``, or ``(None, reason)``
+        when the file is discarded.
+    """
     try:
         data = np.load(npz_path, allow_pickle=True)
     except Exception as e:
@@ -233,6 +268,14 @@ def compute_tv(d, t_grid):
     Computed on the common time grid: the logging period varies between
     flights (6.47 to 10.00 ms), and on the native samples a flight logged
     at 154 Hz would look noisier than the same flight logged at 100 Hz.
+
+    Args:
+        d (dict): Flight from ``process_log``.
+        t_grid (numpy.ndarray): Common time grid [s].
+
+    Returns:
+        numpy.ndarray | None: Total variation rate of each rotor [rad/s^2], or
+        ``None`` without rotor data or with fewer than two samples on the grid.
     """
     if 'forces' not in d:
         return None
@@ -248,6 +291,7 @@ def compute_tv(d, t_grid):
 
 
 def set_style():
+    """Set the matplotlib style of the figures (serif fonts, light grid, minimal frame)."""
     plt.rcParams.update({
         "text.usetex": False,
         "mathtext.fontset": "cm",
@@ -279,13 +323,29 @@ def set_style():
 
 
 def save(fig, path):
-    """Save a figure as PDF with a tight bounding box, so that labels are not cut."""
+    """Save a figure as PDF with a tight bounding box, so that labels are not cut.
+
+    Args:
+        fig (matplotlib.figure.Figure): Figure.
+        path (pathlib.Path): Output file.
+    """
     fig.savefig(path, format='pdf', transparent=True, bbox_inches='tight')
     plt.close(fig)
 
 
 # ===========================================================================
 def export_unified_analysis(input_dir: Path, cfg):
+    """Run the whole analysis of the hovering campaign.
+
+    Loads the flights, computes RMSE, total variation and success rate per
+    policy, compares PPO and SPPO paired by policy index, and writes figures
+    and tables under ``<input_dir>/data_analysis``.
+
+    Args:
+        input_dir (pathlib.Path): Campaign folder.
+        cfg (dict): Analysis settings from the command line (``t_crop``,
+            ``t_success``, ``band``).
+    """
     set_style()
 
     out_dir = input_dir / "data_analysis"

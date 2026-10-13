@@ -11,7 +11,15 @@ from scipy.spatial.transform import Rotation
 IS_REAL_ROBOT = (platform.machine() == "aarch64")
 
 def setup_plugin_paths(g):
-    """Dynamically configure genomix search paths based on environment and target."""
+    """Add the GenoM3 plugin folders that exist on this machine to the genomix search path.
+
+    The candidates are the robotpkg and conda prefixes from the environment,
+    ``/opt/openrobots``, ``~/openrobots`` and, on the vehicle, the workspace of
+    the onboard computer.
+
+    Args:
+        g (genomix.Client): Open genomix connection.
+    """
     paths = []
     
     if 'ROBOTPKG_BASE' in os.environ:
@@ -35,8 +43,13 @@ def setup_plugin_paths(g):
 class TK3Components_tilthex:
     """TeleKyb3 components of the Tilthex, in simulation or on the vehicle."""
     def __init__(self, log_dir: Path):
-        """Connect to genomix and load the components. The motion capture is optitrack in simulation
-        (x86_64) and qualisys on the vehicle (aarch64). ``log_dir`` is the folder of the flight logs.
+        """Connect to genomix and load the TeleKyb3 components.
+
+        The motion capture component is optitrack in simulation (x86_64) and
+        qualisys on the vehicle (aarch64).
+
+        Args:
+            log_dir (pathlib.Path): Folder of the flight logs.
         """
         g = genomix.connect()
         setup_plugin_paths(g)
@@ -54,7 +67,12 @@ class TK3Components_tilthex:
             self.mocap = g.load('optitrack')
 
     def setup(self):
-        """Connect the components to the simulator or to the vehicle and configure rotorcraft, pom and nhfc (geometry, gains, filters, ports)."""
+        """Connect the components to the simulator or to the vehicle and configure them.
+
+        Sets the sensor rates and filters of rotorcraft, the geometry, gains and
+        filters of nhfc, the measurement ports of pom, and connects the ports
+        between the components.
+        """
         if IS_REAL_ROBOT:
             self.mocap.connect('10.135.2.40')
             self.rotorcraft.connect({'serial': '/dev/ttyACM0', 'baud': 0})
@@ -106,7 +124,7 @@ class TK3Components_tilthex:
         self.pom.add_measurement('mocap')
 
     def start(self):
-        """Start the component logs in /tmp, start the motors and set the nhfc reference to the current position."""
+        """Start the component logs in ``/tmp``, start the motors and hold the current position with nhfc."""
         self.pom.log_state('/tmp/pom.log')
         self.pom.log_measurements('/tmp/pom-measurements.log')
         self.mocap.set_logfile('/tmp/mocap.log')
@@ -128,8 +146,17 @@ class TK3Components_tilthex:
         self.mocap.unset_logfile()
 
 def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
-    """State estimated by pom as a 13-element array: position and linear velocity (world frame),
-    attitude quaternion (w, x, y, z), angular velocity (body frame).
+    """Read the state estimated by pom.
+
+    Args:
+        components (TK3Components_tilthex): Loaded TeleKyb3 components.
+        print_state (bool): Print position, attitude (roll, pitch, yaw) and velocities.
+        NP_DTYPE (str): NumPy dtype of the returned array.
+
+    Returns:
+        numpy.ndarray: State of 13 elements: position and linear velocity in the
+        world frame, attitude quaternion (w, x, y, z), angular velocity in the
+        body frame.
     """
     pom = components.pom
     body = pom.frame('robot')['frame']
@@ -158,7 +185,18 @@ def read_state_and_rot_w(components, print_state=False, NP_DTYPE='float64'):
     return np.concatenate([pos, vel, quat, avel]).astype(NP_DTYPE)
 
 def action_to_rotor_speed(components, action):
-    """Rotor speeds from the six rotor forces [N] given by the policy, with the thrust coefficient of the Tilthex (forces clipped to [0.3072, 12] N)."""
+    """Convert the six rotor forces given by the policy into rotor speeds.
+
+    The forces are clipped to ``[0.3072, 12]`` N and converted with the thrust
+    coefficient of the Tilthex, ``w = sqrt(f / c_f)``.
+
+    Args:
+        components (TK3Components_tilthex): Loaded TeleKyb3 components (not used).
+        action (numpy.ndarray): Rotor forces [N], shape ``(6,)``.
+
+    Returns:
+        list[float]: Rotor speeds [rad/s].
+    """
     cf = 12.0e-4
     force_cmds = np.array(action, dtype=np.float64)
     force_cmds = np.clip(force_cmds, 0.3072, 12.0)
@@ -166,7 +204,15 @@ def action_to_rotor_speed(components, action):
     return np.sqrt(force_cmds / cf).tolist()
 
 def quat_multiply(q1, q2):
-    """Hamilton product of two quaternions (w, x, y, z)."""
+    """Hamilton product of two quaternions.
+
+    Args:
+        q1 (numpy.ndarray): First quaternion (w, x, y, z).
+        q2 (numpy.ndarray): Second quaternion (w, x, y, z).
+
+    Returns:
+        numpy.ndarray: Product ``q1 * q2`` (w, x, y, z).
+    """
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return np.array([
@@ -177,7 +223,14 @@ def quat_multiply(q1, q2):
     ], dtype=np.float64)
 
 def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
-    """Rotation matrix of a quaternion (w, x, y, z)."""
+    """Rotation matrix of a unit quaternion.
+
+    Args:
+        q (numpy.ndarray): Quaternion (w, x, y, z).
+
+    Returns:
+        numpy.ndarray: Rotation matrix, shape ``(3, 3)``.
+    """
     w, x, y, z = q[0], q[1], q[2], q[3]
     return np.array([
         [1.0 - 2.0*(y**2 + z**2), 2.0*(x*y - z*w),       2.0*(x*z + y*w)],
@@ -186,7 +239,14 @@ def quat_to_rot_matrix_wxyz(q: np.ndarray) -> np.ndarray:
     ], dtype=np.float64)
 
 def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
-    """Roll, pitch and yaw [rad] of a quaternion (w, x, y, z)."""
+    """Roll, pitch and yaw of a unit quaternion.
+
+    Args:
+        q (numpy.ndarray): Quaternion (w, x, y, z).
+
+    Returns:
+        numpy.ndarray: Roll, pitch and yaw [rad].
+    """
     w, x, y, z = q[0], q[1], q[2], q[3]
     sinr_cosp = 2.0 * (w * x + y * z)
     cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
@@ -200,7 +260,24 @@ def quat_to_euler_xyz(q: np.ndarray) -> np.ndarray:
 
 def save_and_plot_telemetry(log_data, policy_name, sim_folder: Path, frequency_hz: float, target_info="", skip_plots=False, formats=['png'], logger=None):
 
-    """Save one flight in ``sim_folder``: ``data.npz`` with the logged signals and, unless ``skip_plots``, the plots."""
+    """Save one flight to disk and plot it.
+
+    Writes ``data.npz`` with the logged signals and, unless ``skip_plots`` is
+    set, the plots of position, attitude, velocities, rotor forces and
+    inference time.
+
+    Args:
+        log_data (dict): Logged signals, keyed by ``t``, ``pos``, ``vel``, ``quat``,
+            ``euler``, ``avel``, ``pos_ref``, ``quat_ref``, ``euler_ref``,
+            ``action`` and ``inf_time``.
+        policy_name (str): Name of the policy, stored in the file and used in the titles.
+        sim_folder (pathlib.Path): Output folder, created if missing.
+        frequency_hz (float): Control frequency [Hz].
+        target_info (str): Description of the setpoint shown in the titles.
+        skip_plots (bool): Save only ``data.npz``.
+        formats (list[str]): Image formats of the plots.
+        logger (logging.Logger | None): Logger for progress messages.
+    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt

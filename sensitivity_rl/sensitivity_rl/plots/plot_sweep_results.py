@@ -31,7 +31,14 @@ def save_table_image_latex_style(
     title: str,
     output_file: Path,
 ):
-    """Save a table as a PNG with a LaTeX-like (booktabs) visual style."""
+    """Save a table as a PNG with a booktabs-like style.
+
+    Args:
+        headers (list[str]): Column headers.
+        rows (list[list[str]]): Table rows.
+        title (str): Title above the table.
+        output_file (pathlib.Path): Output image.
+    """
     if not rows:
         print(f"Warning: No rows to render for table image: {output_file}")
         return
@@ -97,15 +104,14 @@ def save_table_image_latex_style(
 
 
 def load_tensorboard_data(log_dir: Path, tags: List[str]) -> Dict[str, np.ndarray]:
-    """
-    Load data from TensorBoard event files.
+    """Read scalar series from TensorBoard event files.
 
     Args:
-        log_dir: Path to tensorboard log directory
-        tags: List of metric tags to extract
+        log_dir (pathlib.Path): Folder with the event files.
+        tags (list[str]): Scalar tags to read.
 
     Returns:
-        Dictionary mapping tag names to (steps, values) tuples
+        dict[str, tuple[numpy.ndarray, numpy.ndarray]]: Tag to ``(steps, values)``.
     """
     ea = event_accumulator.EventAccumulator(str(log_dir))
     ea.Reload()
@@ -125,11 +131,16 @@ def load_tensorboard_data(log_dir: Path, tags: List[str]) -> Dict[str, np.ndarra
 
 
 def parse_experiment_name(exp_name: str) -> Dict[str, any]:
-    """
-    Parse experiment name to extract parameters.
+    """Parameters encoded in an experiment folder name.
 
-    Example: exp_001_sppo_tilthex_v1_seed0_srw0.5
-    Returns: {'method': 'sppo', 'env': 'tilthex_v1', 'seed': 0, 'srw': 0.5}
+    Example: ``exp_001_sppo_tilthex_v1_seed0_srw0.5`` gives
+    ``{'method': 'sppo', 'env': 'tilthex_v1', 'seed': 0, 'srw': 0.5}``.
+
+    Args:
+        exp_name (str): Folder name.
+
+    Returns:
+        dict[str, Any]: Parsed parameters.
     """
     parts = exp_name.split("_")
     params = {}
@@ -193,14 +204,13 @@ def parse_experiment_name(exp_name: str) -> Dict[str, any]:
 
 
 def group_experiments_by_params(sweep_dir: Path) -> Dict[Tuple, List[Path]]:
-    """
-    Group experiment directories by their parameter settings (excluding seed).
+    """Group the experiment folders by their parameters, ignoring the seed.
 
     Args:
-        sweep_dir: Path to sweep directory
+        sweep_dir (pathlib.Path): Sweep directory.
 
     Returns:
-        Dictionary mapping parameter tuples to lists of experiment directories
+        dict[tuple, list[pathlib.Path]]: Parameter tuple to the folders of its seeds.
     """
     experiments = defaultdict(list)
 
@@ -220,15 +230,14 @@ def group_experiments_by_params(sweep_dir: Path) -> Dict[Tuple, List[Path]]:
 def interpolate_to_common_steps(
     data_list: List[Tuple[np.ndarray, np.ndarray]], num_points: int = 1000
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """
-    Interpolate multiple time series to common step values.
+    """Interpolate several time series onto common steps.
 
     Args:
-        data_list: List of (steps, values) tuples
-        num_points: Number of interpolation points
+        data_list (list[tuple[numpy.ndarray, numpy.ndarray]]): ``(steps, values)`` pairs.
+        num_points (int): Number of common steps.
 
     Returns:
-        Tuple of (common_steps, interpolated_values_array)
+        tuple[numpy.ndarray, numpy.ndarray]: Common steps and values, shape ``(len(data_list), num_points)``.
     """
     if not data_list:
         return np.array([]), np.array([])
@@ -258,15 +267,14 @@ def plot_metric_comparison(
     metric_name: str,
     output_dir: Path,
 ):
-    """
-    Create plots comparing a metric across different parameter settings.
+    """Plot the mean and standard deviation over seeds of one metric, one curve per parameter group.
 
     Args:
-        sweep_dir: Path to sweep directory
-        grouped_experiments: Dictionary of parameter groups to experiment directories
-        metric_tag: TensorBoard tag to plot
-        metric_name: Human-readable metric name for plot title
-        output_dir: Directory to save plots
+        sweep_dir (pathlib.Path): Sweep directory.
+        grouped_experiments (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments_by_params``.
+        metric_tag (str): TensorBoard tag.
+        metric_name (str): Name used in the title and the file name.
+        output_dir (pathlib.Path): Output folder.
     """
     fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -368,13 +376,14 @@ def plot_metric_comparison(
 def create_summary_table(
     sweep_dir: Path, grouped_experiments: Dict[Tuple, List[Path]], output_dir: Path
 ):
-    """
-    Create a summary table with final metric values.
+    """Write the final value of each metric per parameter group as JSON, CSV and PNG.
+
+    The final value is the mean of the last 10% of the series.
 
     Args:
-        sweep_dir: Path to sweep directory
-        grouped_experiments: Dictionary of parameter groups to experiment directories
-        output_dir: Directory to save summary
+        sweep_dir (pathlib.Path): Sweep directory.
+        grouped_experiments (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments_by_params``.
+        output_dir (pathlib.Path): Output folder.
     """
     metrics = [
         "returns/episodic_return_true",
@@ -548,16 +557,13 @@ def create_summary_table(
 
 
 def compute_pareto_front(objectives: np.ndarray) -> np.ndarray:
-    """
-    Compute Pareto front from multi-objective data.
+    """Points not dominated by any other point, with every objective to be maximised.
 
     Args:
-        objectives: Array of shape (n_points, 2) where both columns are to be maximized:
-                   - First column: maximize episodic return
-                   - Second column: maximize negative sensitivity (i.e., minimize sensitivity)
+        objectives (numpy.ndarray): Shape ``(n_points, 2)``: episodic return and negative sensitivity.
 
     Returns:
-        Boolean array indicating which points are on the Pareto front
+        numpy.ndarray: Boolean mask of the Pareto-optimal points.
     """
     is_pareto = np.ones(objectives.shape[0], dtype=bool)
     for i, point in enumerate(objectives):
@@ -574,13 +580,15 @@ def compute_pareto_front(objectives: np.ndarray) -> np.ndarray:
 def plot_pareto_front(
     sweep_dir: Path, grouped_experiments: Dict[Tuple, List[Path]], output_dir: Path
 ):
-    """
-    Create Pareto front plot for episodic return vs sensitivity.
+    """Plot episodic return against sensitivity for every parameter group, with the Pareto front.
 
     Args:
-        sweep_dir: Path to sweep directory
-        grouped_experiments: Dictionary of parameter groups to experiment directories
-        output_dir: Directory to save plots
+        sweep_dir (pathlib.Path): Sweep directory.
+        grouped_experiments (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments_by_params``.
+        output_dir (pathlib.Path): Output folder.
+
+    Returns:
+        list[dict] | None: The Pareto points, or ``None`` without data.
     """
     metrics = ["returns/episodic_return_true", "returns/sensitivity_state_mean"]
 
@@ -778,12 +786,11 @@ def plot_pareto_front(
 
 
 def create_pareto_table(pareto_data: List[Dict], output_dir: Path):
-    """
-    Create a table with Pareto front configurations showing trade-offs.
+    """Write and print the configurations on the Pareto front, with a trade-off score.
 
     Args:
-        pareto_data: List of dictionaries with Pareto front points
-        output_dir: Directory to save table
+        pareto_data (list[dict]): Output of ``plot_pareto_front``.
+        output_dir (pathlib.Path): Output folder.
     """
     if not pareto_data:
         print("No Pareto front data to create table")
@@ -841,12 +848,11 @@ def create_pareto_table(pareto_data: List[Dict], output_dir: Path):
 
 
 def plot_sweep_results(sweep_dir: Path, output_subdir: str = "plots"):
-    """
-    Main function to generate all plots and summaries for a sweep.
+    """Generate all the plots and summaries of a sweep.
 
     Args:
-        sweep_dir: Path to sweep directory containing experiment subdirectories
-        output_subdir: Subdirectory name for plots (default: "plots")
+        sweep_dir (pathlib.Path): Sweep directory.
+        output_subdir (str): Subfolder for the outputs.
     """
     sweep_dir = Path(sweep_dir)
 
@@ -911,7 +917,7 @@ def plot_sweep_results(sweep_dir: Path, output_subdir: str = "plots"):
 
 
 def main():
-    """Command-line interface for standalone usage."""
+    """Command-line entry point: ``--sweep_dir`` and ``--output_dir``."""
     parser = argparse.ArgumentParser(
         description="Plot sweep results from TensorBoard logs",
         formatter_class=argparse.RawDescriptionHelpFormatter,

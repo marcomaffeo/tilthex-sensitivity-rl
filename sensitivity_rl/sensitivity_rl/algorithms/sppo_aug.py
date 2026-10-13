@@ -29,7 +29,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply SPPO-aug specific environment wrappers."""
+    """Apply the SPPO-aug wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -54,10 +63,15 @@ def wrap_env(env, config):
 
 
 def make_loss_fn(config, graphdef):
-    """Create SPPO-aug loss function for the main policy network.
+    """Create the SPPO-aug loss function of the policy network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, advantages_s, targets) -> (total_loss, aux_metrics)
+    Args:
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCritic network.
+
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, advantages_s, targets) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(params, traj_batch, advantages, advantages_s, targets):
@@ -133,10 +147,14 @@ def make_loss_fn(config, graphdef):
 
 
 def make_loss_fn_vs(config, graphdef_vs):
-    """Create loss function for the sensitivity value network (GRU-based).
+    """Create the loss function of the recurrent sensitivity critic.
 
-    Returns a function with signature:
-        loss_fn_vs(params_vs, traj_batch, targets_s) -> value_loss_s
+    Args:
+        config (dict): Training configuration (``CLIP_EPS``, ``VF_COEF``).
+        graphdef_vs (nnx.GraphDef): Graph definition of the ``CriticGRU`` network.
+
+    Returns:
+        Callable: ``loss_fn_vs(params_vs, traj_batch, targets_s) -> value_loss_s``.
     """
 
     def _loss_fn_vs(params_vs, traj_batch, targets_s):
@@ -162,15 +180,17 @@ def make_loss_fn_vs(config, graphdef_vs):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for SPPO-aug.
+    """Create the step function that collects one transition per environment.
 
     Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', 'network_vs', etc.
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that collects transitions.
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
     """
     graphdef = networks["graphdef"]
     graphdef_vs = networks["graphdef_vs"]
@@ -229,15 +249,17 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for SPPO-aug.
+    """Create the function that runs one SPPO-aug update epoch over the minibatches.
 
     Args:
-        config: Training configuration
-        loss_fn: Loss function created by make_loss_fn
-        shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks containing 'loss_fn_vs', etc.
+        config (dict): Training configuration (``NUM_MINIBATCHES``, ``UPDATE_EPOCHS``).
+        loss_fn (Callable): Loss function returned by ``make_loss_fn``.
+        shuffle_batch_fn (Callable): Function that shuffles a batch and splits it into minibatches.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that performs one epoch of updates.
+    Returns:
+        Callable: ``update_epoch(update_state, unused) -> (update_state, losses)``,
+        for use with ``jax.lax.scan``.
     """
     loss_fn_vs = networks["loss_fn_vs"]
 
@@ -293,7 +315,17 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
+    """Compute the generalised advantage estimates of a rollout.
+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with ``advantages``, ``advantages_s``, ``targets`` and ``targets_s``, and the runner state.
+    """
 
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     _, last_val = model(collect_state.last_obs)
@@ -316,7 +348,14 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def extract_losses(loss_info):
-    """Extract loss metrics from loss_info."""
+    """Turn the loss information of an update into scalar metrics for logging.
+
+    Args:
+        loss_info (tuple): Loss values returned by the update epochs.
+
+    Returns:
+        tuple[dict, dict | None]: The standard PPO metrics and the algorithm-specific ones.
+    """
     (
         total_losses,
         (
@@ -343,10 +382,17 @@ def extract_losses(loss_info):
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize networks and train states for SPPO-aug.
+    """Create the networks and their training states.
+
+    Args:
+        config (dict): Training configuration (layer sizes, activation, learning rate).
+        env (GymnaxWrapper): Wrapped environment, used for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        rng (jax.Array): PRNG key for the initialisation.
+        load_params_fn (Callable, optional): Function that loads pre-trained actor weights.
 
     Returns:
-        dict with keys: graphdef, train_state, graphdef_vs, train_state_vs, loss_fn_vs, gru_hidden_size
+        dict: ``graphdef``, ``train_state``, ``graphdef_vs``, ``train_state_vs``, ``loss_fn_vs`` and ``gru_hidden_size``.
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
     obs_dim = env.observation_space(env_params).shape[0]
@@ -407,10 +453,17 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 
 def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for SPPO-aug.
+    """Reset the environments and build the initial runner state.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+        rng (jax.Array): PRNG key.
 
     Returns:
-        RunnerState NamedTuple
+        RunnerState: Initial runner state, with the algorithm-specific entries in ``extras``.
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])

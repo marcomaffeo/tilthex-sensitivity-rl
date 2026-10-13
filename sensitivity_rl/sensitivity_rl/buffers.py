@@ -1,3 +1,5 @@
+"""Containers of the rollout transitions and of the training state."""
+
 import jax
 import jax.numpy as jnp
 from typing import NamedTuple
@@ -47,5 +49,3 @@ class UpdateState(NamedTuple):
     targets: jnp.ndarray
     rng: jnp.ndarray
     extras: dict = {}
-
-

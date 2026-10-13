@@ -1,3 +1,5 @@
+"""Quaternion, rotation and Euler angle operations used by the environments and by the rollout analysis."""
+
 from functools import partial
 import jax.numpy as jnp
 import jax
@@ -5,14 +7,26 @@ import numpy as np
 
 @jax.jit
 def rotate_vec3(v, q):
-    """Rotate a 3D vector using a quaternion via rotation matrix"""
+    """Rotate a 3D vector by a unit quaternion.
+
+    Args:
+        v (jax.Array): Vector, shape ``(3,)``.
+        q (jax.Array): Unit quaternion ``[w, x, y, z]``.
+
+    Returns:
+        jax.Array: Rotated vector, shape ``(3,)``.
+    """
     return quat2rotm(q) @ v
 
 @jax.jit
 def euler_to_quat(rpy):
-    """
-    Converts Euler angles (roll, pitch, yaw) to a unit quaternion [w, x, y, z].
-    Input: rpy jax.Array shape (3,)
+    """Unit quaternion ``[w, x, y, z]`` from roll, pitch and yaw.
+
+    Args:
+        rpy (jax.Array): Roll, pitch and yaw [rad], shape ``(3,)``.
+
+    Returns:
+        jax.Array: Unit quaternion, shape ``(4,)``.
     """
     roll, pitch, yaw = rpy[0], rpy[1], rpy[2]
     cr = jnp.cos(roll * 0.5)
@@ -31,6 +45,14 @@ def euler_to_quat(rpy):
 
 @jax.jit
 def quat2rotm(quat):
+    """Rotation matrix of a unit quaternion ``[w, x, y, z]``.
+
+    Args:
+        quat (jax.Array): Unit quaternion, shape ``(4,)``.
+
+    Returns:
+        jax.Array: Rotation matrix, shape ``(3, 3)``.
+    """
     eta = quat[0]
     vec = quat[1:4]
     return jnp.array(
@@ -55,7 +77,15 @@ def quat2rotm(quat):
 
 @jax.jit
 def quat_product(q1, q2):
-    """Quaternion multiplication (Hamilton product)"""
+    """Hamilton product of two quaternions ``[w, x, y, z]``.
+
+    Args:
+        q1 (jax.Array): Left quaternion, shape ``(4,)``.
+        q2 (jax.Array): Right quaternion, shape ``(4,)``.
+
+    Returns:
+        jax.Array: Product ``q1 * q2``, shape ``(4,)``.
+    """
     w1, x1, y1, z1 = q1
     w2, x2, y2, z2 = q2
     return jnp.array([
@@ -67,22 +97,41 @@ def quat_product(q1, q2):
 
 @jax.jit
 def quat_derivative(q, w):
-    """Quaternion derivative given quat and angular velocity"""
+    """Time derivative of a quaternion for a body angular velocity.
+
+    Args:
+        q (jax.Array): Unit quaternion ``[w, x, y, z]``.
+        w (jax.Array): Angular velocity in the body frame [rad/s], shape ``(3,)``.
+
+    Returns:
+        jax.Array: ``0.5 * q * [0, w]``, shape ``(4,)``.
+    """
     w_vec = jnp.concatenate([jnp.array([0.0]), w])
     return quat_product(q, w_vec) * 0.5
 
 
 @jax.jit
 def quat_inverse(q):
-    """For unit quaternions"""
+    """Inverse of a unit quaternion (its conjugate).
+
+    Args:
+        q (jax.Array): Unit quaternion ``[w, x, y, z]``.
+
+    Returns:
+        jax.Array: ``[w, -x, -y, -z]``.
+    """
     res = jnp.array([q[0], -q[1], -q[2], -q[3]])
     return res
 
 
 def quat_to_euler_deg(q_array):
-    """
-    Converts a batch of quaternions [w, x, y, z] to Euler angles [Roll, Pitch, Yaw] in degrees.
-    Expects NumPy arrays on the CPU.
+    """Roll, pitch and yaw in degrees of a batch of quaternions ``[w, x, y, z]``.
+
+    Args:
+        q_array (numpy.ndarray): Quaternions, shape ``(N, 4)`` or ``(4,)``.
+
+    Returns:
+        numpy.ndarray: Angles [deg], shape ``(N, 3)``.
     """
     if q_array.ndim == 1:
         q_array = q_array[np.newaxis, :]
@@ -108,6 +157,15 @@ def quat_to_euler_deg(q_array):
 
 
 def compute_attitude_error_deg(q_curr, q_tgt):
+    """Geodesic angle between the current and the target attitudes.
+
+    Args:
+        q_curr (numpy.ndarray): Current quaternions ``[w, x, y, z]``, shape ``(N, 4)``.
+        q_tgt (numpy.ndarray): Target quaternions, shape ``(N, 4)``.
+
+    Returns:
+        numpy.ndarray: Attitude error [deg], shape ``(N,)``.
+    """
     q_tgt_inv = np.copy(q_tgt)
     q_tgt_inv[:, 1:] *= -1  
     
@@ -117,4 +175,3 @@ def compute_attitude_error_deg(q_curr, q_tgt):
     w = w1*w2 - x1*x2 - y1*y2 - z1*z2
     
     return np.degrees(2.0 * np.arccos(np.clip(np.abs(w), -1.0, 1.0)))
-

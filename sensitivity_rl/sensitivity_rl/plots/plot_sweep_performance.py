@@ -36,7 +36,14 @@ from flax import serialization
 # --- Trajectory loading ---
 
 def _load_traj(path: Path) -> Optional[Dict]:
-    """Load a single trajectory msgpack file saved by flax.serialization."""
+    """Load one trajectory saved with ``flax.serialization``.
+
+    Args:
+        path (pathlib.Path): ``traj_*.msgpack`` file.
+
+    Returns:
+        dict | None: The trajectory, or ``None`` if the file cannot be read.
+    """
     try:
         return serialization.msgpack_restore(path.read_bytes())
     except Exception as exc:
@@ -45,7 +52,14 @@ def _load_traj(path: Path) -> Optional[Dict]:
 
 
 def load_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
-    """Return all trajectory dicts found in <exp_dir>/rollouts/."""
+    """All the trajectories in ``<exp_dir>/rollouts/``.
+
+    Args:
+        exp_dir (pathlib.Path): Experiment folder.
+
+    Returns:
+        list[dict]: Loaded trajectories.
+    """
     rollouts_dir = exp_dir / "rollouts"
     if not rollouts_dir.exists():
         return []
@@ -58,11 +72,16 @@ def load_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
 
 
 def load_nominal_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
-    """Return only nominal trajectory dicts from <exp_dir>/rollouts/.
+    """Only the nominal trajectories in ``<exp_dir>/rollouts/``.
 
-    Nominal trajectories are:
-      - traj_XXXXX.msgpack          (single-sample runs, all nominal)
-      - traj_XXXXX_sample_00.msgpack (multi-sample runs, sample index 0)
+    Nominal trajectories are ``traj_XXXXX.msgpack`` (single-sample runs) and
+    ``traj_XXXXX_sample_00.msgpack`` (multi-sample runs).
+
+    Args:
+        exp_dir (pathlib.Path): Experiment folder.
+
+    Returns:
+        list[dict]: Loaded nominal trajectories.
     """
     rollouts_dir = exp_dir / "rollouts"
     if not rollouts_dir.exists():
@@ -86,11 +105,16 @@ _ENV_VERSIONS = {"v0", "v1", "v2", "v3", "v4", "v5", "obstacle", "flip"}
 
 
 def parse_exp_dir_name(name: str) -> Dict:
-    """Parse an experiment directory name into a flat parameter dict.
+    """Parameters encoded in an experiment folder name.
 
-    Handles patterns like:
-      exp_008_sppo_aug_grad_param_dual_drone_v3_srw0.1_sensitivity_num_steps50_seed0_domain_randomizationFalse
-      exp_025_ppo_drone_v3_domain_randomizationTrue_seed0
+    Handles names such as
+    ``exp_008_sppo_aug_grad_param_dual_drone_v3_srw0.1_seed0_domain_randomizationFalse``.
+
+    Args:
+        name (str): Folder name.
+
+    Returns:
+        dict: Method, environment, seed and the other parameters.
     """
     params: Dict = {}
 
@@ -157,7 +181,14 @@ def parse_exp_dir_name(name: str) -> Dict:
 
 
 def group_experiments(sweeps_dir: Path) -> Dict[Tuple, List[Path]]:
-    """Group experiment directories by their config, excluding the seed."""
+    """Group the experiment folders by their parameters, ignoring the seed.
+
+    Args:
+        sweeps_dir (pathlib.Path): Folder with the ``exp_*`` subfolders.
+
+    Returns:
+        dict[tuple, list[pathlib.Path]]: Parameter tuple to the folders of its seeds.
+    """
     groups: Dict[Tuple, List[Path]] = defaultdict(list)
     for exp_dir in sorted(sweeps_dir.iterdir()):
         if not exp_dir.is_dir() or not exp_dir.name.startswith("exp_"):
@@ -199,7 +230,14 @@ _ENV_INPUT_LIMITS: Dict[str, Tuple[np.ndarray, np.ndarray]] = {
 
 
 def make_label(param_key: Tuple) -> str:
-    """Human-readable label for a parameter group."""
+    """Readable label of a parameter group, used in the legends.
+
+    Args:
+        param_key (tuple): Parameter tuple of the group.
+
+    Returns:
+        str: Label, e.g. ``SPPO srw=0.1``.
+    """
     params = dict(param_key)
     method = params.get("method", "unknown")
     label = _METHOD_SHORT.get(method, method.replace("_", "-").upper())
@@ -214,7 +252,15 @@ def make_label(param_key: Tuple) -> str:
 # --- Metric helpers ---
 
 def _collect_metric(trajs: List[Dict], key: str) -> List[np.ndarray]:
-    """Extract a flat 1-D time series from eval_metrics across all trajectories."""
+    """Time series of one evaluation metric from every trajectory.
+
+    Args:
+        trajs (list[dict]): Trajectories.
+        key (str): Key in ``eval_metrics``.
+
+    Returns:
+        list[numpy.ndarray]: One 1D series per trajectory that has the metric.
+    """
     series: List[np.ndarray] = []
     for traj in trajs:
         em = traj.get("eval_metrics", {})
@@ -225,7 +271,14 @@ def _collect_metric(trajs: List[Dict], key: str) -> List[np.ndarray]:
 
 
 def _collect_actions(trajs: List[Dict]) -> List[np.ndarray]:
-    """Extract action arrays (T, n_act) from all trajectories."""
+    """Action arrays of every trajectory.
+
+    Args:
+        trajs (list[dict]): Trajectories.
+
+    Returns:
+        list[numpy.ndarray]: One array of shape ``(T, n_act)`` per trajectory.
+    """
     out: List[np.ndarray] = []
     for traj in trajs:
         actions = traj.get("actions", None)
@@ -240,7 +293,14 @@ def _collect_actions(trajs: List[Dict]) -> List[np.ndarray]:
 
 
 def _pad_stack(series: List[np.ndarray]) -> Optional[np.ndarray]:
-    """Pad all arrays to the same length and stack them into an (N, T) array."""
+    """Pad series to the same length with their last value and stack them.
+
+    Args:
+        series (list[numpy.ndarray]): 1D series.
+
+    Returns:
+        numpy.ndarray | None: Array of shape ``(N, T)``, or ``None`` for an empty list.
+    """
     if not series:
         return None
     max_len = max(s.shape[0] for s in series)
@@ -251,12 +311,14 @@ def _pad_stack(series: List[np.ndarray]) -> Optional[np.ndarray]:
 
 
 def _rmse_with_std(stacked: np.ndarray):
-    """Per-timestep RMSE and its std across rollouts.
+    """Per-time-step RMSE over rollouts and its spread.
 
-    stacked: (N, T) array of scalar error values.
-    Returns (rmse, std) each of shape (T,), where
-      rmse[t] = sqrt(mean(stacked[:, t]**2))
-      std[t]  = std of the per-rollout RMS contributions
+    Args:
+        stacked (numpy.ndarray): Errors, shape ``(N, T)``.
+
+    Returns:
+        tuple[numpy.ndarray, numpy.ndarray]: ``rmse[t] = sqrt(mean(stacked[:, t]**2))`` and the
+        standard deviation of the per-rollout absolute errors, shape ``(T,)`` each.
     """
     sq = stacked ** 2
     rmse = np.sqrt(np.mean(sq, axis=0))
@@ -269,7 +331,12 @@ def _rmse_with_std(stacked: np.ndarray):
 # --- Plot helpers ---
 
 def _savefig(fig: plt.Figure, output_path: Path) -> None:
-    """Save `fig` as both PNG (raster) and PDF (vector)."""
+    """Save a figure as PNG and PDF and close it.
+
+    Args:
+        fig (matplotlib.figure.Figure): Figure.
+        output_path (pathlib.Path): Output path; the suffix is replaced.
+    """
     png_path = output_path.with_suffix(".png")
     pdf_path = output_path.with_suffix(".pdf")
     fig.savefig(png_path, dpi=200, bbox_inches="tight")
@@ -285,14 +352,29 @@ _LAST_N = 10  # number of trailing samples used for the summary table
 
 
 def _sort_key(param_key: Tuple):
-    """Sort groups so SPPO-based methods always appear last."""
+    """Sort key that puts the SPPO-based groups last.
+
+    Args:
+        param_key (tuple): Parameter tuple of the group.
+
+    Returns:
+        tuple: Sort key.
+    """
     label = make_label(param_key)
     is_sppo = label.upper().startswith("SPPO")
     return (int(is_sppo),) + param_key
 
 
 def _end_stats(series: List[np.ndarray], last_n: int = _LAST_N) -> Tuple[float, float]:
-    """Mean and std (ddof=1) of per-trajectory tail means (last `last_n` samples)."""
+    """Mean and standard deviation over trajectories of the mean of the last samples.
+
+    Args:
+        series (list[numpy.ndarray]): One series per trajectory.
+        last_n (int): Number of final samples averaged per trajectory.
+
+    Returns:
+        tuple[float, float]: Mean and standard deviation (ddof = 1).
+    """
     tail_means = [float(np.mean(s[-min(last_n, len(s)):])) for s in series if len(s) > 0]
     if not tail_means:
         return float("nan"), float("nan")
@@ -300,10 +382,14 @@ def _end_stats(series: List[np.ndarray], last_n: int = _LAST_N) -> Tuple[float, 
 
 
 def _per_seed_mean(seed_trajs_list: List[List[Dict]], key: str) -> Optional[np.ndarray]:
-    """Compute the per-seed mean time series of a metric, stacked as (n_seeds, T).
+    """Mean time series of a metric for each seed.
 
-    Each element of seed_trajs_list is the list of trajectories for one seed.
-    Returns an array of shape (n_seeds, T), or None if there is no data.
+    Args:
+        seed_trajs_list (list[list[dict]]): Trajectories of each seed.
+        key (str): Key in ``eval_metrics``.
+
+    Returns:
+        numpy.ndarray | None: Array of shape ``(n_seeds, T)``, or ``None`` without data.
     """
     seed_means = []
     for trajs in seed_trajs_list:
@@ -322,7 +408,15 @@ def _per_seed_mean(seed_trajs_list: List[List[Dict]], key: str) -> Optional[np.n
 
 
 def _per_seed_action_mean(seed_trajs_list: List[List[Dict]], dim: int) -> Optional[np.ndarray]:
-    """Compute the per-seed mean of one action dimension, stacked as (n_seeds, T)."""
+    """Mean time series of one action component for each seed.
+
+    Args:
+        seed_trajs_list (list[list[dict]]): Trajectories of each seed.
+        dim (int): Action component.
+
+    Returns:
+        numpy.ndarray | None: Array of shape ``(n_seeds, T)``, or ``None`` without data.
+    """
     seed_means = []
     for trajs in seed_trajs_list:
         series = [
@@ -347,7 +441,13 @@ def plot_error_comparison(
     output_dir: Path,
     dt: float = 0.02,
 ) -> None:
-    """Position error and yaw error: separate figures, mean ± std across seeds."""
+    """Plot position and yaw error over time, mean and standard deviation over seeds, one curve per group.
+
+    Args:
+        groups (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments``.
+        output_dir (pathlib.Path): Output folder.
+        dt (float): Time step of the rollouts [s].
+    """
     fig_pos, ax_pos = plt.subplots(figsize=(7, 5))
     fig_yaw, ax_yaw = plt.subplots(figsize=(7, 5))
 
@@ -439,7 +539,13 @@ def plot_input_trajectories(
     output_path: Path,
     action_labels: Optional[List[str]] = None,
 ) -> None:
-    """Mean ± std of action trajectories, one shaded band per condition."""
+    """Plot the mean and standard deviation of each action component, one band per group.
+
+    Args:
+        groups (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments``.
+        output_path (pathlib.Path): Output figure.
+        action_labels (list[str], optional): Labels of the action components.
+    """
     # Discover action dimensionality from the first available trajectory
     n_act = None
     for _, exp_dirs in sorted(groups.items()):
@@ -526,37 +632,21 @@ def _action_jerk_stats(
     trajs: List[Dict],
     action_limits: Optional[Tuple[np.ndarray, np.ndarray]] = None,
 ) -> Optional[Dict]:
-    """Compute per-trajectory action jerk / total-variation statistics.
+    """Statistics of the step-to-step variation of the actions.
 
-    Jerk at each step is the L2-norm of the per-step action difference,
-    optionally normalised by the input span so that all dimensions are
-    comparable on a [0, 1] scale:
+    The jerk at each step is ``||(a[t+1] - a[t]) / span||_2``, with ``span``
+    the input range of each component (no normalisation when
+    ``action_limits`` is ``None``); its sum over the episode is the total
+    variation.
 
-        span   = max_input - min_input          (element-wise)
-        Δa_n   = (a[t+1] - a[t]) / span        (normalised diff, shape (n_act,))
-        jerk[t] = ||Δa_n[t]||_2                (combined, scalar)
+    Args:
+        trajs (list[dict]): Trajectories.
+        action_limits (tuple[numpy.ndarray, numpy.ndarray], optional): ``(min_input, max_input)`` per component.
 
-    When `action_limits` is None the raw (unnormalised) differences are used.
-
-    Parameters
-    ----------
-    trajs         : list of trajectory dicts (from msgpack files)
-    action_limits : optional (min_input, max_input) arrays of shape (n_act,)
-                    used to normalise each dimension before computing the norm.
-
-    Returns a dict with keys:
-        normalised      : bool – whether normalisation was applied
-        span            : normalisation span per dim (or None)
-        mean_jerk       : mean jerk per step (averaged over time then over trajs)
-        std_jerk        : std of per-traj mean-jerk across trajectories
-        integral_jerk   : total variation = sum_t jerk[t] per traj, then mean
-        std_integral    : std of total variation across trajectories
-        per_dim_span    : span per dimension (for display)
-        per_dim_mean_jerk   : mean |Δa_i / span_i| per step, per dimension
-        per_dim_std_jerk    : std across trajectories
-        per_dim_integral    : total variation per dimension (normalised)
-        per_dim_std_integral: std across trajectories
-        n_trajs         : number of trajectories used
+    Returns:
+        dict | None: ``normalised``, ``span``, ``mean_jerk``, ``std_jerk``, ``integral_jerk``,
+        ``std_integral``, the per-component values (``per_dim_*``) and ``n_trajs``;
+        ``None`` without actions.
     """
     actions_list = _collect_actions(trajs)
     if not actions_list:
@@ -619,7 +709,14 @@ def _action_jerk_stats(
 
 
 def _get_action_limits(param_key: Tuple) -> Optional[Tuple[np.ndarray, np.ndarray]]:
-    """Return (min_input, max_input) for the env in param_key, or None if unknown."""
+    """Input limits of the environment of a parameter group.
+
+    Args:
+        param_key (tuple): Parameter tuple of the group.
+
+    Returns:
+        tuple[numpy.ndarray, numpy.ndarray] | None: ``(min_input, max_input)``, or ``None`` for an unknown environment.
+    """
     params = dict(param_key)
     env = params.get("env", "")
     return _ENV_INPUT_LIMITS.get(env, None)
@@ -630,15 +727,15 @@ def _time_to_goal(
     goal_radius: float = 0.05,
     dt: float = 0.02,
 ) -> Dict:
-    """Compute time-to-goal statistics across trajectories.
+    """Time to reach the goal, over a set of trajectories.
 
-    For each trajectory, finds the first timestep where distance_to_target
-    drops below `goal_radius`.  Returns a dict with:
-        n_reached   : number of trajectories that reached the goal
-        mean_time   : mean time-to-goal [s] over reaching trajectories
-        std_time    : std of time-to-goal [s]
-        min_time    : fastest trajectory
-        max_time    : slowest trajectory that still reached the goal
+    Args:
+        dist_series (list[numpy.ndarray]): Distance to the target of each trajectory.
+        goal_radius (float): Distance below which the goal is reached [m].
+        dt (float): Time step [s].
+
+    Returns:
+        dict: ``n_reached``, ``mean_time``, ``std_time``, ``min_time`` and ``max_time`` [s].
     """
     times: List[float] = []
     for s in dist_series:
@@ -665,7 +762,15 @@ def print_metrics_summary(
     last_n: int = _LAST_N,
     dt: float = 0.02,
 ) -> None:
-    """Print accuracy and action-jerk statistics to stdout for each condition group."""
+    """Print accuracy, time to goal and action variation for each group.
+
+    Args:
+        groups (dict[tuple, list[pathlib.Path]]): Output of ``group_experiments``.
+        action_labels (list[str], optional): Labels of the action components.
+        action_limits_override (tuple[numpy.ndarray, numpy.ndarray], optional): Input limits used instead of the known ones.
+        last_n (int): Final samples used for the steady-state values.
+        dt (float): Time step [s].
+    """
     args_dt = dt  # alias used inside the loop
     sep = "=" * 80
     thin = "-" * 80
@@ -760,6 +865,7 @@ def print_metrics_summary(
 # --- Main ---
 
 def main() -> None:
+    """Command-line entry point: group the experiments of a sweep folder, plot them and print the summary."""
     parser = argparse.ArgumentParser(
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,

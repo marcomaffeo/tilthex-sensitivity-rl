@@ -28,7 +28,16 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply SPPO-specific environment wrappers."""
+    """Apply the SPPO wrapper stack to an environment.
+
+    Args:
+        env (environment.Environment): Base environment (e.g. ``TilthexV1``).
+        config (dict): Training configuration; reads ``CONSTRAINTS``, ``SENSITIVITY``,
+            ``DOMAIN_RANDOMIZATION``, ``NORMALIZE_ENV`` and ``GAMMA``.
+
+    Returns:
+        GymnaxWrapper: The wrapped, vectorised environment.
+    """
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 
@@ -56,13 +65,15 @@ def wrap_env(env, config):
 
 
 def make_loss_fn(config, graphdef):
-    """Create SPPO loss function with GRU-based ActorCritic.
+    """Create the SPPO loss function of the policy network.
 
     Args:
-        graphdef: NNX graphdef for ActorCriticGRU network
+        config (dict): Training configuration (clipping, loss coefficients).
+        graphdef (nnx.GraphDef): Graph definition of the ActorCriticGRU network.
 
-    Returns a function with signature:
-        loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux_metrics)
+    Returns:
+        Callable: ``loss_fn(params, traj_batch, advantages, targets) -> (total_loss, aux)``, where ``aux``
+        holds the value loss, actor loss, entropy and the KL and clipping statistics.
     """
 
     def _loss_fn(params, traj_batch, advantages, targets):
@@ -119,15 +130,17 @@ def make_loss_fn(config, graphdef):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Create trajectory collection function for SPPO.
+    """Create the step function that collects one transition per environment.
 
     Args:
-        config: Training configuration
-        env: Wrapped environment
-        env_params: Environment parameters
-        networks: Dict returned by init_networks containing 'network', etc.
+        config (dict): Training configuration.
+        env (GymnaxWrapper): Wrapped environment returned by ``wrap_env``.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
 
-    Returns a function for use with jax.lax.scan that collects transitions.
+    Returns:
+        Callable: ``env_step(runner_state, unused) -> (runner_state, transition)``,
+        for use with ``jax.lax.scan``.
     """
     graphdef = networks["graphdef"]
 
@@ -184,7 +197,17 @@ def make_collect_fn(config, env, env_params, networks):
 
 
 def calculate_gae(config, traj_batch, networks, collect_state):
-    """Calculate GAE for SPPO-aug (both standard and sensitivity)."""
+    """Compute the generalised advantage estimates of a rollout.
+
+    Args:
+        config (dict): Training configuration (``GAMMA``, ``GAE_LAMBDA``).
+        traj_batch (Transition): Collected transitions, shape ``(NUM_STEPS, NUM_ENVS, ...)``.
+        networks (dict): Output of ``init_networks``.
+        collect_state (RunnerState): Runner state at the end of the rollout, used to bootstrap the last value.
+
+    Returns:
+        tuple[dict, RunnerState]: The dict with ``advantages`` and ``targets``, and the runner state.
+    """
 
     model = nnx.merge(networks["graphdef"], collect_state.train_state.params)
     last_val, _ = model.critic(
@@ -203,10 +226,17 @@ def calculate_gae(config, traj_batch, networks, collect_state):
 
 
 def init_networks(config, env, env_params, rng, load_params_fn=None):
-    """Initialize GRU-based ActorCritic network for SPPO.
+    """Create the networks and their training states.
+
+    Args:
+        config (dict): Training configuration (layer sizes, activation, learning rate).
+        env (GymnaxWrapper): Wrapped environment, used for the observation and action sizes.
+        env_params (EnvParams): Environment parameters.
+        rng (jax.Array): PRNG key for the initialisation.
+        load_params_fn (Callable, optional): Function that loads pre-trained actor weights.
 
     Returns:
-        dict with keys: graphdef, train_state, gru_hidden_size
+        dict: ``graphdef``, ``train_state`` and ``gru_hidden_size``.
     """
     gru_hidden_size = config.get("GRU_HIDDEN_SIZE", 64)
     obs_dim = env.observation_space(env_params).shape[0]
@@ -240,10 +270,17 @@ def init_networks(config, env, env_params, rng, load_params_fn=None):
 
 
 def init_runner_state(config, env, env_params, networks, rng):
-    """Create initial runner state for SPPO.
+    """Reset the environments and build the initial runner state.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+        rng (jax.Array): PRNG key.
 
     Returns:
-        RunnerState NamedTuple
+        RunnerState: Initial runner state, with the algorithm-specific entries in ``extras``.
     """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
@@ -265,7 +302,15 @@ def init_runner_state(config, env, env_params, networks, rng):
 
 
 def build_eval_state(update_state, collect_state):
-    """Build eval carry for recurrent actor-critic models."""
+    """Build the carry of the deterministic evaluation loop.
+
+    Args:
+        update_state (UpdateState): Current update state (parameters and PRNG key).
+        collect_state (RunnerState): Current runner state (environment state, observation, GRU hidden state).
+
+    Returns:
+        tuple: ``(params, env_state, last_obs, rng, gru_hidden)``.
+    """
     return (
         update_state.train_state.params,
         collect_state.env_state,
@@ -276,7 +321,17 @@ def build_eval_state(update_state, collect_state):
 
 
 def make_eval_step_fn(config, graphdef, env, env_params):
-    """Deterministic eval step for GRU-based policies."""
+    """Create a deterministic environment step for the evaluation rollouts.
+
+    Args:
+        config (dict): Training configuration.
+        graphdef (nnx.GraphDef): Graph definition of the policy network.
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+
+    Returns:
+        Callable: ``eval_step(eval_state, unused) -> (eval_state, info)`` that applies the mean action.
+    """
 
     def _eval_step(eval_state, _unused):
         params, env_state, last_obs, rng, gru_hidden = eval_state

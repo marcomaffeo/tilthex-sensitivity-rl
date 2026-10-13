@@ -1,3 +1,5 @@
+"""Interactive console script to load the TeleKyb3 components and fly a policy without ROS 2."""
+
 import genomix
 import os
 
@@ -24,6 +26,17 @@ components = TK3Components_tilthex(Path("logs"))
 
 
 def policy_setpoint(x: float, y: float, z: float, yaw: float):
+    """Fly the policy for 10 s towards a position and yaw, at ``CONTROL_FREQ``.
+
+    The horizontal position is measured from the position at the call. Stop
+    with Ctrl+C, which also stops the components.
+
+    Args:
+        x (float): Target x relative to the start [m].
+        y (float): Target y relative to the start [m].
+        z (float): Target height [m].
+        yaw (float): Target yaw [rad].
+    """
     init_state = read_state_and_rot_w(components)
     init_time = time()
 
@@ -83,4 +96,3 @@ def policy_setpoint(x: float, y: float, z: float, yaw: float):
     
     # rotorcraft.set_ramp(1e-3)
     # land()
-

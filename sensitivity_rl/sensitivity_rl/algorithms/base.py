@@ -16,7 +16,14 @@ from buffers import RunnerState
 
 
 def default_extract_losses(loss_info):
-    """Standard 7-metric loss extraction used by most PPO-family algorithms."""
+    """Turn the loss information of a PPO-style update into scalar metrics.
+
+    Args:
+        loss_info (tuple): ``(total_loss, (value_loss, actor_loss, entropy, old_approx_kl, approx_kl, clipfrac))``.
+
+    Returns:
+        tuple[dict, None]: Mean of each metric, and no algorithm-specific metrics.
+    """
     total_losses, (
         value_losses,
         actor_losses,
@@ -38,7 +45,18 @@ def default_extract_losses(loss_info):
 
 
 def default_init_runner_state(config, env, env_params, networks, rng):
-    """Standard runner state init: reset env, no extras."""
+    """Reset the environments and build the initial runner state, without extras.
+
+    Args:
+        config (dict): Training configuration (``NUM_ENVS``).
+        env (GymnaxWrapper): Wrapped environment.
+        env_params (EnvParams): Environment parameters.
+        networks (dict): Output of ``init_networks``.
+        rng (jax.Array): PRNG key.
+
+    Returns:
+        RunnerState: Initial runner state.
+    """
     rng, _rng = jax.random.split(rng)
     reset_rng = jax.random.split(_rng, config["NUM_ENVS"])
     obsv, env_state = env.reset(reset_rng, env_params)
@@ -52,7 +70,17 @@ def default_init_runner_state(config, env, env_params, networks, rng):
 
 
 def default_run_dir(algo_name, config, runs_root, ts):
-    """Standard run directory: ``<env>/<ALGO>_[DR_]<timestamp>``."""
+    """Run directory ``<runs_root>/<ENV_NAME>/<ALGO>_[DR_]<timestamp>``.
+
+    Args:
+        algo_name (str): Short algorithm label, e.g. ``"PPO"``.
+        config (dict): Training configuration (``ENV_NAME``, ``DOMAIN_RANDOMIZATION``).
+        runs_root (pathlib.Path): Root folder of the runs.
+        ts (str): Timestamp.
+
+    Returns:
+        pathlib.Path: Run directory.
+    """
     suffix = (
         f"{algo_name}_DR_{ts}"
         if config.get("DOMAIN_RANDOMIZATION", False)
@@ -62,7 +90,15 @@ def default_run_dir(algo_name, config, runs_root, ts):
 
 
 def default_build_eval_state(update_state, collect_state):
-    """Default eval carry state (non-recurrent policies)."""
+    """Build the carry of the deterministic evaluation loop for non-recurrent policies.
+
+    Args:
+        update_state (UpdateState): Current update state.
+        collect_state (RunnerState): Current runner state.
+
+    Returns:
+        tuple: ``(params, env_state, last_obs, rng)``.
+    """
     return (
         update_state.train_state.params,
         collect_state.env_state,
@@ -120,6 +156,7 @@ class AlgorithmSpec:
     make_eval_step_fn: Optional[Callable] = None
 
     def __post_init__(self):
+        """Replace the optional fields left to ``None`` with the default implementations."""
         if self.extract_losses is None:
             self.extract_losses = default_extract_losses
         if self.init_runner_state is None:

@@ -98,7 +98,8 @@ See [`data_analysis/README.md`](data_analysis/README.md) for every campaign and 
 ## Documentation website
 
 The README files and an API reference generated from the source code are also available as a
-website, built with Sphinx:
+website: <https://marcomaffeo.github.io/tilthex-sensitivity-rl/>. It is rebuilt at every push to
+`main`. To build it locally:
 
 ```bash
 cd docs
@@ -150,11 +151,9 @@ make install
 | Real flights | Tilthex, IRISA flight arena (May 2026) | code at tag `flight-campaign` |
 | Analysis: every table regenerated from the `data.npz` files | Linux (October 2026) | identical to the tracked tables up to floating-point rounding |
 
-## Credits and licence
+## Credits
 
 Thesis work of Marco Maffeo. The training framework in `sensitivity_rl/` was started by
 Tommaso Belvedere and Antonio Marino (IRISA), whose commits are kept in the history.
 The TeleKyb3 integration builds on the setup by Tommaso Belvedere and Olivier Roussel (Inria).
 TeleKyb3 and GenoM3 are developed at LAAS-CNRS.
-
-No licence has been chosen yet: please ask before reusing the code.

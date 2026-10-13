@@ -80,7 +80,7 @@ def cleanup(procs=None):
 
     subprocess.run("killall -9 ruby gz-server gz-sim-server gz", shell=True, stderr=subprocess.DEVNULL)
     
-    genom_targets = ["optitrack-genom3", "pom-genom3", "rotorcraft-genom3", "nhfc-genom3", "maneuver-genom3", "dynamixel-genom3", "h2"]
+    genom_targets = ["optitrack-genom3", "pom-genom3", "rotorcraft-genom3", "nhfc-genom3", "maneuver-genom3", "h2"]
     for t in genom_targets:
         subprocess.run(f"killall -9 {t}", shell=True, stderr=subprocess.DEVNULL)
         
@@ -269,7 +269,7 @@ if __name__ == "__main__":
     CAMPAIGN_DIR = os.path.join("campaigns", f"{POLICY_NAME}_campaign_{TIMESTAMP}")
     NOMINAL_DIR = os.path.join(CAMPAIGN_DIR, "nominal")
     PERTURBED_DIR = os.path.join(CAMPAIGN_DIR, "perturbed")
-    RAW_DATA_DIR = os.path.join(CAMPAIGN_DIR, "mc_data") # <- Rinominata per renderla visibile
+    RAW_DATA_DIR = os.path.join(CAMPAIGN_DIR, "mc_data")
     
     os.makedirs(CAMPAIGN_DIR, exist_ok=True)
     os.makedirs(PERTURBED_DIR, exist_ok=True)
@@ -285,7 +285,7 @@ if __name__ == "__main__":
     
     cleanup()
     
-    # === TEST NOMINALE ===
+    # === Nominal run ===
     nominal_npz_path = os.path.join(NOMINAL_DIR, "error_data.npz")
     attempt = 1
     while not os.path.exists(nominal_npz_path):
@@ -295,7 +295,7 @@ if __name__ == "__main__":
         run_test("nominal", {}, NOMINAL_DIR, skip_plots=False, npz_name="error_data.npz")
         attempt += 1
     
-    # === TEST PERTURBATI ===
+    # === Perturbed runs ===
     for run_name, overrides in PERTURBATIONS.items():
         file_name = f"{run_name}.npz"
         target_npz_path = os.path.join(RAW_DATA_DIR, file_name)

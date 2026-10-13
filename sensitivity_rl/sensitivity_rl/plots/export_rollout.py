@@ -1,4 +1,4 @@
-#!/usr/bin/env python3 
+#!/usr/bin/env python3
 import argparse 
 import numpy as np 
 from pathlib import Path 
@@ -17,7 +17,7 @@ def process_error_data(errors):
 
 def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=None, ext="svg"): 
     # ========================================== 
-    # PUBLICATION-READY LATEX STYLE SETTINGS 
+    # Plot style for the thesis figures
     # ========================================== 
     plt.rcParams.update({ 
         "text.usetex": False, 
@@ -50,10 +50,10 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     num_series = state_data.shape[0] 
     is_comparison = nominal_dict is not None
 
-    # Colori 
-    traj_color = '#1f77b4'         # Blu (Nominale standard o Perturbato base)
-    traj_color_light = '#9ecae1'   # Azzurro chiaro per il fascio perturbato in 3D
-    nom_color = '#ff7f0e'          # Arancione spesso per l'overlay nominale in comparazione
+    # Colours
+    traj_color = '#1f77b4'         # Blue (nominal, or perturbed bundle)
+    traj_color_light = '#9ecae1'   # Light blue for the perturbed bundle in 3D
+    nom_color = '#ff7f0e'          # Orange for the nominal overlay
     start_color = '#2ca02c'  
     target_color = '#d62728' 
 
@@ -68,7 +68,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
 
     all_dist_errors, all_att_errors = [], [] 
 
-    # 1. OVERLAY DATI NOMINALI
+    # 1. Nominal overlay
     if is_comparison:
         nom_state = nominal_dict["state"]
         nom_act = nominal_dict["actions"]
@@ -86,7 +86,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
                     if idx < actions.shape[1]:
                         ax.plot(t_steps, actions[:, idx], color=nom_color, alpha=1.0, linewidth=2.0, zorder=10)
 
-    # 2. PLOT DATI PRINCIPALI
+    # 2. Main data
     for i in range(num_series): 
         state = state_data[i] 
         pos = state[:, :3] 
@@ -139,7 +139,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
                         ax.plot([], [], color=c_act, alpha=0.5, linewidth=1.0, label=r'$\mathrm{Perturbed}$')
                         ax.legend(loc='upper right', fontsize=12)
 
-    # --- Plot Errore ---
+    # --- Errors ---
     t_pos, mean_pos, std_pos = process_error_data(all_dist_errors) 
     if t_pos is not None: 
         ax_dist_err.plot(t_pos, mean_pos, color="blue", linewidth=2.5, label=r'$\bar{e}_p \pm \sigma$') 
@@ -150,14 +150,14 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
         ax_att_err.plot(t_att, mean_att, color="red", linewidth=2.5, label=r'$\bar{e}_a \pm \sigma$') 
         ax_att_err.fill_between(t_att, mean_att - std_att, mean_att + std_att, color="red", alpha=0.2) 
 
-    # --- FORMATTAZIONE 3D --- 
+    # --- 3D formatting ---
     ax_path.set(xlabel=r'$x$ [m]', ylabel=r'$y$ [m]', zlabel=r'$z$ [m]') 
     handles, labels = ax_path.get_legend_handles_labels() 
     if labels: 
         ax_path.legend(loc='best', frameon=True, edgecolor='black') 
     fig_3d.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05) 
 
-    # --- FORMATTAZIONE ERRORI --- 
+    # --- Error formatting ---
     ax_dist_err.set_ylabel(r'$e_p$ [m]') 
     handles, labels = ax_dist_err.get_legend_handles_labels() 
     if labels: 
@@ -171,7 +171,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     fig_err.align_ylabels() 
     fig_err.subplots_adjust(left=0.1, right=0.95, top=0.95, bottom=0.1, hspace=0.2) 
 
-    # --- FORMATTAZIONE AZIONI --- 
+    # --- Input formatting ---
     for idx, ax in enumerate(axes_act_flat): 
         ax.set_ylabel(labels_act[idx]) 
         ax.set_ylim(0, 12) 
@@ -182,7 +182,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     fig_act.align_ylabels() 
     fig_act.subplots_adjust(left=0.08, right=0.98, top=0.92, bottom=0.1, hspace=0.3, wspace=0.3) 
 
-    # Salvataggio Dinamico in base al formato scelto
+    # Save in the selected format
     output_dir.mkdir(parents=True, exist_ok=True) 
     fig_3d.savefig(output_dir / f"{base_name}_3d.{ext}", format=ext, transparent=False) 
     fig_err.savefig(output_dir / f"{base_name}_errors.{ext}", format=ext, transparent=True) 
@@ -192,7 +192,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     print(f"[{base_name.upper()}] Plots saved in: {output_dir}") 
 
 def extract_data_dict(data, suffix):
-    """Estrae i dizionari specifici (nom/pert) dal file unificato."""
+    """Extract the nominal or perturbed dictionaries from the unified file."""
     if f"state_{suffix}" not in data:
         return None
     res = {
@@ -207,8 +207,8 @@ def extract_data_dict(data, suffix):
 
 if __name__ == "__main__": 
     parser = argparse.ArgumentParser(description="Generate PDF/SVG plots from unificated .npz rollout data.") 
-    parser.add_argument("--data", type=str, required=True, help="Percorso del file rollout_data.npz") 
-    parser.add_argument("--format", type=str, choices=['svg', 'pdf'], default='svg', help="Formato di esportazione dei grafici (default: svg)")
+    parser.add_argument("--data", type=str, required=True, help="Path to the rollout_data.npz file") 
+    parser.add_argument("--format", type=str, choices=['svg', 'pdf'], default='svg', help="Figure format (default: svg)")
     args = parser.parse_args() 
 
     data_path = Path(args.data) 
@@ -228,15 +228,15 @@ if __name__ == "__main__":
     
     if nom_dict is not None:
         out_nom = base_outdir / "nominal"
-        print("Generazione plot nominali...")
+        print("Plotting the nominal rollouts...")
         generate_plots(nom_dict, out_nom, base_name="nominal", nominal_dict=None, ext=args.format)
     else:
         print("Nominal data not found in the .npz file.")
 
     if pert_dict is not None:
         out_pert = base_outdir / "perturbed"
-        print("Generazione plot perturbati (con overlay nominale se presente)...")
-        # Passiamo il nom_dict per creare l'overlay arancione nei grafici perturbati
+        print("Plotting the perturbed rollouts...")
+        # The nominal dict draws the orange overlay in the perturbed plots
         generate_plots(pert_dict, out_pert, base_name="perturbed", nominal_dict=nom_dict, ext=args.format)
     else:
         print("Perturbed data not found in the .npz file.")

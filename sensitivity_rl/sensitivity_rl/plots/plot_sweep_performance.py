@@ -15,7 +15,8 @@ Directory names are parsed generically to discover algorithm, env, domain-
 randomisation flag, seed, and other hyper-parameters.  Experiments are grouped by
 all parameters except seed.
 
-USAGE:
+USAGE::
+
     pixi run python sensitivity_rl/plots/plot_sweep_performance.py
     pixi run python sensitivity_rl/plots/plot_sweep_performance.py \\
         --sweeps_dir sensitivity_rl/plots/sweeps --dt 0.02
@@ -32,7 +33,7 @@ import matplotlib.pyplot as plt
 from flax import serialization
 
 
-# ─── Trajectory loading ──────────────────────────────────────────────────────
+# --- Trajectory loading ---
 
 def _load_traj(path: Path) -> Optional[Dict]:
     """Load a single trajectory msgpack file saved by flax.serialization."""
@@ -77,7 +78,7 @@ def load_nominal_rollouts_for_exp(exp_dir: Path) -> List[Dict]:
     return trajs
 
 
-# ─── Directory-name parsing ──────────────────────────────────────────────────
+# --- Directory-name parsing ---
 
 # Known environment base names and version tokens
 _ENV_BASES = {"drone", "halfcheetah", "pendulum", "reacher"}
@@ -167,7 +168,7 @@ def group_experiments(sweeps_dir: Path) -> Dict[Tuple, List[Path]]:
     return groups
 
 
-# ─── Label generation ────────────────────────────────────────────────────────
+# --- Label generation ---
 
 _METHOD_SHORT: Dict[str, str] = {
     "sppo_aug_grad_param_dual": "SPPO",
@@ -210,7 +211,7 @@ def make_label(param_key: Tuple) -> str:
     return label
 
 
-# ─── Metric helpers ───────────────────────────────────────────────────────────
+# --- Metric helpers ---
 
 def _collect_metric(trajs: List[Dict], key: str) -> List[np.ndarray]:
     """Extract a flat 1-D time series from eval_metrics across all trajectories."""
@@ -239,7 +240,7 @@ def _collect_actions(trajs: List[Dict]) -> List[np.ndarray]:
 
 
 def _pad_stack(series: List[np.ndarray]) -> Optional[np.ndarray]:
-    """Pad all arrays to the same length and stack → (N, T)."""
+    """Pad all arrays to the same length and stack them into an (N, T) array."""
     if not series:
         return None
     max_len = max(s.shape[0] for s in series)
@@ -259,14 +260,13 @@ def _rmse_with_std(stacked: np.ndarray):
     """
     sq = stacked ** 2
     rmse = np.sqrt(np.mean(sq, axis=0))
-    # Std of individual squared errors, propagated through sqrt via delta method:
-    # std(sqrt(mean)) ≈ std(x) / (2 * sqrt(mean(x)))  — but simpler to just show
-    # the std of the per-rollout root values so the shading is interpretable.
+    # The shading shows the std of the per-rollout RMS values, which is
+    # easier to read than the delta-method std of the RMSE.
     std = np.std(np.sqrt(sq), axis=0)
     return rmse, std
 
 
-# ─── Plot helpers ───────────────────────────────────────────────────────────
+# --- Plot helpers ---
 
 def _savefig(fig: plt.Figure, output_path: Path) -> None:
     """Save `fig` as both PNG (raster) and PDF (vector)."""
@@ -278,7 +278,7 @@ def _savefig(fig: plt.Figure, output_path: Path) -> None:
     print(f"Saved: {pdf_path}")
 
 
-# ─── Plots ───────────────────────────────────────────────────────────────────
+# --- Plots ---
 
 _COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 _LAST_N = 10  # number of trailing samples used for the summary table
@@ -300,10 +300,10 @@ def _end_stats(series: List[np.ndarray], last_n: int = _LAST_N) -> Tuple[float, 
 
 
 def _per_seed_mean(seed_trajs_list: List[List[Dict]], key: str) -> Optional[np.ndarray]:
-    """Compute per-seed mean time series for a metric, then stack → (n_seeds, T).
+    """Compute the per-seed mean time series of a metric, stacked as (n_seeds, T).
 
     Each element of seed_trajs_list is the list of trajectories for one seed.
-    Returns array of shape (n_seeds, T) or None if no data.
+    Returns an array of shape (n_seeds, T), or None if there is no data.
     """
     seed_means = []
     for trajs in seed_trajs_list:
@@ -322,7 +322,7 @@ def _per_seed_mean(seed_trajs_list: List[List[Dict]], key: str) -> Optional[np.n
 
 
 def _per_seed_action_mean(seed_trajs_list: List[List[Dict]], dim: int) -> Optional[np.ndarray]:
-    """Compute per-seed mean for one action dimension → (n_seeds, T)."""
+    """Compute the per-seed mean of one action dimension, stacked as (n_seeds, T)."""
     seed_means = []
     for trajs in seed_trajs_list:
         series = [
@@ -367,7 +367,7 @@ def plot_error_comparison(
 
         all_trajs = [t for trajs in seed_trajs_list for t in trajs]
 
-        # ── Position error ────────────────────────────────────────────────
+        # Position error
         per_seed_dist = _per_seed_mean(seed_trajs_list, "distance_to_target")
         dist_series_all = _collect_metric(all_trajs, "distance_to_target")
         stacked_dist_all = _pad_stack(dist_series_all)
@@ -381,7 +381,7 @@ def plot_error_comparison(
             ax_pos.fill_between(t, mean - std, mean + std, color=color, alpha=0.2)
             _pos_inset_data.append((t, mean, std, color))
 
-        # ── Yaw error ─────────────────────────────────────────────────────
+        # Yaw error
         per_seed_yaw = _per_seed_mean(seed_trajs_list, "yaw_error")
         yaw_series_all = _collect_metric(all_trajs, "yaw_error")
         stacked_yaw_all = _pad_stack(yaw_series_all)
@@ -394,7 +394,7 @@ def plot_error_comparison(
             ax_yaw.plot(t, mean, color=color, label=leg, linewidth=2)
             ax_yaw.fill_between(t, mean - std, mean + std, color=color, alpha=0.2)
 
-    # ── Inset zoom on position error (last 30% of trajectory) ────────────────
+    # Inset zoom on the position error (last 30% of the trajectory)
     if _pos_inset_data:
         t_max = max(d[0][-1] for d in _pos_inset_data)
         zoom_start = t_max * 0.70
@@ -409,7 +409,7 @@ def plot_error_comparison(
         axins.grid(True, alpha=0.3)
         ax_pos.indicate_inset_zoom(axins, edgecolor="gray", alpha=0.5)
 
-    # ── Finalise position figure ──────────────────────────────────────────
+    # Finalise the position figure
     ax_pos.set_xlabel("Time [s]")
     ax_pos.set_ylabel("Position error [m]")
     ax_pos.set_title("Position Error (Mean \u00b1 Std across seeds)")
@@ -420,7 +420,7 @@ def plot_error_comparison(
     _savefig(fig_pos, output_dir / "sweep_position_error")
     plt.close(fig_pos)
 
-    # ── Finalise yaw figure ───────────────────────────────────────────────
+    # Finalise the yaw figure
     ax_yaw.set_xlabel("Time [s]")
     ax_yaw.set_ylabel("Yaw error [rad]")
     ax_yaw.set_title("Yaw Error (Mean \u00b1 Std across seeds)")
@@ -520,7 +520,7 @@ def plot_input_trajectories(
     plt.close(fig)
 
 
-# ─── Metrics summary (terminal) ──────────────────────────────────────────────
+# --- Metrics summary (terminal) ---
 
 def _action_jerk_stats(
     trajs: List[Dict],
@@ -683,7 +683,7 @@ def print_metrics_summary(
         print(f"\n  Condition: {label}  ({len(exp_dirs)} seeds, {len(all_trajs)} trajs)")
         print(thin)
 
-        # ── Accuracy ─────────────────────────────────────────────────────────
+        # Accuracy
         dist_series = _collect_metric(all_trajs, "distance_to_target")
         yaw_series = _collect_metric(all_trajs, "yaw_error")
 
@@ -700,7 +700,7 @@ def print_metrics_summary(
         else:
             print("  Position error: no data")
 
-        # ── Time to goal ──────────────────────────────────────────────────────
+        # Time to goal
         _ttg = _time_to_goal(dist_series, goal_radius=0.05, dt=args_dt)
         if _ttg["n_reached"] > 0:
             n_tot = len(dist_series)
@@ -724,7 +724,7 @@ def print_metrics_summary(
         else:
             print("  Yaw error: no data")
 
-        # ── Action jerk ───────────────────────────────────────────────────────
+        # Action jerk
         limits = action_limits_override or _get_action_limits(param_key)
         jerk = _action_jerk_stats(all_trajs, action_limits=limits)
         nominal_trajs = [t for d in exp_dirs for t in load_nominal_rollouts_for_exp(d)]
@@ -757,7 +757,7 @@ def print_metrics_summary(
     print(f"\n{sep}\n")
 
 
-# ─── Main ────────────────────────────────────────────────────────────────────
+# --- Main ---
 
 def main() -> None:
     parser = argparse.ArgumentParser(

@@ -1,23 +1,23 @@
 # @package _global_
-# Drone V3 environment configuration
+# Quadrotor environment
 
 # Environment settings
 ENV_NAME: drone_v3
 
 # Environment-specific parameters
 NUM_ENVS: 2048
-NUM_STEPS: 200          # Steps collected per training update (used as episode length during training)
-EVAL_MAX_STEPS_IN_EPISODE: 300  # Episode length used during rollout/testing
+NUM_STEPS: 200          # Steps per update, also the training episode length
+EVAL_MAX_STEPS_IN_EPISODE: 300  # Episode length of the rollouts
 SENSITIVITY_NUM_STEPS: 50
 TOTAL_TIMESTEPS: 5e7
 NUM_MINIBATCHES: 128
 
-# Override network architecture for drone
+# Network
 ACTIVATION: tanh
 ANNEAL_LR: true
 GRU_HIDDEN_SIZE: 64
 
-# Override some RL parameters for drone
+# RL parameters
 GAMMA: 0.98
 CLIP_EPS: 0.2
 ENT_COEF: 0.001

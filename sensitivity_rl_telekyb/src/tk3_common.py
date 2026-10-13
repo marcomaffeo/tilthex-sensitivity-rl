@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 from scipy.spatial.transform import Rotation
 
-# Auto-detect target
+# Target architecture
 IS_REAL_ROBOT = (platform.machine() == "aarch64")
 
 def setup_plugin_paths(g):
@@ -23,7 +23,7 @@ def setup_plugin_paths(g):
     # $HOME/openrobots is the robotpkg prefix recommended by the TeleKyb3 installation guide
     paths.append(os.path.expanduser('~/openrobots/lib/genom/pocolibs/plugins'))
 
-    # Fallback paths for the real hardware workspace
+    # Paths of the workspace on the vehicle
     if IS_REAL_ROBOT:
         paths.append('/home/onepiece/openrobots/lib/genom/pocolibs/plugins')
         paths.append('/home/onepiece/devel/lib/genom/pocolibs/plugins')
@@ -33,7 +33,7 @@ def setup_plugin_paths(g):
             g.rpath(p)
 
 class TK3Components_tilthex:
-    """TiltHex Platform (Sim and Real hardware auto-switching)"""
+    """TeleKyb3 components of the Tilthex, in simulation or on the vehicle."""
     def __init__(self, log_dir: Path):
         """Connect to genomix and load the components. The motion capture is optitrack in simulation
         (x86_64) and qualisys on the vehicle (aarch64). ``log_dir`` is the folder of the flight logs.
@@ -66,10 +66,7 @@ class TK3Components_tilthex:
         self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
         self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
-        # 28/09/2026: mass and centre-of-mass offset aligned with the CAD model
-        # (models/mrsim-tilthex-laas/tilthex_laas.sdf) and with the training environment.
-        # Before they were mass=2.936 and cx=cy=cz=0; the flights of the thesis used those
-        # values (nhfc is not active while the policy flies, so they did not affect them).
+        # Mass and centre-of-mass offset of models/mrsim-tilthex-laas/tilthex_laas.sdf
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
             'cx': 0.000122973, 'cy': 0.00013006, 'cz': 0.0248586,

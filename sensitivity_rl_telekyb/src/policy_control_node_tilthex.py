@@ -1,7 +1,7 @@
 #!/usr/bin/env python3 
-""" 
-Unified ROS2 node for TiltHex RL policy and PID testing with synchronized logging. 
-""" 
+"""
+ROS 2 node that flies the Tilthex with a trained policy or with the baseline controller, with synchronised logging.
+"""
 import os 
 import sys
 
@@ -111,7 +111,7 @@ class PolicyControlNode(Node):
         self.target_hold_z = 0.0  
         self.hold_x = 0.0 
         self.hold_y = 0.0 
-        self.ground_z = 0.0  # Conserva la quota assoluta del pavimento letta all'armaggio
+        self.ground_z = 0.0  # Absolute height of the floor, read when the motors are armed
         
         self.setpoint = np.array([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], dtype=np.float64)
         self.reference_setpoint = None  
@@ -346,7 +346,7 @@ class PolicyControlNode(Node):
                 self.hold_x = initial_state[0]
                 self.hold_y = initial_state[1]
                 self.target_hold_z = initial_state[2]
-                self.ground_z = initial_state[2]  # Salva la quota reale del pavimento
+                self.ground_z = initial_state[2]  # Height of the floor
                 
                 euler_init = quat_to_euler_xyz(initial_state[6:10])
                 self.init_yaw = euler_init[2]  
@@ -394,7 +394,7 @@ class PolicyControlNode(Node):
                 start_x = measured_start_x
                 start_y = measured_start_y
             takeoff_h = float(self.get_parameter('takeoff_height').value)
-            target_z = takeoff_h  # Quota assoluta POM
+            target_z = takeoff_h  # Absolute height in the pom frame
 
             self.target_hold_z = target_z
             self.hold_x = start_x
@@ -579,7 +579,7 @@ class PolicyControlNode(Node):
         return response
     
     def stop_callback(self, request: Trigger.Request, response: Trigger.Response): 
-        """``/control/stop``: stop the policy loop, the baseline controller, the motors and the logs, without handing control back to nhfc."""
+        """``/control/stop``: emergency stop of the policy loop, the baseline controller, the motors and the logs."""
         try: 
             self.pid_active = False
             self.pid_test_stop_event.set()
@@ -808,7 +808,7 @@ class PolicyControlNode(Node):
                 start_x = measured_start_x
                 start_y = measured_start_y
             takeoff_h = float(self.get_parameter('takeoff_height').value)
-            target_z = takeoff_h  # Quota assoluta POM
+            target_z = takeoff_h  # Absolute height in the pom frame
 
             euler = quat_to_euler_xyz(state[6:10])
             current_yaw = euler[2] 
@@ -1602,7 +1602,7 @@ def run_mission_cli(args):
     set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
     set_mission_attitude_ref(True, 0.0, 0.0, yaw_ref)
 
-    # --- FASE 1: TAKEOFF ---
+    # --- Phase 1: takeoff ---
     if not call_srv(takeoff_cli, '/policy/takeoff'):
         set_mission_takeoff_xy_ref(False, 0.0, 0.0)
         set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
@@ -1618,18 +1618,18 @@ def run_mission_cli(args):
         f'publishing target xyz=[{target_world[0]:.3f}, {target_world[1]:.3f}, {target_world[2]:.3f}]'
     )
 
-    # --- FASE 2: STAGE DEL PUNTO ---
+    # --- Phase 2: set the reference ---
     publish_absolute_point(target_world, yaw_ref)
     time.sleep(0.5)
 
-    # --- FASE 3: ESECUZIONE PUNTO ---
+    # --- Phase 3: move to the point ---
     if not call_srv(start_cli, '/policy/start'):
         set_mission_attitude_ref(False, 0.0, 0.0, 0.0)
         return
     node.get_logger().info(f'[TAKEOFF-TO-POINT-LAND] Waiting {wait_s}s at point...')
     time.sleep(wait_s)
 
-    # --- FASE 4: LANDING ---
+    # --- Phase 4: landing ---
     set_mission_takeoff_xy_ref(True, target_world[0], target_world[1])
     set_mission_land_z_ref(True, land_ref_z)
     if not call_srv(land_cli, '/policy/land'):
@@ -1643,17 +1643,13 @@ def run_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-TO-POINT-LAND] Waiting {wait_s}s for landing...')
     time.sleep(wait_s)
     
-    # --- FASE 5: SHUTDOWN AUTOMATICO ---
+    # --- Phase 5: motors off ---
     call_srv(stop_cli, '/control/stop')
     node.get_logger().info('[TAKEOFF-TO-POINT-LAND] Mission sequence complete. Motors stopped!')
 
     node.destroy_node()
     rclpy.shutdown()
 
-
-def run_legacy_mission_cli(args):
-    """Deprecated ``--mission`` entry point: prints the command to use instead."""
-    print("Warning: --mission is deprecated. Use --takeoff-to-point-land takeoff_z dx dy dz wait_s")
 
 def run_point_to_point_mission_cli(args):
     """Point-to-point mission of the thesis, ``--takeoff-zero-point-land takeoff_z x y z wait_s``:
@@ -1824,7 +1820,7 @@ def run_point_to_point_mission_cli(args):
     set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
     set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
 
-    # --- FASE 1: TAKEOFF ---
+    # --- Phase 1: takeoff ---
     # Calculate required takeoff rate to match wait_s duration
     dz_takeoff = abs(takeoff_ref[2] - ground_pos[2])
     rate_takeoff = dz_takeoff / wait_s if wait_s > 0.0 else 0.2
@@ -1838,7 +1834,7 @@ def run_point_to_point_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s for takeoff...')
     time.sleep(wait_s)
 
-    # --- FASE 2: PRIMO PUNTO WORLD ---
+    # --- Phase 2: first point (world frame) ---
     publish_absolute_setpoint(first_point, zero_attitude, 'first world point')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -1847,7 +1843,7 @@ def run_point_to_point_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s at first point...')
     time.sleep(wait_s)
 
-    # --- FASE 3: SECONDO PUNTO WORLD ---
+    # --- Phase 3: second point (world frame) ---
     publish_absolute_setpoint(second_point, zero_attitude, 'second world point')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -1856,7 +1852,7 @@ def run_point_to_point_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s at second point...')
     time.sleep(wait_s)
 
-    # --- FASE 4: LANDING SUL SECONDO PUNTO ---
+    # --- Phase 4: landing below the second point ---
     # Calculate required land rate to match wait_s duration
     dz_land = abs(second_point[2] - landing_point[2])
     rate_land = dz_land / wait_s if wait_s > 0.0 else 0.2
@@ -1872,7 +1868,7 @@ def run_point_to_point_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-POINT-TO-POINT-LAND] Waiting {wait_s}s for landing...')
     time.sleep(wait_s)
 
-    # --- FASE 5: SHUTDOWN AUTOMATICO ---
+    # --- Phase 5: motors off ---
     call_srv(stop_cli, '/control/stop')
     node.get_logger().info('[TAKEOFF-POINT-TO-POINT-LAND] Mission sequence complete. Motors stopped!')
 
@@ -2048,7 +2044,7 @@ def run_zero_attitude_zero_land_cli(args):
     set_mission_takeoff_xy_ref(True, takeoff_ref[0], takeoff_ref[1])
     set_mission_attitude_ref(True, takeoff_attitude[0], takeoff_attitude[1], takeoff_attitude[2])
 
-    # --- FASE 1: TAKEOFF ---
+    # --- Phase 1: takeoff ---
     dz_takeoff = abs(takeoff_ref[2] - ground_pos[2])
     rate_takeoff = dz_takeoff / wait_s if wait_s > 0.0 else 0.2
     set_ramp_rate(rate_takeoff)
@@ -2061,7 +2057,7 @@ def run_zero_attitude_zero_land_cli(args):
     node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s for takeoff...')
     time.sleep(wait_s)
 
-    # --- FASE 2: ZERO POINT WORLD ---
+    # --- Phase 2: zero point (world frame) ---
     publish_absolute_setpoint(zero_point, zero_attitude, 'zero point')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -2070,7 +2066,7 @@ def run_zero_attitude_zero_land_cli(args):
     node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at zero point...')
     time.sleep(wait_s)
 
-    # --- FASE 3: ATTITUDE ---
+    # --- Phase 3: attitude ---
     publish_absolute_setpoint(zero_point, attitude_target, 'attitude target')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -2079,7 +2075,7 @@ def run_zero_attitude_zero_land_cli(args):
     node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at attitude target...')
     time.sleep(wait_s)
 
-    # --- FASE 4: ZERO POINT CON YAW TARGET ---
+    # --- Phase 4: zero point with the target yaw ---
     publish_absolute_setpoint(zero_point, zero_with_target_yaw, 'zero point with target yaw')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -2088,8 +2084,8 @@ def run_zero_attitude_zero_land_cli(args):
     node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s at zero point with target yaw...')
     time.sleep(wait_s)
 
-    # --- FASE 5: LANDING SULLO ZERO POINT ---
-    # Fix: use the correct Z coordinate from zero_point to calculate distance
+    # --- Phase 5: landing below the zero point ---
+    # Landing distance from the height of the zero point
     dz_land = abs(zero_point[2] - land_point[2])
     rate_land = dz_land / wait_s if wait_s > 0.0 else 0.2
     set_ramp_rate(rate_land)
@@ -2104,7 +2100,7 @@ def run_zero_attitude_zero_land_cli(args):
     node.get_logger().info(f'[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Waiting {wait_s}s for landing...')
     time.sleep(wait_s)
 
-    # --- FASE 6: SHUTDOWN AUTOMATICO ---
+    # --- Phase 6: motors off ---
     call_srv(stop_cli, '/control/stop')
     node.get_logger().info('[TAKEOFF-ZERO-ATTITUDE-ZERO-LAND] Mission sequence complete. Motors stopped!')
 
@@ -2261,7 +2257,7 @@ def run_attitude_mission_cli(args):
     set_takeoff_height(takeoff_z)
     set_mission_takeoff_xy_ref(True, takeoff_pos[0], takeoff_pos[1])
 
-    # --- FASE 1: TAKEOFF ---
+    # --- Phase 1: takeoff ---
     if not call_srv(takeoff_cli, '/policy/takeoff'):
         set_mission_takeoff_xy_ref(False, 0.0, 0.0)
         return
@@ -2276,7 +2272,7 @@ def run_attitude_mission_cli(args):
         f'using takeoff reference xyz=[{takeoff_pos[0]:.3f}, {takeoff_pos[1]:.3f}, {takeoff_pos[2]:.3f}]'
     )
 
-    # --- FASE 2: INSEGUIMENTO ATTITUDE ---
+    # --- Phase 2: attitude tracking ---
     publish_absolute_setpoint(takeoff_pos, attitude_rpy, 'attitude target')
     time.sleep(0.5)
     if not call_srv(start_cli, '/policy/start'):
@@ -2284,7 +2280,7 @@ def run_attitude_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-ATTITUDE-LAND] Waiting {wait_s}s at attitude target...')
     time.sleep(wait_s)
 
-    # --- FASE 3: HOVERING CON YAW RAGGIUNTO ---
+    # --- Phase 3: hover at the target yaw ---
     hover_rpy = np.array([0.0, 0.0, yaw_target], dtype=np.float64)
     publish_absolute_setpoint(takeoff_pos, hover_rpy, 'hovering return')
     time.sleep(0.5)
@@ -2293,7 +2289,7 @@ def run_attitude_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-ATTITUDE-LAND] Waiting {wait_s}s in hover...')
     time.sleep(wait_s)
 
-    # --- FASE 4: LANDING ---
+    # --- Phase 4: landing ---
     set_mission_takeoff_xy_ref(True, takeoff_pos[0], takeoff_pos[1])
     set_mission_land_z_ref(True, land_ref_z)
     if not call_srv(land_cli, '/policy/land'):
@@ -2305,7 +2301,7 @@ def run_attitude_mission_cli(args):
     node.get_logger().info(f'[TAKEOFF-ATTITUDE-LAND] Waiting {wait_s}s for landing...')
     time.sleep(wait_s)
 
-    # --- FASE 5: SHUTDOWN AUTOMATICO ---
+    # --- Phase 5: motors off ---
     call_srv(stop_cli, '/control/stop')
     node.get_logger().info('[TAKEOFF-ATTITUDE-LAND] Mission sequence complete. Motors stopped!')
 
@@ -2389,7 +2385,5 @@ if __name__ == '__main__':
         run_zero_attitude_zero_land_cli(sys.argv[2:])
     elif len(sys.argv) > 1 and sys.argv[1] == '--takeoff-attitude-land':
         run_attitude_mission_cli(sys.argv[2:])
-    elif len(sys.argv) > 1 and sys.argv[1] == '--mission':
-        run_legacy_mission_cli(sys.argv[2:])
     else:
         main()

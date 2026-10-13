@@ -1,5 +1,5 @@
 [workspace]
-authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr"]
+authors = ["Tommaso Belvedere <tommaso.belvedere@irisa.fr>", "Olivier Roussel <olivier.roussel@inria.fr>"]
 channels = ["conda-forge", "robostack-jazzy"]
 name = "telekyb_sim"
 platforms = ["linux-64", "linux-aarch64"]
@@ -19,7 +19,7 @@ policy-control-tilthex-pytorch = {cmd = "python src/policy_control_node_tilthex_
 policy-battery = { cmd = "python src/policy_control_node_tilthex.py --battery" }
 policy-telemetry = { cmd = "python src/policy_control_node_tilthex.py --telemetry" }
 
-# Policy management tasks
+# Services of the policy node
 policy-setup = { cmd = "ros2 service call /control/setup std_srvs/srv/Trigger" }
 policy-start = { cmd = "ros2 service call /control/start std_srvs/srv/Trigger" }
 policy-takeoff = { cmd = "ros2 service call /control/takeoff std_srvs/srv/Trigger" }
@@ -52,20 +52,6 @@ args = [
   { "arg" = "yaw", "default" = "0.0" },
 ]
 cmd = "python src/policy_control_node_tilthex.py --setattitude {{ roll }} {{ pitch }} {{ yaw }}"
-
-[tasks.policy-mission]
-args = [
-  { "arg" = "x", "default" = "0.1" },
-  { "arg" = "y", "default" = "0.0" },
-  { "arg" = "z", "default" = "0.0" },
-  { "arg" = "roll", "default" = "0.0" },
-  { "arg" = "pitch", "default" = "0.0" },
-  { "arg" = "yaw", "default" = "0.0" },
-  { "arg" = "wait1", "default" = "10.0" },
-  { "arg" = "wait2", "default" = "10.0" },
-  { "arg" = "wait3", "default" = "5.0" },
-]
-cmd = "python src/policy_control_node_tilthex.py --mission {{ x }} {{ y }} {{ z }} {{ roll }} {{ pitch }} {{ yaw }} {{ wait1 }} {{ wait2 }} {{ wait3 }}"
 
 [tasks.policy-takeoff-to-point-land]
 args = [

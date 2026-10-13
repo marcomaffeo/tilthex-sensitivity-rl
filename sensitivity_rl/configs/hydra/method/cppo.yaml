@@ -1,5 +1,5 @@
 # @package _global_
-# PPO/SPPO method configuration
+# CPPO (PPO with a CVaR constraint)
 
 ALGORITHM: cppo
 # Learning parameters
@@ -40,5 +40,5 @@ DEBUG: true
 # Sensitivity settings
 SENSITIVITY: true
 
-# GRU settings (for value sensitivity network)
+# GRU settings (sensitivity critic)
 GRU_HIDDEN_SIZE: 128

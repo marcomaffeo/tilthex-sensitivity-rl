@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Sequential rollout script for trained PPO policies.
+"""Sequential rollouts of a trained policy.
 
-- Reconstruct the evaluation environment from the saved config.
-- Load the trained ActorCritic parameters.
-- Run rollouts.
-- Save the environment state trajectory and the action sequence for
-    each episode under the respective run directory.
+- Rebuild the evaluation environment from the saved config.
+- Load the trained network parameters.
+- Run the rollouts.
+- Save the state trajectory and the action sequence of each episode
+  in the run directory.
 """
 
 from __future__ import annotations
@@ -73,8 +73,8 @@ def build_env_from_config(
         env_params = env_params.replace(
             max_steps_in_episode=int(config["EVAL_MAX_STEPS_IN_EPISODE"])
         )
-    # Testing mode (fixed targets) exists only in the environments that define it
-    # (tilthex_v1, drone_v3); pendulum has no such flag.
+    # Testing mode (fixed targets) is defined by tilthex_v1 and drone_v3,
+    # the two environments with a target to reach.
     if hasattr(env_params, "is_testing"):
         env_params = env_params.replace(is_testing=True)
 
@@ -93,7 +93,7 @@ def _flatten_value(x):
     return flat
 
 
-# NOTE: Treating env and graphdef as static keeps the function JIT-able while
+# Treating env and graphdef as static keeps the function JIT-able while
 # allowing vmap to supply different rng/env_params externally.
 @partial(
     jax.jit,
@@ -155,7 +155,7 @@ def rollout_episode(
         rng, step_key = jax.random.split(rng)
         obs, env_state, reward, _, _ = env.step(step_key, env_state, action, env_params)
 
-        # Record action after environment step (matches previous semantics)
+        # Record the action after the environment step
         actions_buf = actions_buf.at[i].set(getattr(env_state, "last_commanded_action", getattr(env_state, "last_u", action)))
 
         # Record selected state fields at index i+1
@@ -289,11 +289,7 @@ def save_trajectory(
 
 
 def extract_actor_params(pure_dict: Dict) -> Dict:
-    """Extract actor parameters from a full model's NNX pure dict.
-
-    Kept for reference / debug but not used in the default NNX flow
-    which loads the full model directly.
-    """
+    """Extract actor parameters from a full model's NNX pure dict (debug helper)."""
     actor_dict = {}
     for key, value in pure_dict.items():
         if key.startswith("actor_"):
@@ -388,7 +384,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     # When using multiple param samples, all perturbed rollouts share the same
     # initial state as the nominal rollout (reset once with nominal params).
     # This isolates the effect of parameter perturbations from initial-condition
-    # variability. For a single param set we keep the original per-episode reset.
+    # variability. With a single param set each episode is reset independently.
     use_shared_reset = param_sample_count > 1
 
     if use_shared_reset:
@@ -519,7 +515,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
             series_entry["eval_metrics"] = eval_metrics_flat
             series_entry["dt"] = dt_val
             
-            # Separa i nominali dai perturbati
+            # Split nominal and perturbed rollouts
             if sample_idx == 0:
                 all_series_nominal.append(series_entry)
             else:
@@ -555,7 +551,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
     np.savez(savez_path, **save_dict)
     print(f"[rollouts] Unified data saved in -> {savez_path}")
 
-    # (Opzionale) Plot rapido originale
+    # Quick plot of the rollouts
     if rcfg.plot:
         if all_series_nominal:
             print(f"[rollouts] Generating plot -> {rollouts_dir.parent / 'rollouts_nominal.png'}")
@@ -643,7 +639,7 @@ def main() -> None:
             # Clear JAX caches to avoid pytree metadata conflicts between runs
             jax.clear_caches()
             run_rollouts_for_run(run_dir, rcfg)
-        except Exception as exc:  # pragma: no cover - guardrail for CLI use
+        except Exception as exc:
             print(f"[rollouts] Error processing {run_dir}: {exc}")
 
 

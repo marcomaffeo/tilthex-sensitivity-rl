@@ -1,8 +1,6 @@
-"""Pendulum-Sensitivity
-JAX implementation of Pendulum-v0 OpenAI gym environment with added
-parametric sensitivity metric optimization.
+"""Pendulum swing-up in JAX, with the parametric sensitivity used by SPPO.
 
-Source: github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
+Adapted from github.com/openai/gym/blob/master/gym/envs/classic_control/pendulum.py
 """
 
 from typing import Any, List
@@ -49,7 +47,7 @@ class EnvParams(environment.EnvParams):
 
 
 class Pendulum(environment.Environment):
-    """JAX Compatible version of Pendulum-v0 OpenAI gym environment."""
+    """Pendulum-v0 swing-up task."""
 
     def __init__(self):
         self.type = ""
@@ -164,8 +162,8 @@ class Pendulum(environment.Environment):
         key: jax.Array | None = None,
         params: EnvParams | None = None,
     ) -> jax.Array:
-        """Observation of an environment state, with the interface expected by the
-        sensitivity wrappers (key and params are unused: no observation noise)."""
+        """Observation of an environment state. The key and params arguments
+        keep the signature expected by the sensitivity wrappers."""
         return self._obs_from_model_state(env_state.state)
 
     def _obs_from_model_state(self, state: ModelState) -> jax.Array:

@@ -1,4 +1,4 @@
-"""PPO algorithm specification."""
+"""RAPPO algorithm specification (PPO with a distributional critic)."""
 
 import jax
 import jax.numpy as jnp
@@ -27,7 +27,7 @@ from envs.wrappers import (
 
 
 def wrap_env(env, config):
-    """Apply PPO-specific environment wrappers."""
+    """Apply RAPPO-specific environment wrappers."""
     env = GymnaxWrapper(env)
     env = ClipAction(env)
 

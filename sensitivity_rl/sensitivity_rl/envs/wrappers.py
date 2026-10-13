@@ -712,7 +712,7 @@ class DomainRandomizationEnvState(NamedTuple):
 
 
 class DomainRandomizationWrapper(GymnaxWrapper):
-    """Call reset when done is True."""
+    """Resample the uncertain parameters at every reset."""
 
     def __init__(self, env, params: Optional[environment.EnvParams] = None):
         super().__init__(env)
@@ -721,10 +721,9 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         min_params = self._env.params_min
         max_params = self._env.params_max
 
-        # 2. Inside your loop/function
         key, sample_key = jax.random.split(key)
 
-        # Generate the randomized parameters
+        # Sample the randomised parameters
         randomized_params = self.sample_params(
             sample_key, params, min_params, max_params
         )
@@ -740,19 +739,17 @@ class DomainRandomizationWrapper(GymnaxWrapper):
         Samples new params where each leaf is drawn from U(low[i], high[i]).
         Assumes low_list and high_list follow the order of jax.tree_util.tree_leaves(params).
         """
-        # 1. Flatten the existing params to get the structure (treedef) and current shapes
+        # Flatten the params to get the tree structure and the leaf shapes
         leaves, treedef = jax.tree_util.tree_flatten(params)
 
-        # Safety Check: Ensure lists match the number of learnable parameters
+        # The bounds must match the number of uncertain parameters
         assert (
             len(leaves) == len(low_list) == len(high_list)
         ), f"Mismatch: Params has {len(leaves)} nodes, but low/high lists have {len(low_list)}"
 
-        # 2. Split the random key (one sub-key per parameter array)
+        # One key per parameter array
         keys = jax.random.split(key, len(leaves))
 
-        # 3. Iterate and Sample
-        # We zip everything together to process them in lock-step
         new_leaves = []
         for rng, leaf, l, h in zip(keys, leaves, low_list, high_list):
             sampled_val = jax.random.uniform(
@@ -760,8 +757,7 @@ class DomainRandomizationWrapper(GymnaxWrapper):
             )
             new_leaves.append(sampled_val)
 
-        # 4. Reconstruct (Unflatten) the PyTree
-        # This packs the list of new arrays back into your custom dataclass structure
+        # Rebuild the params dataclass from the sampled leaves
         new_params = jax.tree_util.tree_unflatten(treedef, new_leaves)
 
         return new_params
@@ -860,7 +856,6 @@ class SensitivityOffWrapper(GymnaxWrapper):
         )
         return mean
 
-    # TODO: Understand when doing this, in off-policy each step use a different policy
     def step_sensitivity(
         self,
         key: chex.PRNGKey,
@@ -922,7 +917,7 @@ class SensitivityOffWrapper(GymnaxWrapper):
         norm_next = jnp.linalg.matrix_norm(sens_s_next, ord="fro")
 
         sens_s_next = sens_s_next / (norm_next + 1e-6)
-        # Pack updated sensitivitie
+        # Pack updated sensitivities
         return SensitivityOff(
             log_norm=sens_state.sensitivity.log_norm + jnp.log(norm_next + 1e-6),
             log_norm_old=sens_state.sensitivity.log_norm,

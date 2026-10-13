@@ -1,9 +1,9 @@
 % rpy_nominal vs rpy_perturbed
-% D = perturbed / nominal. D > 1 = peggioramento.
-% Un volo per condizione: differenze sotto il 5% assunto non sono
-% commentate. La soglia e' una convenzione dichiarata, non una stima statistica.
+% D = perturbed / nominal. D > 1 = degradation.
+% One flight per condition: differences below the 5% threshold are not
+% discussed. The threshold is a convention, not a statistical estimate.
 
-% --- pos a regime [m] ---
+% --- steady pos [m] ---
 \begin{tabular}{lcccccc}
 \toprule
 Phase & PPO nom & PPO pert & SPPO nom & SPPO pert & $D_{\mathrm{PPO}}$ & $D_{\mathrm{SPPO}}$ \\
@@ -16,7 +16,7 @@ LANDING & 0.0673 & 0.0582 & 0.0538 & 0.0416 & 0.86 & 0.77 \\
 \bottomrule
 \end{tabular}
 
-% --- att a regime [rad] ---
+% --- steady att [rad] ---
 \begin{tabular}{lcccccc}
 \toprule
 Phase & PPO nom & PPO pert & SPPO nom & SPPO pert & $D_{\mathrm{PPO}}$ & $D_{\mathrm{SPPO}}$ \\

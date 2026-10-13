@@ -68,7 +68,7 @@ Any value can be overridden on the command line:
 pixi run python sensitivity_rl/train.py env=drone_v3 ALGORITHM=ppo NUM_ENVS=1024 LR=0.0005
 ```
 
-Note: `SEED` is set in `config.yaml` (30) and therefore overrides the one in the environment file;
+`SEED` is set in `config.yaml` (30) and takes precedence over the environment file:
 pass `SEED=...` explicitly when the seed matters.
 
 ## Training
@@ -103,8 +103,8 @@ pixi run -e cuda python sensitivity_rl/train.py env=tilthex_v1 ALGORITHM=sppo_au
 pixi run -e cuda python sensitivity_rl/train.py env=tilthex_v1 ALGORITHM=ppo SEED=14                        # PPO_14
 ```
 
-The configuration in this repository matches the one saved with SPPO_14. The saved PPO_14 configuration
-also has `SENSITIVITY_REGULARIZATION_WEIGHT: 0.05`, which PPO does not use.
+The configuration in this repository is the one saved with SPPO_14; PPO does not use
+`SENSITIVITY_REGULARIZATION_WEIGHT`.
 The trained policies are in [`../sensitivity_rl_telekyb/configs/policy/`](../sensitivity_rl_telekyb/configs/policy/).
 
 ## Evaluation rollouts
@@ -119,17 +119,33 @@ pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --param_samples 10 -
 
 ## Hyperparameter sweeps
 
-`sensitivity_rl/tuner.py` runs grids of trainings over methods, environments and parameters, and
-`sensitivity_rl/plots/plot_sweep_results.py` aggregates them (mean and standard deviation over seeds,
-return–sensitivity Pareto front). The sweep is defined at the top of `tuner.py`
-(`METHODS`, `ENVIRONMENTS`, `SWEEP_PARAMS`):
+`sensitivity_rl/tuner.py` trains every combination of methods, environments and parameter values
+defined at the top of the file:
+
+| Variable | Content |
+|---|---|
+| `METHODS`, `ENVIRONMENTS` | algorithms (keys of `ALGORITHM_REGISTRY`) and environments to train |
+| `SWEEP_PARAMS` | parameters swept for every method, e.g. `{"SEED": [0, 1, 2], "LR": [1e-3, 5e-4]}` |
+| `METHOD_SPECIFIC_SWEEPS` | parameters swept for a single method |
+| `NUM_PARALLEL_JOBS` | experiments run in parallel |
+| `RUN_EVAL_ROLLOUTS`, `GENERATE_PLOTS` | rollouts after each run, plots at the end of the sweep |
+
+Each value is applied on top of `config.yaml`, the method file and the environment file, in this order.
 
 ```bash
 pixi run python sensitivity_rl/tuner.py
 ```
 
-More details in [`TUNER_README.md`](TUNER_README.md) and [`Autotuner_guide.md`](Autotuner_guide.md),
-written for an earlier version of the framework: some environments named there no longer exist.
+The sweep is written to `runs/sweep_<timestamp>/` (linked by `runs/latest`), with `sweep_config.json`
+and one folder per experiment, named `exp_<n>_<method>_<env>_<param><value>...` (`srw` stands for
+`SENSITIVITY_REGULARIZATION_WEIGHT`). The scripts in `sensitivity_rl/plots/` read it:
+
+| Script | Output |
+|---|---|
+| `plot_sweep_results.py --sweep_dir runs/latest` | training curves averaged over seeds, return–sensitivity Pareto front, summary tables |
+| `plot_sweep_performance.py` | error and action curves of the final rollouts, grouped by configuration |
+| `rank_rollouts.py --sweep_dir runs/latest` | ranking of the runs by the final error of the rollouts, nominal and perturbed |
+| `export_rollout.py --data <run>/rollout_data.npz` | the rollout figures of a single run, as SVG or PDF |
 
 ## Folder layout
 
@@ -141,8 +157,7 @@ sensitivity_rl/
 ├── algorithms/       # PPO, SPPO variants, CPPO, RAPPO
 ├── envs/             # environments and wrappers
 ├── networks.py, net_utils.py, buffers.py, utils.py
-├── plots/            # sweep plots, rollout export and ranking
-└── benchmark/        # sensitivity checks on the pendulum
+└── plots/            # sweep plots, rollout export and ranking
 configs/hydra/        # configurations
 runs/                 # outputs (ignored by git)
 ```

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Function to kill all pocolibs components
+# Kill all pocolibs components
 kill_all_pocolibs() {
     echo "Killing all pocolibs components and cleaning shared memory..."
     
@@ -12,7 +12,6 @@ kill_all_pocolibs() {
     pkill -f nhfc 2>/dev/null || true
     pkill -f maneuver 2>/dev/null || true
     pkill -f rotorcraft 2>/dev/null || true
-    pkill -f dynamixel-pocolibs 2>/dev/null || true
     
     h2 end 2>/dev/null || true
     h2 clean 2>/dev/null || true
@@ -21,13 +20,13 @@ kill_all_pocolibs() {
     echo "Cleanup done."
 }
 
-# Function to create all pocolibs components
+# Start all pocolibs components
 create_all_pocolibs() {
     echo "Creating all pocolibs components..."
     h2 init
     genomixd &
 
-    # Auto-Detected Architecture
+    # Motion capture: qualisys on the vehicle (aarch64), optitrack in simulation
     ARCH=$(uname -m)
     
     if [ "$ARCH" = "aarch64" ]; then
@@ -44,19 +43,18 @@ create_all_pocolibs() {
     pom-pocolibs -f &
     nhfc-pocolibs -f &
     maneuver-pocolibs -f &
-    dynamixel-pocolibs -f &
     
     echo "Creation done."
 }
 
-# Function to restart all pocolibs components
+# Restart all pocolibs components
 restart_all_pocolibs() {
     kill_all_pocolibs
     sleep 2 
     create_all_pocolibs
 }
 
-# Display help message
+# Help message
 show_help() {
     echo "Usage: $(basename "$0") [OPTION]"
     echo ""
@@ -68,7 +66,7 @@ show_help() {
     echo "  -c, --create    Create all components (without cleaning)"
     echo "  -r, --restart   Restart all pocolibs components (kill then create)"
     echo ""
-    echo "If no option is provided, a RESTART will be executed by default."
+    echo "Without options the components are restarted."
 }
 
 # Parse arguments

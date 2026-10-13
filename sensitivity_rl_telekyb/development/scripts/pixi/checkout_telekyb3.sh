@@ -17,6 +17,9 @@ git -c core.eol=lf -c core.autocrlf=false clone git://git.openrobots.org/robots/
 # python-genomix
 git -c core.eol=lf -c core.autocrlf=false clone git://git.openrobots.org/robots/genomix/python-genomix.git
 
+# The middleware and the components below are installed with robotpkg
+# (see the README); the commented lines clone them for a build from source.
+
 # # pocolibs middleware
 # git -c core.eol=lf -c core.autocrlf=false clone git://git.openrobots.org/robots/pocolibs.git
 
@@ -49,7 +52,6 @@ git -c core.eol=lf -c core.autocrlf=false clone git://git.openrobots.org/robots/
 # git -c core.eol=lf -c core.autocrlf=false clone git://git.openrobots.org/robots/telekyb3/maneuver-genom3.git
 
 # # # qualisys-genom3
-# # TODO checkout PR fix for SDK
 # #git -c core.eol=lf -c core.autocrlf=false clone --branch fix_qualisys_sdk_new_api git@gitlab.inria.fr:rainbow/software/telekyb3/qualisys-genom3.git
 
 # # ----------------

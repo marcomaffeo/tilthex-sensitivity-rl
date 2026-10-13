@@ -1,16 +1,13 @@
 #!/usr/bin/env python3
-"""Unified training entry point for PPO-family algorithms.
+"""Training entry point for PPO-family algorithms.
 
 Usage:
-    # Default config (ppo)
-    python train.py
+    # Defaults from configs/hydra/config.yaml
+    python sensitivity_rl/train.py
 
-    # Select algorithm via Hydra override
-    python train.py ++ALGORITHM=sppo_aug
-
-    # Override environment and parameters
-    python train.py ++ALGORITHM=ppo env=drone_v0 SEED=42
-    python train.py ++ALGORITHM=sppo_aug env=drone_v1 LR=0.0005
+    # Select the algorithm and the environment
+    python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual env=tilthex_v1 SEED=14
+    python sensitivity_rl/train.py ALGORITHM=ppo env=pendulum
 """
 
 import os
@@ -30,24 +27,24 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
 # XLA determinism mode:
 #
-# REPRODUCIBLE (slow) — autotune_level=0, no kernel benchmarking.
+# REPRODUCIBLE (slow): autotune_level=0, no kernel benchmarking.
 #   Use for experiments where exact reproducibility across runs is required.
 #
-# FAST+REPRODUCIBLE (recommended) — autotune_level=4 + per-fusion autotune cache.
-#   The first run benchmarks kernels and writes the cache; all subsequent runs
-#   load the cached selections, so the same kernel is always chosen → same
-#   floating-point op order → reproducible results with full autotuning speed.
+# FAST+REPRODUCIBLE (used here): autotune_level=4 with a per-fusion autotune cache.
+# The first run benchmarks the kernels and writes the cache; later runs
+# load the cached selections, so the same kernels and the same floating-point
+# op order are used every time, with the speed of full autotuning.
 #   Cache is stored at XLA_AUTOTUNE_CACHE_DIR (default /tmp/xla_autotune_cache).
 #   To reset the cache (e.g. after a GPU/driver change), delete that directory.
 #
-#   NOTE: --xla_cpu_enable_fast_math and --xla_gpu_enable_fast_min_max allow FP
+# --xla_cpu_enable_fast_math and --xla_gpu_enable_fast_min_max allow FP
 #   reassociation and can introduce tiny numerical differences on the CPU path
-#   and min/max ops respectively; disable them if you need bit-exact results.
+# and min/max ops respectively; turn them off for bit-exact results.
 #
 _XLA_AUTOTUNE_CACHE = os.environ.get("XLA_AUTOTUNE_CACHE_DIR", "/tmp/xla_autotune_cache")
 
 # Fast + reproducible: full autotuning with persistent kernel-selection cache.
-# The first run populates the cache; all subsequent runs reuse it.
+# The first run populates the cache; later runs reuse it.
 os.environ["XLA_FLAGS"] = (
     f"--xla_gpu_autotune_level=4 "
     f"--xla_gpu_per_fusion_autotune_cache_dir={_XLA_AUTOTUNE_CACHE} "
@@ -270,7 +267,7 @@ def make_train(
         config: Training configuration dict
         spec: Algorithm specification
         writer: TensorBoard writer
-        init_rng: PRNG key used for network initialisation (concrete, not traced)
+        init_rng: Concrete PRNG key used for network initialisation
 
     Returns:
         JIT-compilable train function

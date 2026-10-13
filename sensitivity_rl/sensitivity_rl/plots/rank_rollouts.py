@@ -1,12 +1,12 @@
 """
-Rank sweep results based on FINAL rollout trajectories (MsgPack files).
+Rank the runs of a sweep by the final error of their evaluation rollouts.
 
-This script reads the actual rollout data generated after training, 
-giving you the true deterministic performance at the final timestep.
-It splits the evaluation into two distinct rankings: Nominal and Perturbed.
-Works gracefully even if the sweep is currently running and experiments are incomplete.
+The script reads the rollout files written after training and builds two
+rankings, nominal and perturbed. It also runs on a sweep that is still in
+progress, skipping the incomplete experiments.
 
-USAGE:
+USAGE::
+
     python rank_rollouts.py --sweep_dir runs/latest --top_n 10
 """
 
@@ -18,7 +18,7 @@ from flax import serialization
 
 def get_final_errors(traj_data):
     """Position and attitude error at the last time step of the trajectory."""
-    # Safety check: the file may be partial and miss some keys
+    # The file may be partial and miss some keys
     if not all(k in traj_data for k in ("state", "target_pos", "target_attitude")):
         raise ValueError("Missing keys in the trajectory data")
 
@@ -26,7 +26,6 @@ def get_final_errors(traj_data):
     target_pos = np.asarray(traj_data["target_pos"])
     target_att = np.asarray(traj_data["target_attitude"])
 
-    # Controllo di sicurezza sulle dimensioni
     if len(state) == 0:
         raise ValueError("The state array is empty")
 
@@ -51,7 +50,7 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
         print(f"Error: Directory {sweep_dir} does not exist.")
         return
 
-    print(f"\nAnalizzando le traiettorie di rollout in: {sweep_dir}")
+    print(f"\nReading the rollout trajectories in: {sweep_dir}")
     
     results = []
     skipped_exps = 0
@@ -80,7 +79,7 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
 
         for msgpack_file in msgpack_files:
             try:
-                # Check that the file is not empty (0 bytes) before opening it
+                # Skip empty files (0 bytes)
                 if msgpack_file.stat().st_size == 0:
                     continue
 
@@ -97,7 +96,7 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
                     nom_pos_errs.append(pos_err)
                     nom_att_errs.append(att_err)
             except Exception:
-                # Ignore the error: it happens for files still being written (corrupted/incomplete)
+                # Files still being written cannot be read yet
                 pass
 
         # Skip the experiment if no valid file could be read
@@ -139,14 +138,14 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
 
     print(f"\n[INFO] Processed {processed_exps} experiments. Skipped {skipped_exps} running or incomplete experiments.")
 
-    # --- CLASSIFICA NOMINALE ---
+    # --- Nominal ranking ---
     valid_nom = [r for r in results if r["score_nom"] != float('inf') and not np.isnan(r["score_nom"])]
     valid_nom.sort(key=lambda x: x["score_nom"])
     top_nom = valid_nom[:top_n]
 
     if top_nom:
         print("\n" + "=" * 110)
-        print(f"TOP {len(top_nom)} RUNS: AMBIENTE NOMINALE (Ideale)")
+        print(f"TOP {len(top_nom)} RUNS: NOMINAL ENVIRONMENT")
         print("=" * 110)
         print(f"{'Experiment Name':<55} | {'Seed':<5} | {'Pos [m]':<10} | {'Att [rad]':<10} | {'SCORE':<10}")
         print("-" * 110)
@@ -160,14 +159,14 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
     else:
         print("\nNo valid data for the nominal environment.")
 
-    # --- CLASSIFICA PERTURBATA ---
+    # --- Perturbed ranking ---
     valid_pert = [r for r in results if r["score_pert"] != float('inf') and not np.isnan(r["score_pert"])]
     valid_pert.sort(key=lambda x: x["score_pert"])
     top_pert = valid_pert[:top_n]
 
     if top_pert:
         print("\n" + "=" * 110)
-        print(f"TOP {len(top_pert)} RUNS: AMBIENTE PERTURBATO (Robustezza)")
+        print(f"TOP {len(top_pert)} RUNS: PERTURBED ENVIRONMENT")
         print("=" * 110)
         print(f"{'Experiment Name':<55} | {'Seed':<5} | {'Pos [m]':<10} | {'Att [rad]':<10} | {'SCORE':<10}")
         print("-" * 110)
@@ -183,7 +182,7 @@ def analyze_rollouts(sweep_dir: Path, top_n: int = 10):
 
     print("=" * 110 + "\n")
 
-    # Ordinamento finale per JSON
+    # Final ordering for the JSON file
     def sort_key(x):
         val = x["score_nom"]
         return val if (val != float('inf') and not np.isnan(val)) else 1e9

@@ -1,26 +1,25 @@
 """
-Tuner script for running multiple experiments with Hydra configuration.
+Hyperparameter sweeps with the Hydra configuration.
 
-This script allows you to:
-1. Run multiple experiments with different configurations in parallel
-2. Sweep over hyperparameters defined in SWEEP_PARAMS
-3. Use method-specific sweeps via METHOD_SPECIFIC_SWEEPS
-4. Organize results in a single sweep directory
+The script runs every combination of methods, environments and parameter
+values listed below, in parallel or one after the other, and stores all the
+runs in a single sweep directory.
 
-Edit SWEEP_PARAMS or METHOD_SPECIFIC_SWEEPS below to define your parameter sweeps.
+USAGE::
 
-USAGE:
-    python tuner.py
+    python sensitivity_rl/tuner.py
 
-CONFIGURATION:
-    Edit the following variables in this file:
-    - SWEEP_PARAMS: Dictionary of parameters to sweep (shared across all methods)
-    - METHOD_SPECIFIC_SWEEPS: Dictionary of method-specific parameter sweeps
-    - NUM_PARALLEL_JOBS: Number of experiments to run in parallel
-    - RUN_EVAL_ROLLOUTS: Whether to run evaluation rollouts
-    - EVAL_CONFIG: Evaluation settings
+CONFIGURATION: edit the following variables in this file.
 
-EXAMPLE 1 - Shared sweeps (all methods use same parameters):
+- METHODS, ENVIRONMENTS: what to train
+- SWEEP_PARAMS: parameters swept for every method
+- METHOD_SPECIFIC_SWEEPS: parameters swept for a single method
+- NUM_PARALLEL_JOBS: number of experiments run in parallel
+- RUN_EVAL_ROLLOUTS: whether to run evaluation rollouts
+- EVAL_CONFIG: evaluation settings
+
+EXAMPLE 1 - Shared sweep::
+
     SWEEP_PARAMS = {
         "SEED": [30, 40, 50],
         "SENSITIVITY_REGULARIZATION_WEIGHT": [0.0, 0.5, 0.9],
@@ -28,11 +27,12 @@ EXAMPLE 1 - Shared sweeps (all methods use same parameters):
     }
     METHOD_SPECIFIC_SWEEPS = {}
 
-This will run 3 × 3 × 2 = 18 experiments per method.
+This runs 3 x 3 x 2 = 18 experiments per method.
 
-EXAMPLE 2 - Method-specific sweeps (different parameters per method):
+EXAMPLE 2 - Method-specific sweeps::
+
     METHOD_SPECIFIC_SWEEPS = {
-        "sppo_aug": {
+        "sppo_aug_grad_param_dual": {
             "SEED": [0, 1, 2],
             "SENSITIVITY_REGULARIZATION_WEIGHT": [0.5, 0.9],
         },
@@ -42,7 +42,7 @@ EXAMPLE 2 - Method-specific sweeps (different parameters per method):
         },
     }
 
-This runs 6 experiments for sppo_aug and 6 for ppo, with different parameters.
+This runs 6 experiments for each of the two methods.
 """
 
 import os
@@ -85,28 +85,26 @@ except ImportError:
 # SWEEP PARAMETERS - Edit this section to define your parameter sweeps
 # =============================================================================
 
-# List of methods to sweep over. Each method uses its corresponding script.
-# Available: "sppo-vs-estimation-aug", "sppo-vs-estimation", "ppo", "sac"
-METHODS = ["ppo","sppo_aug_grad_param_dual"]  # Add or remove methods as needed
+# List of methods to sweep over.
+# Available: the keys of ALGORITHM_REGISTRY in algorithms/__init__.py
+METHODS = ["ppo","sppo_aug_grad_param_dual"]
 
-# List of environments to sweep over. Each needs a corresponding config file.
-# Available: "halfcheetah_v5", "drone_v0", "drone_v1", "pendulum_v0", etc.
+# List of environments to sweep over. Each one needs a config file in configs/hydra/env/.
+# Available: tilthex_v1, drone_v3, pendulum
 ENVIRONMENTS = ["tilthex_v1"]
 
-# Parameter sweeps - can be method-specific or shared across all methods
-# Option 1: Use SWEEP_PARAMS for shared parameters across all methods (backward compatible)
-# Option 2: Use METHOD_SPECIFIC_SWEEPS for method-specific parameters
-# If METHOD_SPECIFIC_SWEEPS is defined and not empty, it takes precedence
+# Parameter sweeps:
+# - SWEEP_PARAMS is applied to every method
+# - METHOD_SPECIFIC_SWEEPS sets the parameters of a single method
+# When METHOD_SPECIFIC_SWEEPS is not empty, it takes precedence
 
-# Shared parameter sweeps - applied to all methods if METHOD_SPECIFIC_SWEEPS is not used
 SWEEP_PARAMS = {
-    # Example sweeps - uncomment and modify as needed
-    "SEED": [12, 54, 99, 123, 80, 77, 14, 66, 39, 87, 224, 44],  # Random seeds for reproducibility
-    "GAIN_STAB": [0.2],          # Penalità velocità angolare
-    "GAIN_ATT": [2.0],                 # Reward per allineamento
-    "GAIN_SM": [1],        # Penalità variazione comandi
-    "GAIN_REF": [1],       # Penalità distanza target
-    "REWARD_POS_TOLERANCE": [0.04], # Tolleranza per reward di posizione
+    "SEED": [12, 54, 99, 123, 80, 77, 14, 66, 39, 87, 224, 44],
+    "GAIN_STAB": [0.2],          # Angular velocity penalty
+    "GAIN_ATT": [2.0],                 # Attitude alignment reward
+    "GAIN_SM": [1],        # Penalty on command variations
+    "GAIN_REF": [1],       # Penalty on the distance to the target
+    "REWARD_POS_TOLERANCE": [0.04], # Position tolerance of the reward
 
     #"SENSITIVITY_REGULARIZATION_WEIGHT": [0.01, 0.1, 0.05],
     #"LR": [0.001, 0.0005, 0.0001],
@@ -172,7 +170,7 @@ METHOD_CONFIG_NAMES = {
 
 # Number of experiments to run in parallel (set based on your CPU/GPU resources)
 # Set to 1 for sequential execution, or higher for parallel execution
-# Note: Each parallel job will run in a separate process
+# Each parallel job runs in a separate process
 NUM_PARALLEL_JOBS = 4
 
 # Set to True to run evaluation rollouts after each experiment
@@ -273,7 +271,7 @@ def run_experiment_job(
         if k not in keys_to_remove and not str(k).startswith("override")
     }
 
-    # Estrazione dinamica esatta come in train.py
+    # Store the environment dimensions and limits, as train.py does
     try:
         from envs import ENV_REGISTRY
         env = ENV_REGISTRY[clean_config["ENV_NAME"]]()
@@ -309,7 +307,7 @@ def run_experiment_job(
             return {k: _to_serializable(v) for k, v in obj.items()}
         if isinstance(obj, (list, tuple)):
             return [_to_serializable(v) for v in obj]
-        if hasattr(obj, "tolist"):  # Intercetta sia JAX (ArrayImpl) che Numpy
+        if hasattr(obj, "tolist"):  # JAX and NumPy arrays
             return obj.tolist()
         return obj
 
@@ -354,7 +352,7 @@ def _run_experiment_subprocess(args_tuple):
     memory_fraction = 1.0 / NUM_PARALLEL_JOBS
     os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = str(memory_fraction)
 
-    # Optional: Set allocator to avoid fragmentation
+    # Allocator that limits fragmentation
     os.environ["XLA_PYTHON_CLIENT_ALLOCATOR"] = "platform"
 
     # Now import JAX and other dependencies
@@ -519,12 +517,8 @@ def run_sweep_experiments():
             )
 
             if not config_path.exists():
-                config_path = (
-                    Path(__file__).parent.parent / "configs" / "hydra" / "base_config.yaml"
-                )
-                if not config_path.exists():
-                    print(f"ERROR: Base config not found: {config_path}")
-                    continue
+                print(f"ERROR: Base config not found: {config_path}")
+                continue
 
             # Load base config and compose with method and env
             base_cfg = OmegaConf.load(config_path)
@@ -660,12 +654,12 @@ def run_sweep_experiments():
                         if success:
                             successful_runs.append(run_dir)
                             print(
-                                f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] ✓ Completed: {exp_name}"
+                                f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] Completed: {exp_name}"
                             )
                         else:
                             failed_runs.append((run_dir, error_msg))
                             print(
-                                f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] ✗ Failed: {exp_name}"
+                                f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] Failed: {exp_name}"
                             )
 
                     except Exception as e:
@@ -673,7 +667,7 @@ def run_sweep_experiments():
                         error_msg = f"Subprocess execution failed: {e}"
                         failed_runs.append((run_dir, error_msg))
                         print(
-                            f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] ✗ Failed: {experiment_name}"
+                            f"[Batch {batch_start//NUM_PARALLEL_JOBS + 1}] [{completed_in_batch}/{len(batch)}] Failed: {experiment_name}"
                         )
 
             # All processes in this batch have finished before starting next batch

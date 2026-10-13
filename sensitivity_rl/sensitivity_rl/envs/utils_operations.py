@@ -82,7 +82,7 @@ def quat_inverse(q):
 def quat_to_euler_deg(q_array):
     """
     Converts a batch of quaternions [w, x, y, z] to Euler angles [Roll, Pitch, Yaw] in degrees.
-    Expects numpy arrays (CPU), not JAX arrays.
+    Expects NumPy arrays on the CPU.
     """
     if q_array.ndim == 1:
         q_array = q_array[np.newaxis, :]

@@ -1,5 +1,5 @@
 # @package _global_
-# PPO/SPPO method configuration
+# PPO and SPPO (ALGORITHM selects the variant)
 
 ALGORITHM: sppo_aug_grad_param_dual
 # Learning parameters
@@ -35,5 +35,5 @@ XI: 0.08
 RHO: 0.0
 TAU: 0.00001
 
-# GRU settings (for value sensitivity network)
+# GRU settings (sensitivity critic)
 GRU_HIDDEN_SIZE: 128

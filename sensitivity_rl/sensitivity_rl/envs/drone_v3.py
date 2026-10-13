@@ -1,7 +1,5 @@
-"""Drone V3 Environment.
-JAX implementation of the Mikrokopter drone environment considering uncertainties on the mass, inertia,
-position of the center of mass.
-"""
+"""Quadrotor environment in JAX, with uncertain mass, inertia, centre of mass
+position and actuator time constant."""
 
 from functools import partial
 from typing import Any, List
@@ -80,12 +78,12 @@ class EnvParams(environment.EnvParams):
 
 
 class DroneV3(environment.Environment):
-    """JAX Compatible version of mikrokopter drone converging to a target."""
+    """Quadrotor reaching a target position and yaw."""
 
     def __init__(self):
         self.type = ""
         self.state_dim = 13
-        self.obs_dim = 14  # Added yaw_error to observations
+        self.obs_dim = 14  # 13 + yaw error
         self.action_dim = self.action_space(self.default_params).shape[0]
         self.param_dim = 8  # len(jax.tree.leaves(self.default_params))
         self.target_pos = jnp.array([0.0, 0.0, 0.5])
@@ -152,7 +150,7 @@ class DroneV3(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Integrate pendulum ODE and return transition."""
+        """Integrate the quadrotor dynamics and return the transition."""
 
         action_clipped = jnp.clip(action, params.min_action, params.max_action)
         action_rescaled = self.rescale_action(action_clipped, params)
@@ -234,8 +232,10 @@ class DroneV3(environment.Environment):
     ) -> ModelState:
         """Step dynamics with first-order actuator low-pass filter.
 
-        The actuator output is filtered as:
+        The actuator output is filtered as::
+
             u_actual = last_input + alpha * (u_commanded - last_input)
+
         where alpha = dt / tau  (clamped to [0, 1]).
         """
         state = env_state.state
@@ -310,7 +310,7 @@ class DroneV3(environment.Environment):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling theta, theta_dot."""
+        """Reset the environment by sampling the initial state and the target."""
         pos = jax.random.uniform(
             key,
             shape=(3,),
@@ -359,9 +359,8 @@ class DroneV3(environment.Environment):
     ) -> jax.Array:
         """Return a vector of observations from the state.
 
-        key and params are accepted for interface compatibility with the
-        sensitivity wrappers (used by tilthex_v1 for observation noise) and
-        are not used here: drone_v3 observations are noise-free.
+        The key and params arguments keep the signature expected by the
+        sensitivity wrappers; the observations are noise-free.
         """
         state = env_state.state
 

@@ -58,22 +58,18 @@ def analyze_multiple_hovering_logs(file_paths, plot=True):
         fig, axs = plt.subplots(2, 2, figsize=(14, 8))
         fig.suptitle(f'Combined Sensor Noise ({len(file_paths)} flights)', fontsize=14)
 
-        # 1. Posizione
         axs[0,0].plot(global_pos_noise, alpha=0.7)
         axs[0,0].set_title('Position Noise')
         axs[0,0].legend(['X', 'Y', 'Z'], loc='upper right')
 
-        # 2. Velocità Lineare
         axs[0,1].plot(global_vel_noise, alpha=0.7)
         axs[0,1].set_title('Linear Velocity Noise')
         axs[0,1].legend(['Vx', 'Vy', 'Vz'], loc='upper right')
 
-        # 3. Quaternioni
         axs[1,0].plot(global_quat_noise, alpha=0.7)
         axs[1,0].set_title('Quaternion Noise')
         axs[1,0].legend(['W', 'X', 'Y', 'Z'], loc='upper right')
         
-        # 4. Velocità Angolare
         axs[1,1].plot(global_avel_noise, alpha=0.7)
         axs[1,1].set_title('Angular Velocity Noise')
         axs[1,1].legend(['Wx', 'Wy', 'Wz'], loc='upper right')
@@ -86,7 +82,7 @@ def analyze_multiple_hovering_logs(file_paths, plot=True):
         plt.show()
 
 if __name__ == '__main__':
-    # Add your file paths here
+    # Flight logs to process
     file_paths = [
         "logs_policy/SPPO_noise/data.npz",
     ]

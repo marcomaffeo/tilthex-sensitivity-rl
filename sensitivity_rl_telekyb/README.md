@@ -220,10 +220,3 @@ scripts/                                   # components and websocket launchers
 development/scripts/pixi/                  # checkout, build and activation scripts
 logs/, campaigns/                          # outputs (ignored by git)
 ```
-
-## Verification status
-
-The simulation and the real flights of the thesis ran with the code at tag `flight-campaign`.
-After the clean-up of October 2026 (quadrotor and old Tilthex models removed, single world) the code was
-checked statically — every script compiles, every pixi task and every model referenced by the world exists —
-but the simulation was not run again.

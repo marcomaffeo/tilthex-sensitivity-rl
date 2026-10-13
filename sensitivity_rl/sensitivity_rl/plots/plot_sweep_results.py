@@ -1,20 +1,17 @@
 """
 Plot sweep results from TensorBoard logs.
 
-This script aggregates results across different seeds and creates plots showing
-mean and standard deviation for key metrics:
-- Episodic return (true reward)
+The script aggregates the results across seeds and plots the mean and standard
+deviation of:
+- Episodic return
 - Sensitivity state mean
 - Sensitivity state max
 
-Can be used standalone or called from the tuner after a sweep completes.
+The tuner calls it at the end of a sweep; it can also be run on its own.
 
-USAGE:
-    # Standalone - specify sweep directory
+USAGE::
+
     python plot_sweep_results.py --sweep_dir runs/sweep_20251209-123456
-
-    # Or from tuner (called automatically)
-    python tuner.py
 """
 
 import argparse
@@ -131,8 +128,8 @@ def parse_experiment_name(exp_name: str) -> Dict[str, any]:
     """
     Parse experiment name to extract parameters.
 
-    Example: exp_001_sppovsa_halfcheetah_v5_seed0_srw0.5_total_timesteps100000
-    Returns: {'method': 'sppovsa', 'env': 'halfcheetah_v5', 'seed': 0, 'srw': 0.5, ...}
+    Example: exp_001_sppo_tilthex_v1_seed0_srw0.5
+    Returns: {'method': 'sppo', 'env': 'tilthex_v1', 'seed': 0, 'srw': 0.5}
     """
     parts = exp_name.split("_")
     params = {}
@@ -301,7 +298,7 @@ def plot_metric_comparison(
         params_dict = dict(param_key)
         label_parts = []
 
-        # Extract all varying parameters (not method or env)
+        # Varying parameters, except method and env
         for k, v in sorted(params_dict.items()):
             if k not in ["timesteps", "env", "seed"]:
                 # Format parameter for label

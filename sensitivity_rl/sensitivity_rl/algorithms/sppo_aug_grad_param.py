@@ -1,4 +1,4 @@
-"""SPPO with augmented sensitivity estimation (GRU-based value function)."""
+"""SPPO-aug with a differentiable sensitivity loss and a proximal term on the actor parameters."""
 
 import jax
 import jax.numpy as jnp
@@ -525,7 +525,7 @@ def init_runner_state(config, env, env_params, networks, rng):
     gru_hidden_size = networks["gru_hidden_size"]
     init_gru_hidden = jnp.zeros((config["NUM_ENVS"], gru_hidden_size))
 
-    # Extra split before scan (matching original sppo_aug.py)
+    # Extra split before scan
     rng, _rng = jax.random.split(rng)
 
     # Dummy GAE extras for pytree consistency (overwritten each iteration)
@@ -535,7 +535,7 @@ def init_runner_state(config, env, env_params, networks, rng):
         train_state=networks["train_state"],
         env_state=env_state,
         last_obs=obsv,
-        rng=_rng,  # Use _rng, not rng, to match original
+        rng=_rng,
         extras={
             "train_state_vs": networks["train_state_vs"],
             "gru_hidden": init_gru_hidden,

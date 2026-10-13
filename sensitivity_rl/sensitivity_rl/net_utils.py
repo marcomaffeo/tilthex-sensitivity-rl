@@ -11,7 +11,7 @@ def create_optimizer(config, linear_schedule_fn):
 
     learning_rate = linear_schedule_fn if config["ANNEAL_LR"] else config["LR"]
 
-    # Backward-compatible path: single global clipping for all parameters.
+    # Single global clipping for all parameters.
     if policy_max_grad_norm is None:
         return optax.chain(
             optax.clip_by_global_norm(max_grad_norm),

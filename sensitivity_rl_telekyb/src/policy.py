@@ -12,7 +12,7 @@ from typing import Any, Dict, Tuple
 
 from networks import ActorCritic, ActorCriticGRU, ActorDCritic
 
-# Auto-Detect Target Architecture
+# Target architecture
 if platform.machine() == "aarch64":
     jax.default_device = jax.devices("cpu")[0]
     print("[Policy] ARM64 target detected. Forcing JAX to CPU.")
@@ -54,7 +54,7 @@ class Policy:
         return self.rescale_action(action_mean)
 
     def get_action(self, observation: np.ndarray) -> np.ndarray:
-        # Cast to fixed dtype to prevent JAX from recompiling due to ROS 2 float64 default messages
+        # Fixed dtype, so that the float64 ROS 2 messages do not trigger a recompilation
         """Deterministic action for one observation, as a float64 array of rotor forces."""
         observation = np.asarray(observation, dtype=np.float32)
         
@@ -65,7 +65,6 @@ class Policy:
         return np.asarray(action_jax[0], dtype=np.float64)
 
     def warmup(self):
-        # Force JIT compilation before real-time control loop starts
         """Compile the policy (JIT) before the real-time loop starts."""
         dummy_obs = np.zeros(self.OBS_DIM, dtype=np.float32)
         self.get_action(dummy_obs)

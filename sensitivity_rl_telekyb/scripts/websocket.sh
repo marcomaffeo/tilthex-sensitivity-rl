@@ -1,5 +1,5 @@
 #!/bin/bash
-# Wrapper script to expand environment variables in websocket.gzlaunch
+# Expand the environment variables in websocket.gzlaunch and launch it
 
 TEMP_LAUNCH=$(mktemp --suffix=.gzlaunch)
 envsubst < "$PIXI_PROJECT_ROOT/worlds/websocket.gzlaunch" > "$TEMP_LAUNCH"

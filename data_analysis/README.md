@@ -63,7 +63,7 @@ Only `data.npz` is tracked by git; plots, raw GenoM logs and per-flight images a
 
 `compare_trajectory.py` does not recompute the metrics: it reads the tables written by
 `analyze_trajectory.py`, so the trajectories must be analysed first (`pixi run tables` does it in order).
-Run the scripts from this folder. Comments and help messages in the scripts are in Italian.
+Run the scripts from this folder.
 
 ## Where the thesis numbers come from
 
@@ -77,9 +77,3 @@ Run the scripts from this folder. Comments and help messages in the scripts are 
 
 In every PPO/SPPO comparison the first value is PPO and the second is SPPO
 (for example the columns `ppo_nom` and `sppo_nom` of `comparison_categories.csv`).
-
-## Verification
-
-On 12 October 2026 all the tables were regenerated from scratch on Linux from the `data.npz` files
-(numpy 2.5, scipy 1.18, matplotlib 3.11). Every value equals the tracked one, up to floating-point rounding
-(relative differences below 1e-12).

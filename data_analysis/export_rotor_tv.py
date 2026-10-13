@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""TV della velocita' di rotore, rotore per rotore, sulle categorie di regime (Step escluso), per il
-pannello di destra delle Fig. 7.11-7.12 della tesi.
+"""Total variation of the rotor speed, rotor by rotor, over the steady-state categories
+(Step excluded): right panel of Fig. 7.11-7.12 of the thesis.
 
-Stessa segmentazione in categorie e stessa media pesata per campioni di
-analyze_trajectory.metrics_for_category: la somma sui sei rotori di una categoria coincide con la riga
-'tv' di comparison_categories.csv (verificato a 1e-15). Qui le categorie di regime vengono messe
-insieme, pesando ogni blocco con il suo numero di campioni.
+The categories and the sample-weighted mean are those of analyze_trajectory.metrics_for_category,
+so the sum over the six rotors of one category equals the 'tv' row of comparison_categories.csv.
+Here the steady-state categories are merged, each block weighted by its number of samples.
 
-Uso, dalla cartella plots:
+Usage, from the data_analysis folder::
+
   python export_rotor_tv.py p2p      -> p2p_comparison/tables/rotor_tv_regime.csv
   python export_rotor_tv.py rpy      -> rpy_comparison/tables/rotor_tv_regime.csv
-Legge <missione>_nominal e <missione>_perturbed (i data.npz devono essere scaricati).
+
+It reads <mission>_nominal and <mission>_perturbed.
 """
 import contextlib
 import csv
@@ -32,7 +33,7 @@ CFG = {'t_ss': 2.0, 'tol_pos': 0.05, 'tol_att_deg': 5.0, 'settle_band': 0.05,
 
 
 def per_rotor(folder):
-    """{gruppo: TV per rotore [rad/s^2]} sulle categorie diverse da Step."""
+    """{group: TV per rotor [rad/s^2]} over the categories other than Step."""
     blocks = {}
     orig = at.metrics_for_category
 
@@ -69,7 +70,7 @@ def main():
         for i in range(at.N_ROTORS):
             w.writerow([i + 1, "rad/s^2", f"{nom['PPO'][i]:.4f}", f"{pert['PPO'][i]:.4f}",
                         f"{nom['SPPO'][i]:.4f}", f"{pert['SPPO'][i]:.4f}"])
-    print("scritto", out)
+    print("written", out)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #! /bin/bash
-# Activation script
+# Gazebo plugin and model paths, run when the pixi environment is activated
 
 export GZ_LAUNCH_PLUGIN_PATH=$CONDA_PREFIX/lib/gz-launch-8/plugins:$GZ_LAUNCH_PLUGIN_PATH
 export GZ_SIM_SYSTEM_PLUGIN_PATH=$CONDA_PREFIX/lib/gazebo:$GZ_SIM_SYSTEM_PLUGIN_PATH

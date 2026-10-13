@@ -1,67 +1,64 @@
 #!/usr/bin/env python3
 """
-compare_trajectory.py  --  Confronto nominal vs perturbed per un task.
+Nominal vs perturbed comparison for one mission.
 
-Accorpa i vecchi compare_comparison.py e compare_categories.py: stesse due
-letture (chi sbaglia meno, chi degrada meno) su due divisioni del volo, le
-fasi della missione e le cinque categorie di compito di controllo.
+Two readings (who has the lower error, who degrades less) on two splits of
+the flight: the mission phases and the control task categories.
 
-Prende le due cartelle dello stesso task (es. p2p_nominal e p2p_perturbed) e
-produce una cartella di confronto con tabelle e figure.
+The script takes the two folders of the same mission (e.g. p2p_nominal and
+p2p_perturbed) and writes a comparison folder with tables and figures.
 
-DA DOVE PRENDE I NUMERI
------------------------
-NON ricalcola le metriche. Legge i CSV che analyze_trajectory.py ha gia'
-prodotto dentro <cartella>/data_analysis/tables/:
-    phase_metrics.csv   metriche per fase, per volo
-    tv_windows.csv      Total Variation, per finestra e per motore
-    category_metrics.csv  metriche per manovra e per gradino
-    params.csv          i parametri con cui e' stata prodotta la cartella
-Una sola implementazione delle metriche, un solo posto dove puo' esserci un
-errore. Se i CSV mancano lo script si ferma e dice quale comando lanciare.
-(Unica eccezione: le figure di sovrapposizione nel tempo, che hanno bisogno
-delle serie grezze. Per quelle riusa process_log di analyze_trajectory, quindi
-anche li' le definizioni di errore restano le sue.)
+Where the numbers come from
+---------------------------
+The metrics are not recomputed. The script reads the CSV files written by
+analyze_trajectory.py in <folder>/data_analysis/tables/::
 
-LE DUE DOMANDE
---------------
-Con quattro voli -- PPO nominal, PPO perturbed, SPPO nominal, SPPO
-perturbed -- si possono fare due domande diverse, che NON hanno la stessa
-risposta:
+    phase_metrics.csv     metrics per phase, per flight
+    tv_windows.csv        total variation, per window and per motor
+    category_metrics.csv  metrics per manoeuvre and per step
+    params.csv            the parameters used for the folder
 
-  1. CHI SBAGLIA MENO COL DISTURBO
-     confronto diretto SPPO vs PPO nel caso perturbed.
+If the CSV files are missing the script stops and prints the command to run.
+The overlay figures over time need the raw series and reload the data.npz
+files, with the same error definitions.
 
-  2. CHI DEGRADA MENO
-     D = perturbed / nominal, calcolato per algoritmo e poi confrontato.
+The two questions
+-----------------
+With four flights (PPO nominal, PPO perturbed, SPPO nominal, SPPO perturbed)
+two different questions can be asked, with different answers:
 
-Una policy puo' sbagliare meno in assoluto in entrambe le condizioni e al
-tempo stesso degradare di piu' in rapporto, semplicemente perche' parte da
-piu' in basso. Mostrare solo la (1) o solo la (2) sarebbe scegliere la lettura
-comoda: lo script le riporta SEMPRE affiancate, in tabella e in figura.
+  1. WHO HAS THE LOWER ERROR UNDER THE DISTURBANCE:
+     direct comparison SPPO vs PPO in the perturbed case.
 
-PERCHE' IL RAPPORTO E NON LA DIFFERENZA, E IN QUEST'ORDINE
-  * rapporto: i due algoritmi partono da errori nominali diversi, quindi una
-    differenza in metri non e' confrontabile fra loro; il rapporto e'
-    adimensionale;
-  * perturbed / nominal: D > 1 si legge subito come peggioramento, e il
-    valore nominal -- il piu' pulito dei due -- sta al denominatore.
+  2. WHO DEGRADES LESS:
+     D = perturbed / nominal, computed per algorithm and then compared.
 
-IL LIMITE, DA DICHIARARE IN TESI
---------------------------------
-D e' il rapporto fra due voli singoli: la sua incertezza e' quella di un volo
-moltiplicata per quella di un altro, e con n = 1 non e' quantificabile da
-questi dati. Si usa quindi una SOGLIA ASSUNTA (--noise-floor, default 5%):
-sotto quella differenza lo script scrive '~' e non assegna un vincitore.
-La soglia e' una convenzione dichiarata, NON una stima statistica: va scritta
-nel testo per quello che e'. Quello che regge davvero non e' il singolo numero
-ma la COERENZA del segno su piu' fasi e su piu' traiettorie.
+A policy can have a lower error in both conditions and still degrade more
+in relative terms, because it starts lower. The script always reports the
+two readings side by side, in the tables and in the figures.
 
-Uso:
-    python compare_comparison.py --nominal plots/p2p_nominal \
-                                 --perturbed plots/p2p_perturbed
-    python compare_comparison.py -n plots/rpy_nominal -p plots/rpy_perturbed \
-                                 --noise-floor 5 --output plots/rpy_comparison
+Why the ratio, and in this order:
+
+  * ratio: the two algorithms start from different nominal errors, so a
+    difference in metres is not comparable between them; the ratio is
+    dimensionless;
+  * perturbed / nominal: D > 1 reads as a degradation, and the nominal
+    value, the cleaner of the two, is the denominator.
+
+Limits
+------
+D is the ratio of two single flights: with n = 1 its uncertainty cannot be
+estimated from these data. A fixed threshold is used instead (--noise-floor,
+default 5%): below that difference the script writes '~' and assigns no
+winner. The threshold is a convention, not a statistical estimate; the
+consistency of the sign across phases and missions carries more weight than
+a single number.
+
+Usage::
+
+    python compare_trajectory.py --nominal p2p_nominal --perturbed p2p_perturbed
+    python compare_trajectory.py -n rpy_nominal -p rpy_perturbed \
+                                 --noise-floor 5 --output rpy_comparison
 """
 
 import argparse
@@ -79,7 +76,7 @@ from scipy.spatial.transform import Rotation
 
 RAD2DEG = 180.0 / math.pi
 
-C_PPO, C_SPPO = '#ff7f0e', '#1f77b4'  # arancione / blu, come export_campaign.py
+C_PPO, C_SPPO = '#ff7f0e', '#1f77b4'  # orange / blue
 COL = {'PPO': C_PPO, 'SPPO': C_SPPO}
 GROUPS = ('PPO', 'SPPO')
 CONDS = ('nominal', 'perturbed')
@@ -88,30 +85,30 @@ ALPHA = {'nominal': 0.90, 'perturbed': 0.45}
 
 NAN = float('nan')
 
-# (chiave nel csv, etichetta, unita', fattore di scala, definita su tutte le fasi)
+# (key in the csv, label, unit, scale factor, defined on every phase)
 PHASE_METRICS = [
-    ('rmse_pos_steady',         r'RMSE $\|e_p\|$ a regime',        'm',       1.0,     True),
-    ('rmse_att_steady',         r'RMSE $\|e_R\|$ a regime',        'rad',     1.0,     True),
-    ('peak_pos_norm',           r'picco $\|e_p\|$ / gradino',      '-',       1.0,     False),
-    ('rmse_pos_transient_norm', r'RMSE transitorio / gradino',     '-',       1.0,     False),
-    ('peak_att_norm',           r'picco $\|e_R\|$ / gradino',      'rad/m',   1.0,     False),
-    ('tv_total',                r'Total Variation di fase',        'Hz/s',      1.0 / (2 * math.pi),  True),
+    ('rmse_pos_steady',         r'steady-state RMSE $\|e_p\|$',        'm',       1.0,     True),
+    ('rmse_att_steady',         r'steady-state RMSE $\|e_R\|$',        'rad',     1.0,     True),
+    ('peak_pos_norm',           r'peak $\|e_p\|$ / step',      '-',       1.0,     False),
+    ('rmse_pos_transient_norm', r'transient RMSE / step',     '-',       1.0,     False),
+    ('peak_att_norm',           r'peak $\|e_R\|$ / step',      'rad/m',   1.0,     False),
+    ('tv_total',                r'phase total variation',        'Hz/s',      1.0 / (2 * math.pi),  True),
 ]
 
-# etichette brevi per la console (il mathtext non si stampa a terminale)
+# short labels for the console (mathtext is not printed in a terminal)
 SHORT = {
-    'rmse_pos_steady': 'pos a regime [m]',
-    'rmse_att_steady': 'att a regime [rad]',
-    'peak_pos_norm': 'picco pos / gradino [-]',
-    'rmse_pos_transient_norm': 'RMSE transit / gradino [-]',
-    'peak_att_norm': 'picco att / gradino [rad/m]',
-    'tv_total': 'TV di fase [Hz/s]',
+    'rmse_pos_steady': 'steady pos [m]',
+    'rmse_att_steady': 'steady att [rad]',
+    'peak_pos_norm': 'peak pos / step [-]',
+    'rmse_pos_transient_norm': 'transient RMSE / step [-]',
+    'peak_att_norm': 'peak att / step [rad/m]',
+    'tv_total': 'phase TV [Hz/s]',
 }
 
 
-# =========================================================== lettura dei CSV
+# =========================================================== reading the CSV files
 def fnum(s):
-    """Cella di CSV -> float. Vuota o non numerica -> nan."""
+    """CSV cell -> float. Empty or non-numeric -> nan."""
     try:
         v = float(s)
     except (TypeError, ValueError):
@@ -124,11 +121,11 @@ def tables_dir(folder: Path) -> Path:
 
 
 def read_phase_metrics(folder: Path):
-    """{(group, phase): {campo: valore}} da phase_metrics.csv."""
+    """{(group, phase): {field: value}} from phase_metrics.csv."""
     path = tables_dir(folder) / "phase_metrics.csv"
     if not path.is_file():
-        sys.exit(f"Manca {path}\n"
-                 f"  Lancia prima:  python analyze_trajectory.py --input {folder}")
+        sys.exit(f"Missing {path}\n"
+                 f"  Run first:  python analyze_trajectory.py --input {folder}")
     out = {}
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
@@ -136,16 +133,15 @@ def read_phase_metrics(folder: Path):
             out[key] = {k: (v if k in ('run', 'group', 'phase') else fnum(v))
                         for k, v in r.items()}
     if not out:
-        sys.exit(f"{path} e' vuoto.")
+        sys.exit(f"{path} is empty.")
     return out
 
 
 def read_tv_flight(folder: Path):
-    """{group: TV totale sul volo intero} da tv_windows.csv.
+    """{group: total TV over the whole flight} from tv_windows.csv.
 
-    Il volo intero, non un ritaglio: e' la sola finestra che non dipende da
-    una scelta e che quindi si puo' confrontare fra due cartelle senza prima
-    verificare che il taglio sia caduto nello stesso posto."""
+    The whole flight is the only window that does not depend on a cut, so it
+    can be compared between two folders without checking where the cut fell."""
     path = tables_dir(folder) / "tv_windows.csv"
     if not path.is_file():
         return {}
@@ -157,36 +153,32 @@ def read_tv_flight(folder: Path):
     return out
 
 
-# ================================================ serie grezze per le curve
-# Le tabelle arrivano tutte dai CSV. Per disegnare le curve nel tempo servono
-# pero' le serie grezze, e queste due definizioni di errore sono ripetute qui:
+# ================================================ raw series for the curves
+# The tables all come from the CSV files. The curves over time need the
+# raw series, and the two error definitions are repeated here:
 #
 #     |e_p| = || pos - pos_ref ||
-#     |e_R| = || rotvec(R_ref^-1 R_act) ||          quaternioni in WXYZ
+#     |e_R| = || rotvec(R_ref^-1 R_act) ||          quaternions in WXYZ
 #
-# Ripetere una definizione e' il modo classico di ritrovarsi due numeri diversi
-# per la stessa cosa. Per questo NON ci si fida: dopo il caricamento lo script
-# ricalcola l'RMSE di una fase gia' presente in phase_metrics.csv e lo confronta
-# con il valore scritto li'. Se non coincide, lo dice e non disegna.
-# (Prima queste curve arrivavano importando analyze_trajectory. Se quel file non
-# sta accanto a questo -- o e' stato rinominato -- l'import falliva e la cartella
-# Rollouts restava vuota senza che fosse ovvio il perche'.)
+# After loading, the script recomputes the RMSE of a phase already in
+# phase_metrics.csv and compares it with the value written there. If the
+# two differ, it says so and draws nothing.
 
 def load_series(npz_path: Path):
-    """(group, dict con t, e_pos_norm, e_att_norm) oppure (None, motivo)."""
+    """(group, dict with t, e_pos_norm, e_att_norm), or (None, reason)."""
     try:
         data = np.load(npz_path, allow_pickle=True)
     except Exception as e:                                   # noqa: BLE001
         return None, f"load_error: {e}"
     keys = set(data.files)
     if not {'t', 'pos', 'pos_ref', 'quat', 'quat_ref'} <= keys:
-        return None, "campi mancanti"
+        return None, "missing fields"
 
     pname = str(data['policy_name']) if 'policy_name' in keys else ""
     tag = (npz_path.parent.name + "_" + pname).upper()
     group = "SPPO" if "SPPO" in tag else ("PPO" if "PPO" in tag else None)
     if group is None:
-        return None, "gruppo non riconosciuto"
+        return None, "unknown group"
 
     def to_xyzw(q):
         q = np.asarray(q, float)
@@ -202,12 +194,12 @@ def load_series(npz_path: Path):
     rv = (R_ref.inv() * R_act).as_rotvec()
     out = {'t': t, 'e_pos_norm': np.linalg.norm(e_w, axis=1),
            'e_att_norm': np.linalg.norm(rv, axis=1),
-           # Serie grezze, non solo le norme: servono a fig_step_profile_pair
-           # per il progresso di gradino p(t) (eq:step_progress), che ha
-           # bisogno della direzione del comando, non solo della sua norma.
+           # Raw series, besides the norms: fig_step_profile_pair needs the
+           # direction of the command for the step progress p(t)
+           # (eq:step_progress).
            'pos': pos, 'pos_ref': pos_ref, 'R_act': R_act, 'R_ref': R_ref}
-    # Velocita' lineare e angolare: stessa convenzione di analyze_trajectory
-    # (process_log), solo la norma, nessun riferimento loggato per confrontarle.
+    # Linear and angular velocity, as in analyze_trajectory (process_log):
+    # norm only, no reference is logged.
     if 'vel' in keys:
         out['v_norm'] = np.linalg.norm(np.asarray(data['vel'], float), axis=1)
     if 'avel' in keys:
@@ -216,9 +208,9 @@ def load_series(npz_path: Path):
 
 
 def check_against_csv(f, pm, group, tol=0.02):
-    """Verifica che le serie ricalcolate qui diano lo stesso RMSE che
-    analyze_trajectory ha scritto nel CSV, su una fase confrontabile.
-    Ritorna (ok, messaggio)."""
+    """Check that the series recomputed here give the same RMSE that
+    analyze_trajectory wrote in the CSV, on a comparable phase.
+    Return (ok, message)."""
     for (g, ph), r in pm.items():
         if g != group or r.get('comparable_transient') != 1:
             continue
@@ -231,15 +223,15 @@ def check_against_csv(f, pm, group, tol=0.02):
             continue
         got = float(np.sqrt(np.mean(f['e_pos_norm'][sel] ** 2)))
         if abs(got - exp) / exp > tol:
-            return False, (f"{group}: RMSE ricalcolato su '{ph}' = {got:.5f}, "
-                           f"nel CSV = {exp:.5f}")
-        return True, f"{group}: coerente su '{ph}' ({got:.5f} vs {exp:.5f})"
-    return True, f"{group}: nessuna fase adatta alla verifica"
+            return False, (f"{group}: RMSE recomputed on '{ph}' = {got:.5f}, "
+                           f"in the CSV = {exp:.5f}")
+        return True, f"{group}: consistent on '{ph}' ({got:.5f} vs {exp:.5f})"
+    return True, f"{group}: no phase suitable for the check"
 
 
-# =========================================================== confronti
+# =========================================================== comparisons
 def pct(new, old):
-    """Variazione percentuale di new rispetto a old."""
+    """Percentage change of new with respect to old."""
     if new != new or old != old or old == 0:
         return NAN
     return (new - old) / old * 100.0
@@ -252,8 +244,8 @@ def ratio(num, den):
 
 
 def winner(delta_pct, floor):
-    """delta_pct = (SPPO - PPO) / PPO * 100, su una metrica dove meno e' meglio.
-    Sotto la soglia assunta non si assegna nessun vincitore."""
+    """delta_pct = (SPPO - PPO) / PPO * 100, on a metric where lower is better.
+    Below the threshold no winner is assigned."""
     if delta_pct != delta_pct:
         return ''
     if abs(delta_pct) < floor:
@@ -262,49 +254,49 @@ def winner(delta_pct, floor):
 
 
 def compare_cell(nom, pert, floor):
-    """Tutti i numeri derivati per una metrica e una fase.
-    nom/pert sono dict {group: valore}."""
+    """All the derived numbers for one metric and one phase.
+    nom/pert are dicts {group: value}."""
     c = {}
     for g in GROUPS:
         c[f'{g.lower()}_nom'] = nom.get(g, NAN)
         c[f'{g.lower()}_pert'] = pert.get(g, NAN)
         c[f'D_{g.lower()}'] = ratio(pert.get(g, NAN), nom.get(g, NAN))
-    # lettura 1: chi sbaglia meno, condizione per condizione
+    # reading 1: who has the lower error, condition by condition
     c['delta_nom_pct'] = pct(c['sppo_nom'], c['ppo_nom'])
     c['delta_pert_pct'] = pct(c['sppo_pert'], c['ppo_pert'])
-    # lettura 2: chi ha il D piu' basso. ATTENZIONE: "degrada meno" e' vero
-    # solo se entrambi i D sono sopra 1. Se sono sotto, il volo perturbed e'
-    # andato meglio del nominal e il D piu' basso vuol dire "e' migliorato di
-    # piu'", che con un carico aggiunto non e' un risultato ma variabilita'.
+    # reading 2: who has the lower D. "Degrades less" holds only when both
+    # D are above 1. When they are below, the perturbed flight did better
+    # than the nominal one and the lower D means "improved more", which with
+    # an added load is flight-to-flight variability.
     c['delta_D_pct'] = pct(c['D_sppo'], c['D_ppo'])
-    # lettura 3: DELTA, lo spostamento assoluto causato dal disturbo.
+    # reading 3: DELTA, the absolute shift caused by the disturbance.
     #
-    # Il disturbo e' lo STESSO per le due policy, quindi "chi e' piu' robusto"
-    # e' "a chi si sposta meno l'errore": una differenza, non un rapporto.
-    # D divide per il valore nominal, e chi parte da un errore piu' basso ha
-    # un denominatore piu' piccolo -- il rapporto lo penalizza per una
-    # proprieta' dell'aritmetica, non del controllore. Delta non ha quel bias
-    # ed e' la grandezza da riportare quando si parla di sensibilita'.
+    # The disturbance is the SAME for the two policies, so the more robust
+    # policy is the one whose error shifts less: a difference, not a ratio.
+    # D divides by the nominal value, so the policy with the lower nominal
+    # error has a smaller denominator and is penalised by the arithmetic.
+    # Delta has no such bias and is the quantity to report for the
+    # sensitivity.
     #
-    # Delta NEGATIVO con un carico aggiunto e' fisicamente impossibile: li'
-    # non si sta misurando il disturbo ma la variabilita' volo-su-volo, e il
-    # suo valore assoluto da' la scala del rumore sotto cui nessuna
-    # differenza fra le due policy e' leggibile.
+    # A NEGATIVE Delta with an added load is not physical: there the
+    # flight-to-flight variability is measured, and its absolute value
+    # gives the noise scale below which no difference between the two
+    # policies can be read.
     for g in GROUPS:
         c[f'delta_abs_{g.lower()}'] = (c[f'{g.lower()}_pert']
                                        - c[f'{g.lower()}_nom'])
     c['win_nom'] = winner(c['delta_nom_pct'], floor)
     c['win_pert'] = winner(c['delta_pert_pct'], floor)
     c['win_D'] = winner(c['delta_D_pct'], floor)
-    # chi si sposta meno: sul valore assoluto dello spostamento, cosi' un
-    # Delta negativo (rumore) non viene premiato come "spostamento minimo"
+    # who shifts less: on the absolute value of the shift, so that a
+    # negative Delta (noise) is not rewarded as the smallest shift
     da, ds = c['delta_abs_ppo'], c['delta_abs_sppo']
     c['win_delta'] = (None if da != da or ds != ds or abs(da) < 1e-12
                       else winner(pct(abs(ds), abs(da)), floor))
     return c
 
 
-# =========================================================== figure
+# =========================================================== figures
 def set_style():
     plt.rcParams.update({
         "text.usetex": False,
@@ -339,10 +331,8 @@ def save(fig, path):
     plt.close(fig)
 
 
-# Posizione e assetto, un pannello ciascuno. Velocita' lineare/angolare
-# tolte il 5/10 su richiesta di Marco: la griglia torna 1x2 come lo era
-# prima di D26/del giro overlay, per restare sulle due sole grandezze che
-# contano anche nel grafico punto medio+range di fig_cat_range.
+# Position and attitude, one panel each: the same two quantities as in
+# the mid-point and range plot of fig_cat_range.
 OVERLAY_PANELS = [
     ('e_pos_norm', r'$\|e_p\|$   [m]'),
     ('e_att_norm', r'$\|e_R\|$   [rad]'),
@@ -350,27 +340,15 @@ OVERLAY_PANELS = [
 
 
 def fig_overlay_grid(flights, out_path, bounds=(), smooth_s=0.5):
-    """Griglia 1x2: posizione a sinistra, assetto a destra, nominal contro
-    perturbed, un'unica figura e un'unica legenda -- stessa logica delle
-    griglie di rollout di analyze_trajectory (font piu' grandi, linee a 1.8,
-    legenda fuori dal pannello sopra la griglia, niente titolo), cosi' la
-    scala di stampa coincide quando la figura va a tutta larghezza pagina.
-    Dimensione (11, 10) invariata rispetto alla 2x2 precedente, la stessa
-    del rollout 'forces' di analyze_trajectory (griglia 3x2): due pannelli
-    affiancati invece di quattro, stessa dimensione complessiva.
+    """1x2 grid: position on the left, attitude on the right, nominal against
+    perturbed, one figure and one legend. Same layout as the rollout grids of
+    analyze_trajectory (larger fonts, 1.8 lines, no title), so that the print
+    scale is the same when the figure spans the page width.
 
-    I pannelli di velocita' lineare/angolare, presenti nella 2x2 di un giro
-    precedente, sono tolte il 5/10 su richiesta di Marco: restano solo le
-    due grandezze che contano anche nel grafico punto medio+range (vedi
-    fig_cat_range), per restare coerenti fra le figure del capitolo.
-
-    Il tratteggio qui non si usa: nelle altre figure del capitolo (full_pose,
-    TRACK) il tratteggio indica il riferimento comandato, e riusarlo per
-    'perturbed' si confonderebbe con quello. nominal e perturbed restano
-    sullo stesso tratto continuo e si distinguono per trasparenza: nominal
-    sfumato, perturbed pieno. Niente traccia grezza in trasparenza sotto la
-    media mobile (come nelle altre figure del capitolo): l'unica traccia
-    visibile per ogni volo e' gia' la media mobile."""
+    Dashes are not used: in the other figures of the chapter (full_pose,
+    TRACK) a dashed line is the commanded reference. Nominal and perturbed
+    are both solid and differ in transparency: nominal faded, perturbed full.
+    Each flight is drawn as its moving average only."""
     with plt.rc_context({
         "axes.labelsize": 20, "xtick.labelsize": 17, "ytick.labelsize": 17,
         "axes.linewidth": 0.9, "xtick.major.width": 0.9, "ytick.major.width": 0.9,
@@ -407,12 +385,8 @@ def fig_overlay_grid(flights, out_path, bounds=(), smooth_s=0.5):
             ax.set_xlabel(r'$t$   [s]')
         for ax in axs.ravel():
             tight_x(ax, t_lo, t_hi)
-        # Legenda dentro il pannello invece che sopra la griglia: su una
-        # griglia 1x2 (non piu' 2x2) la banda riservata sopra la figura per
-        # la legenda valeva quanto i pannelli stessi -- Marco, 5/10. Un solo
-        # riquadro (nel pannello di posizione, in alto a destra: dopo il
-        # secondo picco le curve restano basse li', verificato a vista) vale
-        # per entrambi i pannelli, stessa mappa colori/etichette.
+        # One legend inside the position panel (upper right, where the curves
+        # stay low after the second peak), valid for both panels.
         fig.tight_layout()
         order = sorted(handles_by_label)
         axs[0][0].legend([handles_by_label[l] for l in order], order,
@@ -420,57 +394,48 @@ def fig_overlay_grid(flights, out_path, bounds=(), smooth_s=0.5):
         save(fig, out_path)
 
 
-# Fase del gradino C->D (Point-to-point nel p2p, Tilt nel tilt): e' la
-# SECONDA fase di hold della missione, in entrambi i casi 'SETPOINT 2' nelle
-# phase_metrics.csv prodotte da analyze_trajectory -- stessa etichetta per
-# le due missioni, quindi la funzione sotto non distingue p2p da tilt.
+# Phase of the step C->D (Point-to-point in p2p, Tilt in the tilt
+# mission): the SECOND hold phase of the mission, 'SETPOINT 2' in the
+# phase_metrics.csv of analyze_trajectory for both missions, so the
+# function below treats p2p and tilt in the same way.
 STEP_PROFILE_PHASE = 'SETPOINT 2'
 
-# Finestra del profilo: NON e' cat_delta (quello segmenta Step da Hold per
-# le metriche a categoria, tipicamente piu' corto del transitorio). La fase
-# SETPOINT 2 dura circa 5-6 s in entrambe le missioni (phase_metrics.csv,
-# colonna t1-t0): 5 s mostra il transitorio quasi per intero senza sforare
-# nella fase successiva. Dichiarata e fissa, non calcolata volo per volo,
-# stessa convenzione di subsec:window in tesi.
+# Window of the profile, different from cat_delta (which separates Step
+# from Hold for the category metrics and is usually shorter than the
+# transient). SETPOINT 2 lasts about 5-6 s in both missions
+# (phase_metrics.csv, t1-t0): 5 s shows almost the whole transient
+# without reaching the next phase. The value is fixed, as in
+# subsec:window of the thesis.
 STEP_PROFILE_WINDOW_S = 5.0
 
 STEP_PROFILE_PANELS = [('pos', r'$p(t)$   [-]'), ('att', r'$p(t)$   [-]')]
 STEP_PROFILE_CHANNELS = {'pos': ('pos', 'pos_ref'), 'att': ('R_act', 'R_ref')}
 STEP_MIN_AMP = {'pos': 0.02, 'att': float(np.deg2rad(2.0))}   # STEP_POS/STEP_ANG
 
-# Canale p(t) rilevante per ciascuna missione: l'unico, dei due, che ha
-# davvero un gradino non nullo in C->D (l'altro resta a riferimento
-# costante nella transizione -- vedi STEP_MIN_AMP/_step_progress, che
-# infatti scarta quel canale). Chiavi = stem di nom_dir.name dopo aver
-# tolto '_nominal' (vedi run()): 'p2p' per il point-to-point, 'rpy' per il
-# tilt (nome della cartella, non della manovra -- in tesi resta "Tilt").
+# p(t) channel of each mission: the one with a nonzero step in C->D
+# (the other keeps a constant reference during the transition, and
+# _step_progress discards it through STEP_MIN_AMP). Keys = name of the
+# nominal folder without '_nominal' (see run()): 'p2p' for the
+# point-to-point, 'rpy' for the tilt mission.
 MISSION_STEP_CHANNEL = {'p2p': 'pos', 'rpy': 'att'}
 
 
 def _step_progress(t, sig, sig_ref, t0, delta, kind):
-    """Variabile di progresso p(t) di eq:step_progress sulla finestra
-    [t0, t0+delta]: 0 all'istante del gradino (un campione prima del
-    confine di fase, come in step_response() di analyze_trajectory, cosi'
-    il primo campione e' davvero zero), 1 sul bersaglio, >1 se il drone lo
-    supera. kind='pos': sig/sig_ref sono gli array pos/pos_ref (N,3).
-    kind='att': sig/sig_ref sono gli stack R_act/R_ref di scipy Rotation.
-    Stessa formula di step_response(), copiata a mano perche' qui non si
-    importa analyze_trajectory (vedi load_series): ricalcolare e controllare
-    contro step_pos_m/step_ang_deg di phase_metrics.csv e' la stessa
-    disciplina di check_against_csv.
-    Ritorna (t_rel, p, amp) oppure None se il gradino su questo canale e'
-    sotto soglia o la finestra non ha abbastanza campioni."""
-    # tolleranza: t0 arriva da phase_metrics.csv arrotondato a 6 decimali,
-    # fino a ~1e-6 s sopra il campione vero del salto -- senza margine,
-    # su un campione sfortunato 't >= t0' sceglie il campione DOPO quello
-    # giusto, rendendo i_prev gia' post-salto e l'ampiezza nulla (scartata
-    # da STEP_MIN_AMP in silenzio). 1e-4 s e' molto sopra l'errore di
-    # arrotondamento e molto sotto il periodo di campionamento (~0.01 s),
-    # quindi non sposta quale campione e' 'quello giusto'. Bug trovato e
-    # corretto il 5/10 generando le prime figure/tabelle reali di 5.3.3
-    # (D29): su otto combinazioni missione/gruppo a SETPOINT 2, sei
-    # cadevano nel caso sfortunato, verificato confrontando l'ampiezza
-    # ricalcolata con step_pos_m/step_ang_deg di phase_metrics.csv.
+    """Progress variable p(t) of eq:step_progress on the window [t0, t0+delta]:
+    0 at the instant of the step (one sample before the phase boundary, as in
+    step_response() of analyze_trajectory, so that the first sample is zero),
+    1 on the target, >1 when the vehicle goes past it.
+    kind='pos': sig/sig_ref are the pos/pos_ref arrays (N, 3).
+    kind='att': sig/sig_ref are the R_act/R_ref scipy Rotation stacks.
+    Same formula as step_response(); the amplitude is checked against
+    step_pos_m/step_ang_deg of phase_metrics.csv, as in check_against_csv.
+    Return (t_rel, p, amp), or None when the step on this channel is below
+    the threshold or the window has too few samples."""
+    # tolerance: t0 comes from phase_metrics.csv rounded to 6 decimals, up
+    # to ~1e-6 s after the actual sample of the jump. Without a margin,
+    # 't >= t0' could select the sample AFTER the right one, making i_prev
+    # already post-jump and the amplitude zero. 1e-4 s is well above the
+    # rounding error and well below the sampling period (~0.01 s).
     idx = np.flatnonzero(t >= t0 - 1e-4)
     if idx.size == 0 or idx[0] == 0:
         return None
@@ -503,19 +468,18 @@ def _step_progress(t, sig, sig_ref, t0, delta, kind):
 
 def _step_progress_band(flights, pm_nom, pm_pert, key, delta,
                         smooth_s=0.10, n_grid=251, amp_tol=0.05, tag=''):
-    """Banda punto medio+range di p(t) per un canale (key='pos'/'att'),
-    una per gruppo, su [0, delta] di STEP_PROFILE_PHASE -- fattorizzata da
-    fig_step_profile_pair e fig_step_profile_single, stessa logica in un
-    solo posto (vedi _step_progress per la formula).
+    """Mid-point and range band of p(t) for one channel (key='pos'/'att'),
+    one per group, on [0, delta] of STEP_PROFILE_PHASE. Shared by
+    fig_step_profile_pair and fig_step_profile_single (see _step_progress
+    for the formula).
 
-    flights: {(group, cond): dict di load_series, con pos/pos_ref/R_act/R_ref}.
-    pm_nom, pm_pert: dict da read_phase_metrics, chiave (group, phase).
-    tag: prefisso dei messaggi di avviso in console, per distinguere la
-    chiamante quando piu' di una e' attiva nello stesso run.
+    flights: {(group, cond): dict from load_series, with pos/pos_ref/R_act/R_ref}.
+    pm_nom, pm_pert: dicts from read_phase_metrics, keyed by (group, phase).
+    tag: prefix of the console warnings, to tell the callers apart.
 
-    Ritorna (t_grid, bands) con bands[g] = (mid, lo, hi) sulla griglia
-    t_grid, o None se a quel gruppo manca un volo o il canale non ha un
-    gradino sopra soglia su almeno una delle due condizioni."""
+    Return (t_grid, bands) with bands[g] = (mid, lo, hi) on t_grid; bands[g]
+    is None when a flight of that group is missing or the channel has no step
+    above the threshold in one of the two conditions."""
     sig_key, ref_key = STEP_PROFILE_CHANNELS[key]
     pm_by_cond = {'nominal': pm_nom, 'perturbed': pm_pert}
     t_grid = np.linspace(0.0, delta, n_grid)
@@ -543,8 +507,8 @@ def _step_progress_band(flights, pm_nom, pm_pert, key, delta,
             if csv_amp == csv_amp:
                 csv_amp_v = csv_amp if key == 'pos' else np.deg2rad(csv_amp)
                 if csv_amp_v > 0 and abs(amp - csv_amp_v) / csv_amp_v > amp_tol:
-                    print(f"  [step p(t){tag}] !! {g} {cond} {key}: ampiezza "
-                          f"ricalcolata {amp:.4f} vs CSV {csv_amp_v:.4f}")
+                    print(f"  [step p(t){tag}] !! {g} {cond} {key}: amplitude "
+                          f"recomputed {amp:.4f} vs CSV {csv_amp_v:.4f}")
             vg = np.interp(t_grid, tt, prog)
             dt = float(np.median(np.diff(t_grid)))
             k = max(1, int(round(smooth_s / max(dt, 1e-6))))
@@ -566,23 +530,20 @@ def _step_progress_band(flights, pm_nom, pm_pert, key, delta,
 
 def fig_step_profile_pair(flights, pm_nom, pm_pert, delta, out_path,
                           smooth_s=0.10, n_grid=251, amp_tol=0.05):
-    """Griglia 1x2 (posizione, assetto): p(t) sulla finestra [t0, t0+delta]
-    di STEP_PROFILE_PHASE, una banda punto medio+range per policy (vedi
-    _step_progress_band). Stessa convenzione di fig_cat_range_pair, qui nel
-    tempo invece che per categoria: il centro di ogni banda e' il punto
-    medio fra il volo nominal e quello perturbed, l'ampiezza e' l'intervallo
-    che i due coprono -- non una deviazione standard (subsec:nom_pert_range:
-    due soli valori non sono un campione). t0 viene da phase_metrics.csv
-    (stesso file che fig_overlay_grid legge per i confini verticali).
+    """1x2 grid (position, attitude): p(t) on the window [t0, t0+delta] of
+    STEP_PROFILE_PHASE, one mid-point and range band per policy (see
+    _step_progress_band). Same convention as fig_cat_range_pair, over time
+    instead of by category: the centre of each band is the mid-point between
+    the nominal and the perturbed flight, the width is the interval they span
+    (two values are not a sample, so no standard deviation is used). t0 comes
+    from phase_metrics.csv.
 
-    Griglia completa pos+att per entrambe le missioni, utile a controllo:
-    ciasccuna missione ha un gradino vero su un solo canale in C->D (vedi
-    MISSION_STEP_CHANNEL), quindi uno dei due pannelli resta vuoto nel
-    file prodotto qui. La figura pensata per il testo e' invece
-    fig_step_profile_single, un solo pannello sul canale col gradino.
+    Each mission has a step on a single channel in C->D (see
+    MISSION_STEP_CHANNEL), so one of the two panels is empty; the figure used
+    in the text is fig_step_profile_single.
 
-    flights, pm_nom, pm_pert: come _step_progress_band.
-    delta: durata dichiarata della finestra (STEP_PROFILE_WINDOW_S)."""
+    flights, pm_nom, pm_pert: as in _step_progress_band.
+    delta: duration of the window (STEP_PROFILE_WINDOW_S)."""
     panels = {}
     missing = []
     t_grid = None
@@ -594,10 +555,10 @@ def fig_step_profile_pair(flights, pm_nom, pm_pert, delta, out_path,
         missing += [f"{g}/{key}" for g, b in bands.items() if b is None]
 
     if all(b is None for bands in panels.values() for b in bands.values()):
-        print(f"  [step profile] nessun dato disponibile, {out_path} non scritto")
+        print(f"  [step profile] no data, {out_path} not written")
         return False
     if missing:
-        print(f"  [step profile] banda mancante per: {', '.join(missing)}")
+        print(f"  [step profile] band missing for: {', '.join(missing)}")
 
     with plt.rc_context({
         "axes.labelsize": 20, "xtick.labelsize": 17, "ytick.labelsize": 17,
@@ -628,18 +589,13 @@ def fig_step_profile_pair(flights, pm_nom, pm_pert, delta, out_path,
 
 def fig_step_profile_single(flights, pm_nom, pm_pert, mission, delta, out_path,
                             smooth_s=0.10, n_grid=251, amp_tol=0.05):
-    """Un solo pannello: p(t) sulla finestra [t0, t0+delta] di
-    STEP_PROFILE_PHASE, banda punto medio+range per policy, SOLO sul canale
-    che in questa missione ha un gradino vero in C->D ((posizione per il p2p,
-    assetto per il tilt -- vedi MISSION_STEP_CHANNEL)). E' la figura pensata
-    per il testo di Sezione 5.3.3: una per sottosezione (Point-to-point,
-    Tilt), niente traiettoria 3D ne' secondo pannello vuoto -- quella
-    combinazione (fig_trajectory3d_step_pair) e' stata scartata il 5/10 sera
-    su richiesta di Marco (troppe voci in legenda), vedi idea.md.
+    """One panel: p(t) on the window [t0, t0+delta] of STEP_PROFILE_PHASE,
+    mid-point and range band per policy, only on the channel with a step in
+    C->D for this mission (position for p2p, attitude for the tilt mission,
+    see MISSION_STEP_CHANNEL). One figure per mission.
 
-    flights, pm_nom, pm_pert, delta: come fig_step_profile_pair.
-    mission: chiave di MISSION_STEP_CHANNEL ('p2p' o 'rpy'; vedi stem in
-    run())."""
+    flights, pm_nom, pm_pert, delta: as in fig_step_profile_pair.
+    mission: key of MISSION_STEP_CHANNEL ('p2p' or 'rpy')."""
     key = MISSION_STEP_CHANNEL[mission]
     ylabel = dict(STEP_PROFILE_PANELS)[key]
     t_grid, bands = _step_progress_band(flights, pm_nom, pm_pert, key, delta,
@@ -647,8 +603,8 @@ def fig_step_profile_single(flights, pm_nom, pm_pert, mission, delta, out_path,
                                         tag=' single')
 
     if all(b is None for b in bands.values()):
-        print(f"  [step profile single] nessun dato disponibile per "
-              f"'{mission}', {out_path} non scritto")
+        print(f"  [step profile single] no data for "
+              f"'{mission}', {out_path} not written")
         return False
 
     with plt.rc_context({
@@ -674,17 +630,14 @@ def fig_step_profile_single(flights, pm_nom, pm_pert, mission, delta, out_path,
     return True
 
 
-# ================================================== tabella risposta al
-# gradino, punto medio+range (Sezione 5.3.3)
+# ================================================== step response table,
+# mid-point and range
 #
-# Le quattro grandezze (overshoot, rise time, settling time, steady-state
-# error) non si ricalcolano qui: vengono da assets.csv (tables/ di ciascuna
-# cartella), scritto da step_response()/export_assets() di
-# analyze_trajectory.py -- unica implementazione delle formule, stessa
-# disciplina dichiarata in testa a questo file. Steady-state error in GRADI
-# per l'assetto (non radianti), come _step_table_figure() dello stesso
-# analyze_trajectory.py, per restare coerenti con 03_method.tex (righe
-# 659-660: assetto in gradi nelle figure/tabelle del Capitolo 5).
+# The four quantities (overshoot, rise time, settling time, steady-state
+# error) are read from assets.csv (tables/ of each folder), written by
+# step_response()/export_assets() of analyze_trajectory.py. The
+# steady-state error of the attitude is in DEGREES, as in
+# _step_table_figure() of analyze_trajectory.py.
 STEP_METRICS_SECTION = {'pos': 'step_pos', 'att': 'step_att'}
 STEP_METRICS = [
     ('overshoot_pct', r'overshoot $M_p$', '%', 1.0),
@@ -695,13 +648,11 @@ STEP_METRICS = [
 
 
 def read_assets(folder: Path):
-    """{(section, phase, group, metric): valore} da assets.csv -- stessa
-    forma chiave-valore del file sorgente, tables_dir() e' la stessa
-    funzione gia' usata da read_phase_metrics/read_tv_flight."""
+    """{(section, phase, group, metric): value} from assets.csv."""
     path = tables_dir(folder) / "assets.csv"
     if not path.is_file():
-        sys.exit(f"Manca {path}\n"
-                 f"  Lancia prima:  python analyze_trajectory.py --input {folder}")
+        sys.exit(f"Missing {path}\n"
+                 f"  Run first:  python analyze_trajectory.py --input {folder}")
     out = {}
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
@@ -710,15 +661,13 @@ def read_assets(folder: Path):
 
 
 def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
-    """Scrive una tabella LaTeX pronta (\\begin{tabular}...) con le quattro
-    grandezze di STEP_METRICS su STEP_PROFILE_PHASE, punto medio+range fra
-    nominal e perturbed (D28), PPO ed SPPO affiancate -- l'equivalente di
-    fig_cat_range_pair per il gradino, in forma di tabella invece che di
-    barre (Marco, 5/10 sera: per 5.3.3 solo p(t) come figura, i quattro
-    numeri restano una tabella, non un secondo grafico).
+    """Write a LaTeX table (\\begin{tabular}...) with the four quantities of
+    STEP_METRICS on STEP_PROFILE_PHASE, mid-point and range between nominal
+    and perturbed, PPO and SPPO side by side: the counterpart of
+    fig_cat_range_pair for the step, as a table.
 
-    mission: chiave di MISSION_STEP_CHANNEL, sceglie se leggere le righe
-    'step_pos' o 'step_att' di assets.csv."""
+    mission: key of MISSION_STEP_CHANNEL, selects the 'step_pos' or
+    'step_att' rows of assets.csv."""
     key = MISSION_STEP_CHANNEL[mission]
     section = STEP_METRICS_SECTION[key]
     a_nom, a_pert = read_assets(nom_dir), read_assets(pert_dir)
@@ -726,7 +675,7 @@ def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
 
     rows = []
     for metric, label, unit, scale in STEP_METRICS:
-        if unit is None:                      # steady-state error: m o deg
+        if unit is None:                      # steady-state error: m or deg
             unit = 'deg' if deg else 'm'
             scale = RAD2DEG if deg else 1.0
         cells = {}
@@ -746,7 +695,7 @@ def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
             rows.append((label, unit, cells))
 
     if not rows:
-        print(f"  [step table] nessun dato per '{mission}', {out_path} non scritto")
+        print(f"  [step table] no data for '{mission}', {out_path} not written")
         return False
 
     def fmt(cell):
@@ -757,20 +706,20 @@ def step_metrics_range_table(nom_dir, pert_dir, mission, out_path):
 
     with open(out_path, "w") as fh:
         fh.write(f"% {mission}: {section}, {STEP_PROFILE_PHASE}, "
-                 "punto medio e range (nominal, perturbed)\n")
+                 "mid-point and range (nominal, perturbed)\n")
         fh.write("\\begin{tabular}{lccc}\n\\toprule\n")
         fh.write("Quantity & Unit & PPO & SPPO \\\\\n\\midrule\n")
         for label, unit, cells in rows:
             fh.write(f"{label} & {unit} & {fmt(cells['PPO'])} & "
                      f"{fmt(cells['SPPO'])} \\\\\n")
         fh.write("\\bottomrule\n\\end{tabular}\n")
-    print(f"  scritto {out_path}")
+    print(f"  written {out_path}")
     return True
 
 
 
 def tight_x(ax, lo, hi):
-    """Niente margine orizzontale: la traccia attacca all'asse."""
+    """No horizontal margin: the trace starts at the axis."""
     if hi > lo:
         ax.set_xlim(lo, hi)
     ax.margins(x=0)
@@ -778,36 +727,33 @@ def tight_x(ax, lo, hi):
 
 # =========================================================== main
 
-# =========================================================== SOLO LA MISSIONE
-# Fino al momento in cui il drone raggiunge il world frame, i due voli NON sono
-# confrontabili a parita' di riferimento: il decollo avviene sulla verticale
-# della posa a terra, che cambia a ogni volo, e il gradino di avvicinamento ha
-# quindi un'ampiezza diversa (fino all'11% fra un volo e l'altro). Tutto quello
-# che si misura li' dentro risente di quella differenza e non del disturbo.
+# =========================================================== MISSION ONLY
+# Until the vehicle reaches the world frame, the two flights do not
+# share the same reference: the takeoff starts above the ground pose,
+# which changes in every flight, so the approach step has a different
+# amplitude (up to 11% between flights). What is measured there depends
+# on that difference and not on the disturbance.
 #
-# Da quando il drone e' arrivato a (0,0,z) in poi i riferimenti sono identici
-# nei quattro voli, istante per istante: e' l'unica finestra in cui D misura
-# solo l'effetto della perturbazione.
+# From the arrival at (0,0,z) on, the references of the four flights are
+# identical, instant by instant: in this window D measures only the
+# effect of the perturbation.
 #
-# Il taglio e' ancorato al RIFERIMENTO (istante del gradino + un margine di
-# assestamento dichiarato), non all'arrivo effettivo del drone: allineare
-# sull'arrivo significherebbe condizionare sull'esito e togliere al volo piu'
-# lento proprio la parte in cui va peggio.
+# The cut is anchored to the REFERENCE (instant of the step plus a fixed
+# settling margin), not to the actual arrival of the vehicle: aligning on
+# the arrival would condition on the outcome and remove from the slower
+# flight the part where it does worse.
 
 N_ROTORS, F_MIN, F_MAX, CF = 6, 0.3072, 12.0, 12.0e-4
 
-# Stessi nomi e stesso ordine di analyze_trajectory, cosi' tabelle e figure
-# restano leggibili allo stesso modo.
-# Le due statistiche d'errore, come in analyze_trajectory. Con --full-flight
-# si legge summary_rmse.csv, che porta il solo RMSE: li' il MAE non c'e'.
-# numpy >= 2.0 la chiama trapezoid, prima trapz
+# Same names and order as in analyze_trajectory.
+# numpy >= 2.0 calls it trapezoid, older versions trapz
 _TRAPZ = getattr(np, 'trapezoid', None) or np.trapz
 
 
 def seg_mean_t(t, y, mask=None):
-    """Media temporale di y: integrale per trapezi diviso per la durata,
-    sommando per tratti contigui. Copia fedele di analyze_trajectory.seg_mean_t:
-    i due script devono dare lo stesso numero sulla stessa finestra."""
+    """Time average of y: trapezoidal integral divided by the duration, summed
+    over contiguous stretches. Same as analyze_trajectory.seg_mean_t, so that
+    the two scripts give the same number on the same window."""
     t = np.asarray(t, float); y = np.asarray(y, float)
     idx = np.arange(t.size) if mask is None else np.flatnonzero(mask)
     if idx.size == 0:
@@ -830,16 +776,14 @@ def mae_t(t, x, mask=None):
     return seg_mean_t(t, np.abs(np.asarray(x, float)), mask)
 
 
-# Le due statistiche d'errore, come in analyze_trajectory: medie TEMPORALI,
-# non sui campioni. Con --full-flight si legge summary_rmse.csv, che porta il
-# solo RMSE: li' il MAE non c'e'.
+# The two error statistics, as in analyze_trajectory: TIME averages.
+# With --full-flight summary_rmse.csv is read, which has the RMSE only.
 STATS = (("RMSE", rms_t),
          ("MAE",  mae_t))
 
 def read_params(folder):
-    """tables/params.csv: i parametri con cui e' stata prodotta la cartella.
-    Manca nelle cartelle generate prima che analyze_trajectory lo scrivesse,
-    e in quel caso il controllo si limita a dirlo."""
+    """tables/params.csv: the parameters used for the folder. When the file
+    is missing the check reports it."""
     p = tables_dir(folder) / "params.csv"
     if not p.exists():
         return None
@@ -850,29 +794,28 @@ def read_params(folder):
     return out
 
 
-# Parametri che definiscono le FINESTRE: se non coincidono fra nominal e
-# perturbed, le due cartelle tagliano il volo in punti diversi e ogni
-# confronto fra loro misura anche la differenza di taglio.
+# Parameters that define the WINDOWS: when they differ between nominal
+# and perturbed, the two folders cut the flight at different points and
+# every comparison also measures the difference of the cuts.
 WINDOW_PARAMS = ('cat_delta', 't_ss', 'step_tol_pos', 'step_tol_ang')
 
 
 def check_params(nom_dir, pert_dir):
-    """Le due cartelle sono state analizzate con gli stessi tagli?
+    """Were the two folders analysed with the same cuts?
 
-    Le figure di maneuvers/ e step/ leggono category_metrics.csv cosi' com'e':
-    le finestre non si ricalcolano qui, si ereditano. Se le due cartelle sono
-    state prodotte con --delta diversi, 'Step' e 'Hover' coprono intervalli
-    diversi nei due casi e il confronto lo nasconde."""
+    The figures of maneuvers/ and step/ read category_metrics.csv as it is:
+    the windows are inherited, not recomputed. With different --delta values
+    'Step' and 'Hover' would cover different intervals in the two folders."""
     a, b = read_params(nom_dir), read_params(pert_dir)
-    print(f"\n{'='*78}\nPARAMETRI DELLE DUE CARTELLE\n{'='*78}")
+    print(f"\n{'='*78}\nPARAMETERS OF THE TWO FOLDERS\n{'='*78}")
     if a is None or b is None:
         miss = [str(d) for d, v in ((nom_dir, a), (pert_dir, b)) if v is None]
-        print("  !! manca tables/params.csv in: " + ", ".join(miss))
-        print("     Rilancia analyze_trajectory su quelle cartelle: senza quel")
-        print("     file non posso verificare che i tagli coincidano.")
+        print("  !! tables/params.csv missing in: " + ", ".join(miss))
+        print("     Run analyze_trajectory again on those folders: without that")
+        print("     file the cuts cannot be checked.")
         return False
     ok = True
-    print(f"  {'parametro':20s}{'nominal':>14s}{'perturbed':>14s}   esito")
+    print(f"  {'parameter':20s}{'nominal':>14s}{'perturbed':>14s}   result")
     for k in WINDOW_PARAMS:
         va, vb = a.get(k, NAN), b.get(k, NAN)
         same = (va != va and vb != vb) or abs(va - vb) < 1e-9
@@ -880,21 +823,20 @@ def check_params(nom_dir, pert_dir):
         def s(v):
             return '--' if v != v else f"{v:.4g}"
         print(f"  {k:20s}{s(va):>14s}{s(vb):>14s}   "
-              + ("ok" if same else "!! DIVERSO"))
+              + ("ok" if same else "!! DIFFERENT"))
     if not ok:
-        print("\n  !! le due cartelle tagliano il volo in punti diversi.")
-        print("     Le figure in maneuvers/ e maneuvers/step/ leggono quelle")
-        print("     finestre cosi' come sono: rigenera entrambe le cartelle con")
-        print("     gli stessi parametri prima di leggere il confronto.")
+        print("\n  !! the two folders cut the flight at different points.")
+        print("     The figures in maneuvers/ and maneuvers/step/ use those")
+        print("     windows as they are: regenerate both folders with the")
+        print("     same parameters before reading the comparison.")
     if ok:
-        print("\n  -> stessi tagli nelle due cartelle.")
+        print("\n  -> same cuts in the two folders.")
     return ok
 
 
-# Unita' di ciascuna metrica globale, per le figure della cartella RMSE.
-# L'assetto resta in radianti: e' l'unita' in cui e_R e' definito (norma del
-# log-map) ed e' quella usata in tesi. I valori sono dell'ordine di 0.02-0.1,
-# quindi le etichette sulle barre vanno scritte con abbastanza cifre.
+# Unit of each global metric, for the figures of the RMSE folder. The
+# attitude stays in radians, the unit of e_R (norm of the log map). The
+# values are around 0.02-0.1, so the bar labels need enough digits.
 GLOBAL_UNITS = {
     'Position Error X (ref frame)': ('m', 1.0),
     'Position Error Y (ref frame)': ('m', 1.0),
@@ -909,7 +851,7 @@ GLOBAL_UNITS = {
     'Total Attitude Error': ('rad', 1.0),
     'Linear Velocity Norm': ('m/s', 1.0),
     'Angular Velocity Norm': ('rad/s', 1.0),
-    'Total variation - tutti i motori': ('Hz/s', 1.0 / (2 * math.pi)),
+    'Total variation - all motors': ('Hz/s', 1.0 / (2 * math.pi)),
 }
 
 
@@ -921,11 +863,8 @@ def _slug(name):
 
 
 def fig_metric_bars(metric, c, out_path, floor, stat='RMSE'):
-    """Una metrica, quattro barre: le due policy nelle due condizioni.
-
-    E' la vista piu' diretta di tutte -- nessun rapporto, nessuna
-    normalizzazione, solo i quattro numeri misurati -- e serve proprio a
-    poterli leggere senza passare da D."""
+    """One metric, four bars: the two policies in the two conditions, without
+    ratios or normalisation."""
     unit, scale = GLOBAL_UNITS.get(metric, ('', 1.0))
     order = [('ppo_nom', 'PPO', 'nominal'), ('ppo_pert', 'PPO', 'perturbed'),
              ('sppo_nom', 'SPPO', 'nominal'), ('sppo_pert', 'SPPO', 'perturbed')]
@@ -958,21 +897,21 @@ def fig_metric_bars(metric, c, out_path, floor, stat='RMSE'):
 
 
 # ===========================================================================
-# CATEGORIE DI COMPITO DI CONTROLLO
+# CONTROL TASK CATEGORIES
 # ===========================================================================
-# Sezione ex compare_categories.py, accorpata qui. Stesse due letture della
-# parte sopra -- chi sbaglia meno, chi degrada meno -- ma con le cinque
-# categorie al posto delle fasi, e quindi righe confrontabili fra scenari.
+# The same two readings as above (who has the lower error, who degrades
+# less) on the categories instead of the phases, so that the rows are
+# comparable across missions.
 
 CATEGORIES = ["Takeoff", "Step", "Hover", "Tilt", "Land"]
-# stesso significato che in analyze_trajectory: serve per sapere quali
-# categorie nelle figure vanno normalizzate invece che in valore assoluto.
-KIND = {"Takeoff": "rampa", "Land": "rampa", "Step": "gradino",
+# same meaning as in analyze_trajectory: tells which categories are
+# normalised in the figures instead of shown in absolute value.
+KIND = {"Takeoff": "ramp", "Land": "ramp", "Step": "step",
         "Hover": "hold", "Tilt": "hold"}
 
-# Stessa rietichettatura per missione di analyze_trajectory.py (Tabelle
-# 5.5/5.6 della tesi): 'stem' ('p2p'/'rpy') seleziona la lista di categorie
-# con cui leggere category_metrics.csv, gia' scritto con questi nomi.
+# Same mission-specific names as in analyze_trajectory.py (Tables
+# 5.5/5.6 of the thesis): 'stem' ('p2p'/'rpy') selects the list of
+# categories used to read category_metrics.csv.
 CATEGORIES_BY_MISSION = {
     "p2p": ["Takeoff", "Step", "Origin", "Point-to-point", "Land"],
     "rpy": ["Takeoff", "Step", "Origin", "Tilt", "Level", "Land"],
@@ -986,18 +925,18 @@ CAT_ALPHA = {"nom": 0.92, "pert": 0.45}
 COND_LAB = {"nom": "nominal", "pert": "perturbed"}
 C_INK, C_MUTED = "#222222", "#9a9a9a"
 
-# Metriche CON SEGNO: il rapporto D fra due valori di segno diverso non
-# significa niente, e la variazione percentuale esplode quando il denominatore
-# passa vicino allo zero. Per queste si riportano i quattro valori e le
-# differenze ASSOLUTE, nell'unita' della metrica.
+# SIGNED metrics: the ratio D between values of different sign has no
+# meaning, and the percentage change explodes when the denominator is
+# close to zero. For these the four values and the ABSOLUTE differences
+# are reported, in the unit of the metric.
 CAT_SIGNED = {"lag_z"}
 
 
 def read_category_metrics(folder):
     p = tables_dir(Path(folder)) / "category_metrics.csv"
     if not p.is_file():
-        raise SystemExit(f"Manca {p}\n"
-                         f"  Lancia prima:  python analyze_trajectory.py --input {folder}")
+        raise SystemExit(f"Missing {p}\n"
+                         f"  Run first:  python analyze_trajectory.py --input {folder}")
     out = {}
     for r in csv.DictReader(open(p, newline="")):
         try:
@@ -1011,7 +950,7 @@ def read_category_metrics(folder):
 
 
 
-# Le dieci grandezze, stesse chiavi e stessi nomi di file di analyze_trajectory
+# The ten quantities, same keys and file names as in analyze_trajectory
 CAT_FIGS = [
     ("e_x",     r"$e_x^{\,r}$",   "m",     "1_err_bx"),
     ("e_y",     r"$e_y^{\,r}$",   "m",     "2_err_by"),
@@ -1028,10 +967,8 @@ CAT_MOTION = ("v_norm", "w_norm")
 
 
 def fig_cat_nom_vs_pert(cats, V, stat, key, sym, unit, out_path, stem):
-    """Una grandezza: le manovre sull'asse x, quattro barre per manovra.
-
-    Nessun rapporto e nessuna normalizzazione: solo i quattro numeri misurati,
-    che e' la vista da cui si parte prima di guardare D."""
+    """One quantity: the manoeuvres on the x axis, four bars per manoeuvre,
+    without ratios or normalisation."""
     order = [("PPO", "nom"), ("PPO", "pert"), ("SPPO", "nom"), ("SPPO", "pert")]
     allv = [V.get((g, c, cat, stat, key), NAN) for g, c in order for cat in cats]
     finite = [v for v in allv if v == v]
@@ -1063,12 +1000,12 @@ def fig_cat_nom_vs_pert(cats, V, stat, key, sym, unit, out_path, stem):
     ax.legend(loc="best", ncol=2, frameon=True, fontsize=9.5)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def fig_cat_degradation(cats, V, stat, key, sym, out_path, stem):
-    """Una grandezza: D = perturbed / nominal, due barre per manovra."""
+    """One quantity: D = perturbed / nominal, two bars per manoeuvre."""
     d_all = {}
     for g in ("PPO", "SPPO"):
         d_all[g] = [ratio(V.get((g, "pert", cat, stat, key), NAN),
@@ -1088,12 +1025,12 @@ def fig_cat_degradation(cats, V, stat, key, sym, out_path, stem):
                 ax.text(xi + (i - 0.5) * pitch, vi, f"{vi:.2f}", ha="center",
                         va="bottom", fontsize=9, color=C_INK)
     ax.axhline(1.0, color="#333333", lw=1.2, ls="--", zorder=3,
-               label="$D=1$ (nessuna degradazione)")
+               label="$D=1$ (no degradation)")
     if min(finite) < 0.995:
         ax.axhspan(0, 1.0, color="#999999", alpha=0.07, zorder=0)
     ax.set_ylim(0, max(finite + [1.0]) * 1.26)
     ax.set_ylabel(r"$D$ = perturbed / nominal   [-]")
-    ax.set_title(f"{sym}  -  {stat}  -  degradazione  -  {stem}", pad=10)
+    ax.set_title(f"{sym}  -  {stat}  -  degradation  -  {stem}", pad=10)
     ax.grid(axis="x", visible=False)
     ax.set_xticks(x)
     ax.set_xticklabels(list(cats))
@@ -1101,25 +1038,23 @@ def fig_cat_degradation(cats, V, stat, key, sym, out_path, stem):
     ax.legend(loc="best", ncol=2, frameon=True, fontsize=9.5)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def fig_cat_delta(cats, V, stat, key, sym, unit, out_path, stem):
-    """DELTA = perturbed - nominal, due barre per manovra.
+    """DELTA = perturbed - nominal, two bars per manoeuvre.
 
-    La lettura da preferire quando si parla di ROBUSTEZZA. Il disturbo e' lo
-    stesso per le due policy: chi e' piu' robusto e' chi si sposta meno, e uno
-    spostamento e' una differenza. Il rapporto D, che sta nella cartella
-    accanto, divide per il valore nominal e quindi penalizza chi parte gia'
-    basso -- sugli stessi dati le due letture si contraddicono spesso, ed e'
-    il motivo per cui questa cartella esiste.
+    The reading for ROBUSTNESS. The disturbance is the same for the two
+    policies: the more robust one is the one that shifts less, and a shift is
+    a difference. The ratio D, in the next folder, divides by the nominal
+    value and penalises the policy that starts lower, so on the same data the
+    two readings often disagree.
 
-    Sotto lo zero il volo perturbed e' andato MEGLIO del nominal. Con un
-    carico aggiunto non ha spiegazione fisica: quella e' variabilita'
-    volo-su-volo, e quanto scende dice sotto quale soglia nessuna differenza
-    fra le due policy e' leggibile. Per questo la fascia negativa e'
-    ombreggiata invece che lasciata passare per "spostamento minore".
+    Below zero the perturbed flight did BETTER than the nominal one. With an
+    added load this has no physical explanation: it is flight-to-flight
+    variability, and its size gives the threshold below which no difference
+    between the two policies can be read. The negative region is shaded.
     """
     d_all = {}
     for g in ("PPO", "SPPO"):
@@ -1148,7 +1083,7 @@ def fig_cat_delta(cats, V, stat, key, sym, unit, out_path, stem):
         ax.axhspan(lo - pad, 0.0, color="#999999", alpha=0.07, zorder=0)
     ax.axhline(0.0, color="#333333", lw=1.2, zorder=3)
     ax.set_ylabel(rf"$\Delta$ {sym}   [{unit}]")
-    ax.set_title(f"{sym}  -  {stat}  -  spostamento col disturbo  -  {stem}")
+    ax.set_title(f"{sym}  -  {stat}  -  shift under the disturbance  -  {stem}")
     ax.grid(axis="x", visible=False)
     ax.set_xticks(x)
     ax.set_xticklabels(list(cats))
@@ -1156,28 +1091,24 @@ def fig_cat_delta(cats, V, stat, key, sym, unit, out_path, stem):
     ax.legend(loc="best", ncol=2, frameon=True, fontsize=9.5)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def _draw_cat_range(ax, cats, V, stat, key, sym, unit):
-    """Disegna in un asse dato il grafico punto medio+range di una singola
-    grandezza: due colonne per manovra (PPO, SPPO), la colonna al punto
-    medio fra nominal e perturbed, il baffo nero dal piu' basso al piu'
-    alto dei due -- l'INTERVALLO esplorato dall'incertezza di modello
-    testata, non una deviazione statistica: restano due soli numeri, non un
-    campione, quindi niente media o std nel senso proprio del termine.
-    Nessuna distinzione visiva di quale estremo sia nominal e quale
-    perturbed: il grafico mostra centro e ampiezza, non una direzione.
+    """Draw on a given axis the mid-point and range plot of one quantity: two
+    columns per manoeuvre (PPO, SPPO), the column at the mid-point between
+    nominal and perturbed, the black whisker from the lower to the higher of
+    the two. The whisker is the INTERVAL spanned by the tested model
+    uncertainty, not a statistical deviation: two numbers are not a sample.
+    The plot shows centre and width, without marking which end is nominal.
 
-    L'etichetta dell'asse Y e' solo simbolo e unita' (niente prefisso
-    RMSE/MAE): la statistica va nella didascalia della figura in tesi, non
-    nel grafico, su richiesta di Marco il 5/10.
+    The y label holds only symbol and unit; the statistic goes in the
+    caption.
 
-    Usata sia da fig_cat_range (una grandezza, una figura) sia da
-    fig_cat_range_pair (posizione e assetto affiancate in una griglia 1x2).
-    Ritorna False se non c'e' nulla da disegnare (nessun dato finito), senza
-    toccare l'asse."""
+    Used by fig_cat_range (one quantity, one figure) and by
+    fig_cat_range_pair (position and attitude in a 1x2 grid).
+    Return False, without touching the axis, when there is nothing to draw."""
     mid, lo, hi = {}, {}, {}
     for g in ("PPO", "SPPO"):
         nom = [V.get((g, "nom", cat, stat, key), NAN) for cat in cats]
@@ -1216,12 +1147,10 @@ def _draw_cat_range(ax, cats, V, stat, key, sym, unit):
 
 
 def fig_cat_range(cats, V, stat, key, sym, unit, out_path, stem):
-    """Una grandezza, una figura: vedi _draw_cat_range per il disegno e il
-    razionale completo del grafico punto medio+range. Sostituisce, per la
-    Robustness di Sezione 5.3, sia il confronto a valori grezzi
-    (fig_cat_nom_vs_pert) sia D/Delta: quelli restano nello script per uso
-    proprio, questa (e fig_cat_range_pair) sono le sole pensate per finire
-    in tesi."""
+    """One quantity, one figure: see _draw_cat_range for the drawing and the
+    rationale of the mid-point and range plot. The raw values
+    (fig_cat_nom_vs_pert) and D/Delta are also written; this figure and
+    fig_cat_range_pair are the ones used in the thesis."""
     fig, ax = plt.subplots(figsize=(1.9 * len(cats) + 4.6, 6.2))
     if not _draw_cat_range(ax, cats, V, stat, key, sym, unit):
         plt.close(fig)
@@ -1229,17 +1158,14 @@ def fig_cat_range(cats, V, stat, key, sym, unit, out_path, stem):
     ax.legend(loc="best", frameon=True)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def fig_cat_range_pair(cats, V, stat, out_path, stem):
-    """Posizione e assetto affiancate in un'unica griglia 1x2, invece di due
-    figure separate: stesso grafico punto medio+range di fig_cat_range (vedi
-    _draw_cat_range), una colonna per pannello e un'unica legenda condivisa.
-    Richiesta da Marco il 5/10 per avere un'unica figura d'apertura per le
-    `\subsubsection{Robustness}` di 5.3.2-5.3.4, dove servono entrambe le
-    grandezze viste insieme."""
+    """Position and attitude side by side in a 1x2 grid: the same mid-point
+    and range plot as fig_cat_range (see _draw_cat_range), one quantity per
+    panel and one shared legend."""
     specs = [(k, sm, u) for k, sm, u, _f in CAT_FIGS if k in ("e_p", "e_R")]
     fig_w, fig_h = 11, 4.6
     fig, axs = plt.subplots(1, 2, figsize=(fig_w, fig_h))
@@ -1250,19 +1176,17 @@ def fig_cat_range_pair(cats, V, stat, out_path, stem):
     if not ok:
         plt.close(fig)
         return False
-    # Stesso principio di fig_overlay_grid: legenda dentro il pannello di
-    # posizione (in alto a destra, le colonne piu' basse stanno li') invece
-    # che sopra la griglia -- Marco, 5/10.
+    # As in fig_overlay_grid: legend inside the position panel (upper
+    # right, where the columns are lower).
     axs[0].legend(loc="upper right", frameon=True)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def fig_tv_rotors_range(cats, V, stat, key, sym, unit, out_path, stem):
-    """Dedicated figure for TV rotors to match the style and dimensions
-    of pos_att_pair_RMSE.pdf (height 4.6)."""
+    """TV per rotor, with the style and height of pos_att_pair_RMSE.pdf."""
     fig, ax = plt.subplots(figsize=(6.5, 4.6))
     if not _draw_cat_range(ax, cats, V, stat, key, sym, unit):
         plt.close(fig)
@@ -1270,17 +1194,15 @@ def fig_tv_rotors_range(cats, V, stat, key, sym, unit, out_path, stem):
     ax.legend(loc="upper right", frameon=True)
     fig.tight_layout()
     save(fig, out_path)
-    print("  scritto", out_path)
+    print("  written", out_path)
     return True
 
 
 def read_tv_rotors(folder: Path):
-    """{(group, rotore): TV sul volo intero per singolo rotore} da
-    tv_windows.csv, window=='flight', canali M1..M6 (TOTAL escluso: la somma
-    sui sei rotori resta in read_tv_flight, qui serve il dettaglio per
-    motore). Le chiavi restano quelle del CSV (M1..M6); la conversione alle
-    etichette di tesi (P1..P6, Sezione 2.4.1) avviene in
-    tv_rotors_range_section, non qui."""
+    """{(group, rotor): TV over the whole flight per rotor} from tv_windows.csv,
+    window=='flight', channels M1..M6 (the TOTAL row is read by
+    read_tv_flight). The keys stay those of the CSV (M1..M6); the thesis
+    labels (P1..P6) are applied in tv_rotors_range_section."""
     path = tables_dir(folder) / "tv_windows.csv"
     if not path.is_file():
         return {}
@@ -1294,29 +1216,24 @@ def read_tv_rotors(folder: Path):
 
 
 def tv_rotors_range_section(nom_dir, pert_dir, dirs, stem):
-    """Variazione totale del comando per singolo rotore (eq:total_variation),
-    volo intero, confronto nominal/perturbed con lo stesso disegno punto
-    medio+range di compare_categories_section (_draw_cat_range/
-    fig_cat_range, D29) -- qui 'cats' sono i sei rotori invece delle
-    categorie di manovra, su richiesta di Marco il 6/10 (adatta
-    flight/propellers/summary_tv.pdf, nominal-only e senza range, allo
-    stile delle altre figure di Sezione 5.3). Le etichette in figura sono
-    P1..P6 (Sezione 2.4.1): quelle del CSV grezzo (M1..M6) restano solo in
-    tv_comparison_rotors.csv.
+    """Total variation of the command per rotor (eq:total_variation), whole
+    flight, nominal/perturbed comparison with the same mid-point and range
+    plot as compare_categories_section: here 'cats' are the six rotors,
+    labelled P1..P6 as in Section 2.4.1.
 
-    Scrive tables/tv_comparison_rotors.csv e la figura
+    Write tables/tv_comparison_rotors.csv and
     propellers/03_tv_rotors_range.pdf."""
     rotor_labels = {f"M{i}": f"P{i}" for i in range(1, 7)}
     Tn, Tp = read_tv_rotors(nom_dir), read_tv_rotors(pert_dir)
     if not Tn or not Tp:
-        print("  [tv rotori] tv_windows.csv senza righe per motore in una "
-              "delle due cartelle, salto")
+        print("  [tv rotors] tv_windows.csv without per-motor rows in one "
+              "of the two folders, skipped")
         return
 
     rotors = [f"M{i}" for i in range(1, 7)
               if all((g, f"M{i}") in Tn and (g, f"M{i}") in Tp for g in GROUPS)]
     if not rotors:
-        print("  [tv rotori] nessun rotore in comune, salto")
+        print("  [tv rotors] no rotor in common, skipped")
         return
     labels = [rotor_labels[m] for m in rotors]
 
@@ -1330,7 +1247,7 @@ def tv_rotors_range_section(nom_dir, pert_dir, dirs, stem):
 
     rows = []
     for m, lab in zip(rotors, labels):
-        row = {'rotore': lab}
+        row = {'rotor': lab}
         for g in GROUPS:
             vn, vp = Tn[(g, m)] * scale, Tp[(g, m)] * scale
             row[f'{g.lower()}_nom'] = vn
@@ -1344,17 +1261,17 @@ def tv_rotors_range_section(nom_dir, pert_dir, dirs, stem):
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    print(f"  scritto {csv_path}")
+    print(f"  written {csv_path}")
 
     out_path = dirs['propellers'] / "03_tv_rotors_range.pdf"
     if fig_tv_rotors_range(labels, V, '-', 'tv', r'$\mathrm{TV}_i$', 'Hz/s',
                            out_path, stem):
-        print(f"  scritto {out_path}")
+        print(f"  written {out_path}")
 
 
 def compare_categories_section(nom, pert, dirs, stem, exclude):
-    """Confronto per categoria: tables/comparison_categories.csv
-    e le due figure in categories/."""
+    """Comparison by category: tables/comparison_categories.csv and the
+    category figures."""
     Mn, Mp = read_category_metrics(nom), read_category_metrics(pert)
     units = {**Mn.get("_units", {}), **Mp.get("_units", {})}
 
@@ -1371,12 +1288,10 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
             if all((g, cnd, c, "-", "rmse_pos") in V
                    for g in ("PPO", "SPPO") for cnd in ("nom", "pert"))]
     if not cats:
-        raise SystemExit("Nessuna categoria presente in entrambe le condizioni.")
-    # (statistica, metrica): '-' sono quelle che una statistica ce l'hanno gia'
-    # dentro (lag_z e' una media, t10_s un tempo, tv una Total Variation)
-    # Anche i contatori _abs sono bookkeeping, non metriche: con le colonne
-    # D e DELTA accanto finivano per avere un "esito" su un numero di
-    # campioni, che non vuol dire niente.
+        raise SystemExit("No category present in both conditions.")
+    # (statistic, metric): '-' marks the metrics that already contain a
+    # statistic (lag_z is a mean, t10_s a time, tv a total variation).
+    # The _abs counters are bookkeeping, not metrics.
     mets = [x for x in dict.fromkeys(
         (k[3], k[4]) for k in V if k[2] in cats and k[4] not in
         ("n_samples", "n_subblocks", "dur_s",
@@ -1384,16 +1299,16 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
          "n_subblocks_real", "n_subblocks_real_att"))]
     stats_av = [st for st, _a in STATS if any(x[0] == st for x in mets)]
 
-    print(f"\n{'='*100}\nnominal vs perturbed per categoria  -  {stem}\n{'='*100}")
+    print(f"\n{'='*100}\nnominal vs perturbed by category  -  {stem}\n{'='*100}")
     print(f"  nominal  : {nom.name}\n  perturbed: {pert.name}")
-    print(f"  categorie : {', '.join(cats)}")
+    print(f"  categories:  {', '.join(cats)}")
 
     rows, n_sub1 = [], 0
     for cat in cats:
         print(f"\n{'-'*100}\n  [{cat}]\n{'-'*100}")
-        print(f"    {'metrica':14s}{'PPO nom':>11s}{'PPO pert':>11s}{'SPPO nom':>11s}"
+        print(f"    {'metric':14s}{'PPO nom':>11s}{'PPO pert':>11s}{'SPPO nom':>11s}"
               f"{'SPPO pert':>11s}{'D_PPO':>8s}{'D_SPPO':>8s}"
-              f"{'DELTA_PPO':>11s}{'DELTA_SPPO':>11s}   esito")
+              f"{'DELTA_PPO':>11s}{'DELTA_SPPO':>11s}   result")
         for st, met in mets:
             get = lambda g, c: V.get((g, c, cat, st, met), NAN)
             pn, pp, sn, sp = get("PPO", "nom"), get("PPO", "pert"), \
@@ -1413,11 +1328,10 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
                  "delta_D_pct": NAN if signed else pct(ds, dp),
                  "diff_nom_abs": (sn - pn) if signed else NAN,
                  "diff_pert_abs": (sp - pp) if signed else NAN,
-                 # DELTA: lo spostamento causato dal disturbo. E' la lettura
-                 # da usare per la robustezza -- il disturbo e' lo stesso per
-                 # le due policy, quindi la domanda e' di quanto si sposta
-                 # l'errore, e uno spostamento e' una differenza. Vedi
-                 # compare_cell e la cartella maneuvers/delta/.
+                 # DELTA: the shift caused by the disturbance, the reading for
+                 # robustness: the disturbance is the same for the two policies, so
+                 # the question is how much the error shifts, and a shift is a
+                 # difference. See compare_cell and the maneuvers/delta/ folder.
                  "delta_abs_ppo": pp - pn,
                  "delta_abs_sppo": sp - sn}
             rows.append(r)
@@ -1430,24 +1344,23 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
                 u = units.get(met, "")
                 print(f"    {lab_m:20s}{pn:11.4f}{pp:11.4f}{sn:11.4f}{sp:11.4f}"
                       f"{'--':>8s}{'--':>8s}"
-                      f"{sn-pn:+8.4f} {sp-pp:+8.4f} {u:<6s}  (con segno)")
+                      f"{sn-pn:+8.4f} {sp-pp:+8.4f} {u:<6s}  (signed)")
             else:
-                # le tre letture, e cosa dicono. Si contraddicono spesso:
-                # D penalizza chi parte gia' basso, quindi puo' dare
-                # "degrada di piu'" proprio a chi sbaglia meno in entrambe le
-                # condizioni. Quando succede va detto sulla riga, non lasciato
-                # trovare a chi legge.
+                # the three readings often disagree: D penalises the policy that
+                # starts lower, so it may say "degrades more" for the policy with the
+                # lower error in both conditions. When this happens it is written on
+                # the row.
                 da, dl = r['delta_abs_ppo'], r['delta_abs_sppo']
                 w_pert = 'SPPO' if sp < pp else 'PPO'
                 w_D = 'SPPO' if ds < dp else 'PPO'
                 w_del = 'SPPO' if abs(dl) < abs(da) else 'PPO'
                 note = ""
                 if w_D != w_del:
-                    note = f"  !! D dice {w_D}, DELTA dice {w_del}"
+                    note = f"  !! D says {w_D}, DELTA says {w_del}"
                 elif w_D != w_pert:
-                    note = f"  !! sbaglia meno {w_pert}, degrada meno {w_D}"
+                    note = f"  !! lower error {w_pert}, lower degradation {w_D}"
                 if min(da, dl) < 0:
-                    note += "  (DELTA<0: rumore)"
+                    note += "  (DELTA<0: noise)"
                 print(f"    {lab_m:20s}{pn:11.4f}{pp:11.4f}{sn:11.4f}{sp:11.4f}"
                       f"{dp:8.2f}{ds:8.2f}{da:+11.4f}{dl:+11.4f}{note}")
 
@@ -1456,14 +1369,14 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
         w = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         w.writeheader()
         w.writerows(rows)
-    print(f"\n  scritto {csv_path}")
+    print(f"\n  written {csv_path}")
 
-    # -------------------------------------------- quanto vale il rumore
-    # Il disturbo e' un carico aggiunto: l'errore puo' solo crescere. Ogni
-    # DELTA negativo e' quindi variabilita' volo-su-volo, non un risultato, e
-    # il piu' grande di quelli da' la soglia sotto cui nessuna differenza fra
-    # le due policy e' leggibile. Confrontarla con la differenza fra i DELTA
-    # delle due policy dice, in una riga, se c'e' un segnale o no.
+    # -------------------------------------------- size of the noise
+    # The disturbance is an added load, so the error can only grow. Every
+    # negative DELTA is flight-to-flight variability, and the largest one
+    # gives the threshold below which no difference between the two
+    # policies can be read. Comparing it with the difference between the
+    # DELTA of the two policies tells whether there is a signal.
     _pos = [r for r in rows if not r['signed']
             and r['delta_abs_ppo'] == r['delta_abs_ppo']
             and r['delta_abs_sppo'] == r['delta_abs_sppo']
@@ -1472,55 +1385,46 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
         neg = [(r, v) for r in _pos
                for v in (r['delta_abs_ppo'], r['delta_abs_sppo']) if v < 0]
         gap = [abs(r['delta_abs_sppo'] - r['delta_abs_ppo']) for r in _pos]
-        print(f"\n{'-'*100}\n  ROBUSTEZZA: C'E' UN SEGNALE?\n{'-'*100}")
-        print("  Con un carico aggiunto l'errore puo' solo crescere: ogni DELTA")
-        print("  negativo e' variabilita' volo-su-volo, e ne misura la scala.")
+        print(f"\n{'-'*100}\n  ROBUSTNESS: IS THERE A SIGNAL?\n{'-'*100}")
+        print("  With an added load the error can only grow: every negative DELTA")
+        print("  is flight-to-flight variability, and measures its scale.")
         if neg:
             worst = max(abs(v) for _r, v in neg)
-            print(f"    {len(neg)} DELTA negativi, il piu' grande "
-                  f"{worst*1000:.1f} mm -> rumore >= {worst*1000:.0f} mm")
+            print(f"    {len(neg)} negative DELTA, the largest "
+                  f"{worst*1000:.1f} mm -> noise >= {worst*1000:.0f} mm")
         else:
             worst = 0.0
-            print("    nessun DELTA negativo: il rumore non e' stimabile da qui.")
-        print(f"    differenza fra i DELTA di PPO e SPPO: "
+            print("    no negative DELTA: the noise cannot be estimated from these data.")
+        print(f"    difference between the DELTA of PPO and SPPO: "
               f"{min(gap)*1000:.1f}-{max(gap)*1000:.1f} mm "
-              f"(mediana {sorted(gap)[len(gap)//2]*1000:.1f} mm)")
+              f"(median {sorted(gap)[len(gap)//2]*1000:.1f} mm)")
         if worst > 0 and sorted(gap)[len(gap)//2] < worst:
-            print("    -> l'effetto e' PIU' PICCOLO del rumore che i dati stessi")
-            print("       mostrano: con un volo per condizione non e' distinguibile")
-            print("       da zero. Per un'affermazione sulla robustezza servono")
-            print("       piu' livelli di disturbo (una pendenza, non due punti)")
-            print("       oppure repliche appaiate su piu' policy.")
+            print("    -> the effect is SMALLER than the noise shown by the data:")
+            print("       with one flight per condition it cannot be told apart from")
+            print("       zero. A robustness claim needs more disturbance levels")
+            print("       (a slope, not two points)")
+            print("       or paired repetitions over several policies.")
         elif worst > 0:
-            print("    -> l'effetto supera il rumore stimato: la differenza fra le")
-            print("       due policy e' leggibile, ma resta un volo per condizione.")
+            print("    -> the effect exceeds the estimated noise: the difference")
+            print("       between the policies is readable, with one flight per condition.")
 
     shown = [c for c in cats if c not in exclude]
 
-    # --- stessa sostituzione di analyze_trajectory: nelle FIGURE le categorie
-    # a gradino non vanno in valore assoluto, perche' i quattro voli non
-    # percorrono la stessa distanza e la barra piu' alta sarebbe solo la piu'
-    # lunga. Si disegna l'errore normalizzato campione per campione sulla
-    # distanza da coprire (tutti i setpoint, SETPOINT 1 compreso) riportato a
-    # una distanza comune ai QUATTRO voli, cosi' resta in metri. Il valore
-    # assoluto resta in comparison_categories.csv.
-    # NORMALIZZAZIONE, gradini E rampe.
-    #
-    # Il gradino: i quattro voli non percorrono la stessa distanza, la barra
-    # piu' alta sarebbe solo la piu' lunga.
-    # La rampa: il drone non viene riposato a terra alla stessa quota, quindi
-    # l'atterraggio del perturbed scende 0.78 m dove il nominal ne scende
-    # 0.83 -- stessa identica trappola. analyze_trajectory scrive per
-    # entrambe le stesse colonne (*_pooled_n_*, *_pooled_den): l'errore
-    # normalizzato campione per campione sulla distanza da coprire.
-    #
-    # Qui le si riporta a un denominatore COMUNE ai quattro voli, cosi' il
-    # numero resta in metri e sta sullo stesso asse delle categorie di
-    # mantenimento, che una distanza da coprire non ce l'hanno. Il valore
-    # assoluto non si perde: resta in comparison_categories.csv.
+    # --- NORMALISATION, steps and ramps.
+    # Steps: the four flights do not cover the same distance, so the
+    # highest bar would only be the longest step.
+    # Ramps: the vehicle does not land from the same height, so the
+    # perturbed landing descends 0.78 m where the nominal one descends
+    # 0.83 m. For both, analyze_trajectory writes the same columns
+    # (*_pooled_n_*, *_pooled_den): the error normalised sample by sample
+    # by the distance to cover.
+    # Here they are scaled back to a denominator COMMON to the four
+    # flights, so the number stays in metres and shares the axis with the
+    # hold categories, which have no distance to cover. The absolute value
+    # is kept in comparison_categories.csv.
     ORD4 = [("PPO", "nom"), ("PPO", "pert"), ("SPPO", "nom"), ("SPPO", "pert")]
     for cat in shown:
-        if KIND.get(cat) not in ('gradino', 'rampa'):
+        if KIND.get(cat) not in ('step', 'ramp'):
             continue
         for fld, skey in (('pos', 'e_p'), ('att', 'e_R')):
             den = [V.get((g, c, cat, "-", f"{fld}_pooled_den"), NAN)
@@ -1543,14 +1447,14 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
             for (g, c, st), v in vals.items():
                 V[(g, c, cat, st, skey)] = v
             u = 'm' if fld == 'pos' else 'rad'
-            print(f"  FIGURE  {cat} ({fld}): denominatori "
+            print(f"  FIGURE  {cat} ({fld}): denominators "
                   + " / ".join(f"{v:.3f}" for v in den)
-                  + f" {u} -> {dbar:.3f} {u} comuni")
+                  + f" {u} -> common {dbar:.3f} {u}")
 
-    # maneuvers/ = decollo, mantenimento, atterraggio. Il gradino sta in
-    # maneuvers/step/, come in data_analysis.
-    shown_man = [c for c in shown if KIND.get(c) != 'gradino']
-    shown_step = [c for c in shown if KIND.get(c) == 'gradino']
+    # maneuvers/ = takeoff, hold, landing. The step is in
+    # maneuvers/step/, as in the single-mission analysis.
+    shown_man = [c for c in shown if KIND.get(c) != 'step']
+    shown_step = [c for c in shown if KIND.get(c) == 'step']
     for tag, cats_sel, k_abs, k_deg, k_del, k_range in (
             ('maneuvers', shown_man, 'man_', 'man_degradation', 'man_delta',
              'man_range'),
@@ -1565,7 +1469,7 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
                 if fig_cat_nom_vs_pert(cats_sel, V, st, key, sym, unit,
                                        d / f"{fname}.pdf", stem):
                     n_fig += 1
-            print(f"  {n_fig} figure scritte in {d}")
+            print(f"  {n_fig} figures written in {d}")
         for k_dir, fn in ((k_deg, fig_cat_degradation), (k_del, fig_cat_delta)):
             d = dirs[k_dir]
             n_fig = 0
@@ -1577,7 +1481,7 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
                              d / f"{fname}_{st}.pdf", stem))
                     if fn(*args):
                         n_fig += 1
-            print(f"  {n_fig} figure scritte in {d}")
+            print(f"  {n_fig} figures written in {d}")
         d = dirs[k_range]
         n_fig = 0
         for st in stats_av:
@@ -1589,19 +1493,18 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
             if fig_cat_range_pair(cats_sel, V, st, d / f"pos_att_pair_{st}.pdf",
                                   stem):
                 n_fig += 1
-        print(f"  {n_fig} figure scritte in {d}")
+        print(f"  {n_fig} figures written in {d}")
 
-    # ---- sintesi onesta
+    # ---- summary
     #
-    # Due metriche NON vanno contate cosi' come sono, e contarle falsava il
-    # riepilogo che stampavo prima:
+    # Two metrics are not counted as they are:
     #
-    #  - in 'Step' rmse_pos e' proporzionale all'ampiezza del gradino, che
-    #    NON e' identica fra i due voli. Li' si conta rmse_n, normalizzata.
-    #  - rmse_att e' dominata dallo yaw, che su questo velivolo porta un offset
-    #    da errore di montaggio comune alle due policy. Si riportano separate
-    #    la componente regolata (att_rp) e quella di imbardata (att_yaw).
-    SUMMARY_KEY = {"Step": "pos_pooled_n_RMSE"}   # posizione: cosa contare dove
+    #  - in 'Step' rmse_pos is proportional to the step amplitude, which
+    #    is not the same in the two flights: the normalised value is counted.
+    #  - rmse_att is dominated by the yaw, which on this vehicle carries an
+    #    offset from the mounting, common to the two policies. The regulated
+    #    part (att_rp) and the yaw part (att_yaw) are reported separately.
+    SUMMARY_KEY = {"Step": "pos_pooled_n_RMSE"}   # position: what to count where
 
     def tally(getter, keyfn, cats_sel):
         sel = []
@@ -1615,22 +1518,22 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
         w = sum(1 for _c, _m, v in sel if v < 0)
         return w, len(sel), sel
 
-    print(f"\n{'='*100}\nSINTESI\n{'='*100}")
-    print("  POSIZIONE  (in 'Step' si conta pos_pooled_n_RMSE, normalizzata "
-          "sulla distanza da coprire)")
+    print(f"\n{'='*100}\nSUMMARY\n{'='*100}")
+    print("  POSITION  (in 'Step' pos_pooled_n_RMSE is counted, normalised "
+          "by the distance to cover)")
     for lab, g in (("nominal ", lambda r: r["delta_nom_pct"]),
                    ("perturbed", lambda r: r["delta_pert_pct"]),
-                   ("degrada meno", lambda r: r["delta_D_pct"])):
+                   ("lower degr.", lambda r: r["delta_D_pct"])):
         w, n, sel = tally(g, lambda c: SUMMARY_KEY.get(c, "rmse_pos"), cats)
         det = "  ".join(f"{c.split()[0][:6]}:{v:+.0f}%" for c, _m, v in sel)
-        print(f"    {lab:14s} SPPO meglio {w}/{n}    {det}")
-    print("  COMPONENTE ORIZZONTALE  (deriva laterale: nessuna ampiezza comandata)")
+        print(f"    {lab:14s} SPPO better {w}/{n}    {det}")
+    print("  HORIZONTAL COMPONENT  (lateral drift: no commanded amplitude)")
     for lab, g in (("nominal ", lambda r: r["delta_nom_pct"]),
                    ("perturbed", lambda r: r["delta_pert_pct"])):
         w, n, sel = tally(g, lambda c: "err_xy", cats)
         det = "  ".join(f"{c.split()[0][:6]}:{v:+.0f}%" for c, _m, v in sel)
-        print(f"    {lab:14s} SPPO meglio {w}/{n}    {det}")
-    print("  ASSETTO  (separato: parte regolata e offset di imbardata)")
+        print(f"    {lab:14s} SPPO better {w}/{n}    {det}")
+    print("  ATTITUDE  (split: regulated part and yaw offset)")
     for nm, met in (("roll+pitch", "att_rp"), ("yaw", "att_yaw")):
         for lab, g in (("nominal ", lambda r: r["delta_nom_pct"]),
                        ("perturbed", lambda r: r["delta_pert_pct"])):
@@ -1638,20 +1541,20 @@ def compare_categories_section(nom, pert, dirs, stem, exclude):
             if not n:
                 continue
             det = "  ".join(f"{c.split()[0][:6]}:{v:+.0f}%" for c, _m, v in sel)
-            print(f"    {nm:11s}{lab:11s} SPPO meglio {w}/{n}    {det}")
+            print(f"    {nm:11s}{lab:11s} SPPO better {w}/{n}    {det}")
     n_tot = sum(1 for r in rows if not r["signed"]) * 2
     if n_sub1:
-        print(f"\n  {n_sub1} valori di D su {n_tot} sotto 0.95: il volo perturbed e' andato meglio")
-        print("  del nominal. Non ha spiegazione fisica con un carico aggiunto:")
-        print("  e' la variabilita' volo-su-volo, e va dichiarata come tale.")
-    print("\n  NB: un volo per condizione. Valori singoli, non stime con incertezza.")
+        print(f"\n  {n_sub1} values of D out of {n_tot} below 0.95: the perturbed flight did better")
+        print("  than the nominal one, which has no physical explanation with an")
+        print("  added load: it is flight-to-flight variability.")
+    print("\n  One flight per condition: single values, without uncertainty estimates.")
 
 
 def fig_metric_degradation(metric, c, out_path, stat='RMSE'):
-    """Una metrica, due barre: quanto degrada ciascuna policy.
+    """One metric, two bars: the degradation of each policy.
 
-    D = perturbed / nominal. Va letto accanto ai valori assoluti, mai da
-    solo: penalizza strutturalmente chi parte da un errore piu' basso."""
+    D = perturbed / nominal. It is read next to the absolute values, since it
+    penalises the policy that starts from a lower error."""
     dp, ds = c.get('D_ppo', NAN), c.get('D_sppo', NAN)
     if dp != dp and ds != ds:
         return False
@@ -1664,7 +1567,7 @@ def fig_metric_degradation(metric, c, out_path, stat='RMSE'):
                     color='#222222', zorder=4)
     lo = min([1.0] + [v for v in (dp, ds) if v == v])
     ax.axhline(1.0, color='k', lw=1.2, ls='--', zorder=3,
-               label='$D = 1$ (nessuna degradazione)')
+               label='$D = 1$ (no degradation)')
     if lo < 0.995:
         ax.axhspan(0, 1.0, color='#999999', alpha=0.08, zorder=0)
     top = max([1.0] + [v for v in (dp, ds) if v == v])
@@ -1684,34 +1587,27 @@ def fig_metric_degradation(metric, c, out_path, stat='RMSE'):
 def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
         cat_exclude=()):
     set_style()
-    # Stesso albero di data_analysis, piu' la dimensione che il confronto ha
-    # e l'analisi di un singolo scenario non ha: la degradazione.
-    #
-    # Niente mission/ ne' summary/. Erano la stessa domanda posta su un
-    # ritaglio temporale -- "come e' andata da t0 a t1" -- e un ritaglio non
-    # ha un nome: per leggere quei numeri bisognava prima sapere dove cadeva
-    # la finestra e verificare che cadesse nello stesso posto nelle due
-    # cartelle. Qui si confrontano MANOVRE: decollo, mantenimento,
-    # atterraggio e risposta al gradino. Ognuna ha una finestra che si
-    # riconosce dal riferimento, non dall'orologio.
+    # Same tree as the single-mission analysis, plus the dimension that
+    # only the comparison has: the degradation.
+    # The comparison is made on MANOEUVRES (takeoff, hold, landing and step
+    # response), each with a window identified from the reference.
     dirs = {'tables': out_dir / "tables",
             'roll': out_dir / "Rollouts",
             'propellers': out_dir / "propellers",
             'man_RMSE': out_dir / "maneuvers" / "RMSE",
             'man_MAE': out_dir / "maneuvers" / "MAE",
             'man_degradation': out_dir / "maneuvers" / "degradation",
-            # delta/ accanto a degradation/: lo stesso confronto letto come
-            # differenza invece che come rapporto. Sono due letture diverse e
-            # sui dati si contraddicono spesso, quindi stanno in due cartelle.
+            # delta/ next to degradation/: the same comparison read as a
+            # difference instead of a ratio. The two readings often disagree on
+            # the data, so they are in two folders.
             'man_delta': out_dir / "maneuvers" / "delta",
-            # range/: punto medio nominal-perturbed piu' baffo fra i due,
-            # la sola delle quattro letture pensata per finire in tesi
-            # (Robustness, Sezione 5.3) -- vedi fig_cat_range.
+            # range/: nominal-perturbed mid-point with a whisker between the
+            # two, the reading used in the thesis (see fig_cat_range).
             'man_range': out_dir / "maneuvers" / "range",
             'step_delta': out_dir / "maneuvers" / "step" / "delta",
             'step_range': out_dir / "maneuvers" / "step" / "range",
-            # come in data_analysis: le manovre della missione da una parte,
-            # il gradino dall'altra
+            # as in the single-mission analysis: the manoeuvres of the mission
+            # on one side, the step on the other
             'step_RMSE': out_dir / "maneuvers" / "step" / "RMSE",
             'step_MAE': out_dir / "maneuvers" / "step" / "MAE",
             'step_degradation': out_dir / "maneuvers" / "step" / "degradation"}
@@ -1720,35 +1616,35 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
 
     print(f"nominal   : {nom_dir}")
     print(f"perturbed : {pert_dir}")
-    print(f"uscita     : {out_dir}")
-    print(f"soglia assunta: {floor:.1f}%  (sotto questa non si assegna un vincitore)\n")
+    print(f"output    : {out_dir}")
+    print(f"threshold : {floor:.1f}%  (no winner is assigned below it)\n")
 
     check_params(nom_dir, pert_dir)
 
     pm_nom, pm_pert = read_phase_metrics(nom_dir), read_phase_metrics(pert_dir)
     raw_nom, raw_pert = dict(pm_nom), dict(pm_pert)
 
-    # --------------------------------------------- controllo di coerenza
+    # --------------------------------------------- consistency check
     ph_nom = list(dict.fromkeys(p for _, p in pm_nom))
     ph_pert = list(dict.fromkeys(p for _, p in pm_pert))
     phases = [p for p in ph_nom if p in ph_pert]
     if not phases:
-        sys.exit("Nessuna fase in comune fra le due cartelle: sono lo stesso task?")
-    print(f"{'='*78}\nCOERENZA FRA LE DUE CARTELLE\n{'='*78}")
-    print(f"  fasi nominal  : {', '.join(ph_nom)}")
-    print(f"  fasi perturbed: {', '.join(ph_pert)}")
+        sys.exit("No phase in common between the two folders: is it the same mission?")
+    print(f"{'='*78}\nCONSISTENCY OF THE TWO FOLDERS\n{'='*78}")
+    print(f"  nominal phases  :  {', '.join(ph_nom)}")
+    print(f"  perturbed phases:  {', '.join(ph_pert)}")
     if ph_nom != ph_pert:
-        print("  !! le due sequenze di fasi NON coincidono: confronto limitato a")
-        print(f"     quelle in comune ({', '.join(phases)}). Verifica che i due")
-        print("     voli abbiano eseguito la stessa missione.")
+        print("  !! the two phase sequences differ: comparison limited to")
+        print(f"     the common ones ({', '.join(phases)}). Check that the two")
+        print("     flights ran the same mission.")
     else:
-        print("  -> stessa sequenza di fasi.")
+        print("  -> same phase sequence.")
 
-    # I SETPOINT DI MISSIONE devono coincidere anche fra nominal e perturbed,
-    # altrimenti D confronta due missioni diverse. Decollo e atterraggio restano
-    # fuori dal controllo: il loro riferimento e' la posa a terra del drone, che
-    # cambia a ogni volo per costruzione -- li' conta lo spostamento comandato,
-    # gia' verificato da analyze_trajectory dentro ciascuna cartella.
+    # The MISSION SETPOINTS must also coincide between nominal and
+    # perturbed, otherwise D compares two different missions. Takeoff and
+    # landing are not checked: their reference is the ground pose, which
+    # changes in every flight; there the commanded displacement counts,
+    # checked by analyze_trajectory within each folder.
     worst = 0.0
     for p in [x for x in phases if x.startswith('SETPOINT')]:
         for g in GROUPS:
@@ -1758,23 +1654,22 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
             d = max(abs(a[k] - b[k]) for k in ('ref_x', 'ref_y', 'ref_z')
                     if a[k] == a[k] and b[k] == b[k])
             worst = max(worst, d)
-    print(f"  scarto massimo fra i setpoint di missione delle due condizioni: "
+    print(f"  maximum difference between the mission setpoints of the two conditions: "
           f"{worst*1000:.1f} mm")
     if worst > 0.01:
-        print("  !! oltre 1 cm: nominal e perturbed non inseguono lo stesso")
-        print("     riferimento, D non e' interpretabile come sola degradazione.")
+        print("  !! above 1 cm: nominal and perturbed do not track the same")
+        print("     reference, so D is not only the degradation.")
     else:
-        print("  -> stessi setpoint di missione: D misura solo l'effetto del")
-        print("     disturbo.")
+        print("  -> same mission setpoints: D measures only the effect of the")
+        print("     disturbance.")
 
-    # RAMPE. Decollo e atterraggio partono dalla posa a terra, che cambia a
-    # ogni volo: la rampa non e' lunga uguale nelle due cartelle. Finora il
-    # controllo le saltava -- ma le categorie 'Takeoff' e 'Land' delle figure
-    # in maneuvers/ sono proprio la finestra della rampa, quindi una rampa
-    # piu' corta accorcia la finestra, e il confronto fra le due colonne
-    # misura anche quella differenza. Va detto, non nascosto.
-    print(f"\n  {'rampa':<12}{'grp':<6}{'dz nominal':>14}{'dz perturbed':>16}"
-          f"{'scarto':>10}")
+    # RAMPS. Takeoff and landing start from the ground pose, which changes
+    # in every flight, so the ramp length differs between the two folders.
+    # The 'Takeoff' and 'Land' categories of maneuvers/ are the ramp
+    # window, so a shorter ramp shortens the window and the comparison
+    # also measures that difference. It is printed here.
+    print(f"\n  {'ramp':<12}{'grp':<6}{'dz nominal':>14}{'dz perturbed':>16}"
+          f"{'diff':>10}")
     ramp_bad = []
     for p in ('TAKEOFF', 'LANDING'):
         for g in GROUPS:
@@ -1784,29 +1679,27 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
             za, zb = a.get('ramp_dz_m', NAN), b.get('ramp_dz_m', NAN)
             if za != za or zb != zb:
                 print(f"  {p:<12}{g:<6}{'--':>14}{'--':>16}{'--':>10}"
-                      "   (rigenera data_analysis: manca ramp_dz_m)")
+                      "   (regenerate data_analysis: ramp_dz_m missing)")
                 continue
             d = abs(zb - za)
             flag = ""
             if d > 0.02:
-                flag = "   !! non confrontabile"
+                flag = "   !! not comparable"
                 ramp_bad.append((p, g, d))
             print(f"  {p:<12}{g:<6}{za:>13.3f}m{zb:>15.3f}m{d*1000:>7.0f}mm{flag}")
     if ramp_bad:
         labs = ", ".join(sorted({p for p, _g, _d in ramp_bad}))
-        print(f"\n  !! {labs}: la rampa comandata e' lunga diversamente nelle due")
-        print("     cartelle (il drone non si riposa a terra alla stessa quota).")
-        print("     Nelle figure di maneuvers/ le barre di quella categoria")
-        print("     coprono finestre di durata diversa: una barra piu' alta puo'")
-        print("     essere solo una rampa piu' lunga. Leggile con questo in mente,")
-        print("     Le figure normalizzano gia' quella categoria sul dislivello")
-        print("     comandato, quindi la barra e' confrontabile; e' il valore")
-        print("     ASSOLUTO in comparison_categories.csv che non lo e'.")
+        print(f"\n  !! {labs}: the commanded ramp has a different length in the two")
+        print("     folders (the vehicle does not land from the same height).")
+        print("     In maneuvers/ the bars of that category cover windows of")
+        print("     different length. The figures normalise that category by the")
+        print("     commanded height difference, so the bars are comparable; the")
+        print("     ABSOLUTE value in comparison_categories.csv is not.")
     else:
-        print("\n  -> rampe di pari lunghezza: decollo e atterraggio sono")
-        print("     confrontabili fra le due cartelle.")
+        print("\n  -> ramps of equal length: takeoff and landing are")
+        print("     comparable between the two folders.")
 
-    # --------------------------------------------- confronti per fase
+    # --------------------------------------------- comparisons per phase
     all_cells = {}
     rows = []
     for key, label, unit, scale, all_phases in PHASE_METRICS:
@@ -1822,7 +1715,7 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                                 for k, v in cells[p].items()}))
         all_cells[key] = cells
 
-    # --------------------------------------------- console: le due letture
+    # --------------------------------------------- console: the two readings
     for key, label, unit, scale, all_phases in PHASE_METRICS:
         cells = all_cells[key]
         usable = [p for p in phases if cells[p]['ppo_nom'] == cells[p]['ppo_nom']
@@ -1830,9 +1723,9 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
         if not usable:
             continue
         print(f"\n{'='*94}\n{SHORT.get(key, key).upper()}\n{'='*94}")
-        print(f"  {'fase':<12}{'PPO nom':>10}{'PPO per':>10}{'SPPO nom':>10}"
+        print(f"  {'phase':<12}{'PPO nom':>10}{'PPO per':>10}{'SPPO nom':>10}"
               f"{'SPPO per':>10}{'D PPO':>8}{'D SPPO':>8}"
-              f"{'chi sbaglia meno':>20}{'chi ha D minore':>20}")
+              f"{'lower error':>20}{'lower D':>20}")
         for p in usable:
             c = cells[p]
             def s(v, w=10, d=4):
@@ -1845,43 +1738,41 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                   f"{s(c['sppo_nom'])}{s(c['sppo_pert'])}"
                   f"{s(c['D_ppo'], 8, 2)}{s(c['D_sppo'], 8, 2)}"
                   f"{w_pert:>20}{w_D:>20}")
-        # conteggio, per fase
+        # count, per phase
         n_p = sum(1 for p in usable if cells[p]['win_pert'] == 'SPPO')
         n_d = sum(1 for p in usable if cells[p]['win_D'] == 'SPPO')
         n_t = sum(1 for p in usable if cells[p]['win_pert'])
-        print(f"  -> col disturbo SPPO sbaglia meno in {n_p}/{n_t} fasi; "
-              f"ha D minore in {n_d}/{n_t}.")
+        print(f"  -> under the disturbance SPPO has the lower error in {n_p}/{n_t} phases; "
+              f"the lower D in {n_d}/{n_t}.")
 
-    # ------------------------------------------- sforzo di controllo
-    # La TV sul volo intero, da tv_windows.csv. E' l'unico numero "globale"
-    # che resta: non dipende da un ritaglio scelto a mano, e serve a dire
-    # quanto costa in comando la differenza che si legge nelle manovre.
+    # ------------------------------------------- control effort
+    # TV over the whole flight, from tv_windows.csv: the only global number
+    # kept, since it does not depend on a cut, and it tells the command cost
+    # of the differences seen in the manoeuvres.
     glob_rows = []
     tv_nom, tv_pert = read_tv_flight(nom_dir), read_tv_flight(pert_dir)
     tv_cell = None
     if tv_nom and tv_pert:
         tv_cell = compare_cell(tv_nom, tv_pert, floor)
-        glob_rows.append(dict(metric='Total variation - tutti i motori',
+        glob_rows.append(dict(metric='Total variation - all motors',
                               **{k: (round(v, 6) if isinstance(v, float) else v)
                                  for k, v in tv_cell.items()}))
         c = tv_cell
-        print(f"\n{'='*94}\nSFORZO DI CONTROLLO SUL VOLO INTERO\n{'='*94}")
-        print(f"  {'metrica':<28}{'PPO nom':>10}{'PPO per':>10}{'SPPO nom':>10}"
+        print(f"\n{'='*94}\nCONTROL EFFORT OVER THE WHOLE FLIGHT\n{'='*94}")
+        print(f"  {'metric':<28}{'PPO nom':>10}{'PPO per':>10}{'SPPO nom':>10}"
               f"{'SPPO per':>10}{'D PPO':>8}{'D SPPO':>8}"
-              f"{'sbaglia meno':>16}{'D minore':>16}")
+              f"{'lower error':>16}{'lower D':>16}")
         print(f"  {'Total Variation':<28}{c['ppo_nom']:>10.1f}{c['ppo_pert']:>10.1f}"
               f"{c['sppo_nom']:>10.1f}{c['sppo_pert']:>10.1f}"
               f"{c['D_ppo']:>8.2f}{c['D_sppo']:>8.2f}"
               f"{c['win_pert'] or '--':>16}{c['win_D'] or '--':>16}")
 
-    # --------------------------------------------- figure
-    # Le figure per fase (cartella 'paired') non vengono piu' prodotte: il
-    # confronto per fase resta nelle tabelle e a console.
+    # --------------------------------------------- figures
+    # The comparison per phase is in the tables and in the console output.
     if tv_cell is not None:
-        mtv = 'Total variation - tutti i motori'
+        mtv = 'Total variation - all motors'
         n_fig = 0
-        # la TV non e' un errore: l'etichetta dell'asse e' il suo simbolo,
-        # non 'RMSE'
+        # the TV is not an error: the axis label is its symbol
         if fig_metric_bars(mtv, tv_cell,
                            dirs['propellers'] / "01_total_variation.pdf", floor,
                            stat=r'$TV_{\omega}$'):
@@ -1890,16 +1781,15 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                                   dirs['propellers'] / "02_total_variation_D.pdf",
                                   stat=r'$TV_{\omega}$'):
             n_fig += 1
-        print(f"\n  {n_fig} figure scritte in {dirs['propellers']}")
+        print(f"\n  {n_fig} figures written in {dirs['propellers']}")
 
-    # confronto per rotore (P1..P6) della TV sul volo intero,
-    # stesso stile punto medio+range delle altre figure di 5.3
-    # (Marco, 6/10, vedi tv_rotors_range_section)
+    # TV over the whole flight per rotor (P1..P6), with the same mid-point
+    # and range style as the other figures (see tv_rotors_range_section)
     rotor_stem = nom_dir.name.replace("_nominal", "").replace("_nom", "")
     tv_rotors_range_section(nom_dir, pert_dir, dirs, rotor_stem)
 
-    # sovrapposizione nel tempo: serve la serie grezza (vedi load_series)
-    print(f"\n{'='*78}\nSERIE GREZZE PER LE CURVE\n{'='*78}")
+    # overlay over time: needs the raw series (see load_series)
+    print(f"\n{'='*78}\nRAW SERIES FOR THE CURVES\n{'='*78}")
     flights, all_ok = {}, True
     for cond, folder, pm in (('nominal', nom_dir, pm_nom),
                              ('perturbed', pert_dir, pm_pert)):
@@ -1914,22 +1804,22 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                 all_ok = False
             flights[(group, cond)] = res
     if not flights:
-        print("  nessun data.npz leggibile: niente figure di sovrapposizione.")
+        print("  no readable data.npz: no overlay figures.")
     elif not all_ok:
-        print("  !! le serie ricalcolate qui non coincidono con i CSV: le figure")
-        print("     di sovrapposizione NON vengono disegnate. Controlla che i CSV")
-        print("     siano stati rigenerati dopo l'ultima modifica ai dati.")
+        print("  !! the series recomputed here differ from the CSV files: the")
+        print("     overlay figures are not drawn. Check that the CSV files were")
+        print("     regenerated after the last change to the data.")
     else:
-        # confini di fase presi dal volo nominal PPO: stessa missione per
-        # tutti e quattro, quindi bastano quelli come riferimento visivo
+        # phase boundaries from the PPO nominal flight: the mission is the same
+        # for all four, so they serve as a visual reference
         bounds = sorted({pm_nom[('PPO', p)]['t0'] for p in phases
                          if ('PPO', p) in pm_nom
                          and pm_nom[('PPO', p)]['t0'] == pm_nom[('PPO', p)]['t0']})[1:]
         missing = [key for key, _ in OVERLAY_PANELS
                   if not any(key in f for f in flights.values())]
         if missing:
-            print(f"  [attenzione] mancano in data.npz: {', '.join(missing)} -- "
-                  "quei pannelli restano vuoti nella griglia")
+            print(f"  [warning] missing in data.npz: {', '.join(missing)} -- "
+                  "those panels stay empty")
         fig_overlay_grid(flights, dirs['roll'] / "overlay_grid.pdf", bounds=bounds)
         fig_step_profile_pair(flights, pm_nom, pm_pert, STEP_PROFILE_WINDOW_S,
                               dirs['roll'] / "step_profile_pair.pdf")
@@ -1942,8 +1832,8 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                 nom_dir, pert_dir, mission_stem,
                 dirs['tables'] / "step_metrics_range.tex")
         else:
-            print(f"  [step profile] missione '{mission_stem}' non in "
-                  "MISSION_STEP_CHANNEL, figura/tabella non scritte")
+            print(f"  [step profile] mission '{mission_stem}' not in "
+                  "MISSION_STEP_CHANNEL, figure and table not written")
 
     # --------------------------------------------- export
     if rows:
@@ -1963,11 +1853,11 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
 
     with open(dirs['tables'] / "results_comparison.tex", "w") as fh:
         fh.write(f"% {nom_dir.name} vs {pert_dir.name}\n")
-        fh.write("% D = perturbed / nominal. D > 1 = peggioramento.\n")
-        fh.write(f"% Un volo per condizione: differenze sotto il {floor:.0f}% "
-                 "assunto non sono\n")
-        fh.write("% commentate. La soglia e' una convenzione dichiarata, non "
-                 "una stima statistica.\n")
+        fh.write("% D = perturbed / nominal. D > 1 = degradation.\n")
+        fh.write(f"% One flight per condition: differences below the {floor:.0f}% "
+                 "threshold are not\n")
+        fh.write("% discussed. The threshold is a convention, not "
+                 "a statistical estimate.\n")
         for key, label, unit, scale, all_phases in PHASE_METRICS[:2]:
             cells = all_cells[key]
             usable = [p for p in phases
@@ -1988,19 +1878,19 @@ def run(nom_dir: Path, pert_dir: Path, out_dir: Path, floor: float,
                          f"{t(c['D_ppo'], 2)} & {t(c['D_sppo'], 2)} \\\\\n")
             fh.write("\\bottomrule\n\\end{tabular}\n")
 
-    # ---------------------------------------------- confronto per categoria
+    # ---------------------------------------------- comparison by category
     stem = nom_dir.name.replace("_nominal", "").replace("_nom", "")
     compare_categories_section(nom_dir, pert_dir, dirs, stem, cat_exclude)
 
-    print(f"\n  Promemoria per il testo: D e' il rapporto fra due voli singoli.")
-    print(f"  La soglia del {floor:.0f}% e' una convenzione dichiarata, non una")
-    print( "  stima di incertezza. Quello che regge e' la coerenza del segno su")
-    print( "  piu' fasi e piu' traiettorie, non il singolo numero.")
-    print(f"\nConfronto completato. Output in: {out_dir}")
+    print(f"\n  D is the ratio of two single flights. The {floor:.0f}% threshold")
+    print(f"  is a convention, not an uncertainty estimate: the consistency")
+    print( "  of the sign over several phases and missions carries more weight")
+    print( "  than a single number.")
+    print(f"\nComparison done. Output in: {out_dir}")
 
 
 def default_output(nom_dir: Path, pert_dir: Path) -> Path:
-    """p2p_nominal + p2p_perturbed -> p2p_comparison, accanto alle due."""
+    """p2p_nominal + p2p_perturbed -> p2p_comparison, next to the two."""
     a, b = nom_dir.name, pert_dir.name
     i = 0
     while i < min(len(a), len(b)) and a[i] == b[i]:
@@ -2011,26 +1901,26 @@ def default_output(nom_dir: Path, pert_dir: Path) -> Path:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
-        description="Confronto nominal vs perturbed per un task TiltHex.")
+        description="Nominal vs perturbed comparison for one Tilthex mission.")
     p.add_argument("-n", "--nominal", required=True, type=str,
-                   help="cartella del caso nominal (es. plots/p2p_nominal)")
+                   help="nominal folder (e.g. p2p_nominal)")
     p.add_argument("-p", "--perturbed", required=True, type=str,
-                   help="cartella del caso perturbed")
+                   help="perturbed folder")
     p.add_argument("-o", "--output", type=str, default=None,
-                   help="cartella di uscita (default: <prefisso>_comparison "
-                        "accanto alle due di ingresso)")
+                   help="output folder (default: <prefix>_comparison "
+                        "next to the two input folders)")
     p.add_argument("--cat-exclude", nargs="*", default=[], metavar="CAT",
-                   help="categorie da NON disegnare nelle figure di "
-                        "categories/ (restano nel CSV)")
+                   help="categories left out of the figures of "
+                        "categories/ (kept in the CSV)")
     p.add_argument("--noise-floor", type=float, default=5.0,
-                   help="soglia percentuale assunta sotto la quale non si "
-                        "assegna un vincitore (default 5)")
+                   help="percentage threshold below which no winner "
+                        "is assigned (default 5)")
     args = p.parse_args()
 
     nom_dir, pert_dir = Path(args.nominal), Path(args.perturbed)
     for d in (nom_dir, pert_dir):
         if not d.is_dir():
-            sys.exit(f"Errore: cartella '{d}' non trovata.")
+            sys.exit(f"Error: folder '{d}' not found.")
     out_dir = Path(args.output) if args.output else default_output(nom_dir, pert_dir)
     run(nom_dir, pert_dir, out_dir, args.noise_floor,
         cat_exclude=args.cat_exclude)

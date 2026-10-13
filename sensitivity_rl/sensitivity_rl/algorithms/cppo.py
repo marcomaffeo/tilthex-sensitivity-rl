@@ -139,7 +139,7 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
             _update_minbatch, update_state.train_state, minibatches
         )
 
-        # CPPO Variable Updates (Nu & Lambda) [cite: 437-438]
+        # CPPO variable updates (nu and lambda)
         # 1. Update Nu (VaR threshold)
         batch_avg_return = jnp.mean(update_state.targets)
         nu_lr = config.get("CVAR_NU_LR", 1e-3)
@@ -254,7 +254,7 @@ def calculate_gae(config, traj_batch, networks, collect_state):
     delay = config.get("CVAR_DELAY", 1.0)
 
     # Identify "risky" steps where return is less than VaR threshold (nu)
-    # The penalty applies only when estimated_return < nu [cite: 167]
+    # The penalty applies only when estimated_return < nu
     risk_mask = (estimated_return < nu).astype(jnp.float32)
 
     # Calculate penalty: lambda / (1 - alpha) * (nu - return)

@@ -212,13 +212,13 @@ def make_loss_fn(config, graphdef):
 
 
 def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
-    """Create update epoch function for PPO.
+    """Create the update epoch function for SPPO-grad-param.
 
     Args:
         config: Training configuration
         loss_fn: Loss function created by make_loss_fn
         shuffle_batch_fn: Function to shuffle and batch trajectories
-        networks: Dict returned by init_networks (unused in PPO but needed for interface)
+        networks: Dict returned by init_networks
 
     Returns a function for use with jax.lax.scan that performs one epoch of updates.
     """
@@ -270,7 +270,7 @@ def make_update_fn(config, loss_fn, shuffle_batch_fn, networks):
 
 
 def make_collect_fn(config, env, env_params, networks):
-    """Like SPPO's collect, but stores Jacobians in extras (not in info)."""
+    """SPPO collect step that also stores the environment Jacobians in extras."""
     graphdef = networks["graphdef"]
 
     def _env_step(runner_state: RunnerState, unused):
@@ -299,7 +299,7 @@ def make_collect_fn(config, env, env_params, networks):
         env_state = jax.lax.stop_gradient(env_state)
         new_gru_hidden = jax.lax.stop_gradient(new_gru_hidden)
 
-        # Move Jacobians to extras (for the loss); strip from info (avoid duplication)
+        # Move the Jacobians to extras for the loss and drop them from info
         info_clean = {k: v for k, v in info.items() if k not in _JAC_KEYS}
 
         transition = Transition(

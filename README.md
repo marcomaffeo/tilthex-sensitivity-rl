@@ -141,16 +141,6 @@ make install
 # example scripts: /any/install/path/share/doc/telekyb3/examples (bin/ and etc/)
 ```
 
-## Verification status
-
-| What | Checked on | Result |
-|---|---|---|
-| Training: SPPO and PPO on `tilthex_v1`, PPO on `drone_v3` and `pendulum` | macOS, Apple Silicon, CPU (October 2026) | short runs complete; `pendulum` learns (return from about −1200 to about −150) |
-| Training of the thesis policies | Linux x86_64, NVIDIA GPU | used for PPO_14 and SPPO_14 |
-| Simulation with the policy node | Linux x86_64, during the thesis | working; not re-run after the October 2026 clean-up of the repository |
-| Real flights | Tilthex, IRISA flight arena (May 2026) | code at tag `flight-campaign` |
-| Analysis: every table regenerated from the `data.npz` files | Linux (October 2026) | identical to the tracked tables up to floating-point rounding |
-
 ## Credits
 
 Thesis work of Marco Maffeo. The training framework in `sensitivity_rl/` was started by

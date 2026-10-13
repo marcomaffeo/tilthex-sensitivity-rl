@@ -1,4 +1,4 @@
-# pixi.toml - Pixi environment and task configuration for sensitivity_rl
+# Environment and tasks of the training framework
 
 [workspace]
 name = "sensitivity-rl"
@@ -17,63 +17,43 @@ pip = "*"
 pytest = ">=8.4.2,<9"
 imageio = ">=2.37.0,<3"
 setuptools = "<70"
-# hydra-core from conda-forge: on PyPI its dependency antlr4-python3-runtime 4.9.3 is
-# source-only, and pixi cannot build it for the linux-only cuda environment on macOS.
+# hydra-core comes from conda-forge: its PyPI dependency antlr4-python3-runtime 4.9.3
+# is source-only and cannot be built for the Linux cuda environment on macOS.
 hydra-core = "*"
 
 
 [pypi-dependencies]
 jax = "<=0.9.1"
-# distrax >= 0.1.8 uses tfp-nightly; 0.1.5 pulls tensorflow-probability 0.25, incompatible with jax 0.9
+# distrax >= 0.1.8 uses tfp-nightly, which works with jax 0.9
 distrax = ">=0.1.8"
 torch = ">=2.0.0"
 gymnax = "*"
 flax = ">=0.12"
 optax = "*"
 chex = "*"
-#sensitivity-rl = { path = ".", editable = true }
 
-# CPU environment: install JAX CPU wheels via PyPI
-# [feature.cpu.pypi-dependencies]
-# jax = { version = ">=0.6.0, <=0.7.2"}
-
-# CUDA 12 environment: install JAX CUDA 12 wheels via PyPI
+# CUDA 12 environment (Linux): pixi run -e cuda ...
 [feature.cuda12]
 platforms = ["linux-64"]
 [feature.cuda12.pypi-dependencies]
 jax = { version = "<=0.9.1", extras = ["cuda12"] }
 
-# JAX variant install options
-# CPU-only JAX wheel (works on Linux/macOS CPU)
-# Named environments to choose CPU or CUDA variant via: pixi -e <env>
 [environments]
-# default = { features = ["cpu"], solve-group = "default" }
 cuda = { features = ["cuda12"], solve-group = "default" }
 
 
 [tasks]
-# Unified training entry point
-# Usage (Hydra overrides): pixi run train ALGORITHM=ppo env=tilthex_v1
-#                         pixi run train ALGORITHM=sppo env=drone_v3
+# Training, with Hydra overrides: pixi run train ALGORITHM=ppo env=tilthex_v1
 train = "python sensitivity_rl/train.py"
-
-# Convenience aliases for common algorithms
 train_ppo = "python sensitivity_rl/train.py ALGORITHM=ppo"
-train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo"
-train_sppo_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug"
-train_sppo_grad = "python sensitivity_rl/train.py ALGORITHM=sppo_grad"
-train_sppo_grad_param = "python sensitivity_rl/train.py ALGORITHM=sppo_grad_param"
-train_sppo_aug_grad_param_dual = "python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual"
+train_sppo = "python sensitivity_rl/train.py ALGORITHM=sppo_aug_grad_param_dual"
 
-# Generate evaluation rollouts from a trained policy. Example:
+# Evaluation rollouts of a trained policy:
 #   pixi run rollouts --run_dirs runs/latest --num_rollouts 100 --param_samples 10 --plot
 rollouts = "python sensitivity_rl/rollouts.py"
 
-
-
-# Deletes all results
+# Delete all training runs
 clean = "rm -r ./runs/*"
-
 
 [target.linux-64.dependencies]
 texlive-core = ">=20230313,<20230314"

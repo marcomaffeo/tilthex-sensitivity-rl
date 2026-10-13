@@ -1,118 +1,105 @@
 #!/usr/bin/env python3
 """
-analyze_trajectory.py  --  Analisi delle missioni di traiettoria: PPO vs SPPO.
+Analysis of the trajectory missions: PPO vs SPPO.
 
-Produce una cartella data_analysis con DUE rami e le tabelle:
+The script writes a data_analysis folder with two branches and the tables::
 
-    flight/      il log intero: curve d'errore nel tempo, Rollouts, TV.
-                 DESCRIVE il volo. Contiene il decollo, che parte dalla posa
-                 a terra -- diversa a ogni volo -- quindi non confronta.
-    maneuvers/   il volo diviso per manovra: decollo, mantenimento,
-                 atterraggio, piu' maneuvers/step/ per la risposta al
-                 gradino. E' qui che si CONFRONTA: ogni numero e' riferito a
-                 una finestra che si riconosce dal riferimento, non a un
-                 ritaglio dell'orologio.
-    tables/      i CSV, compreso params.csv con i tagli usati.
+    flight/      the whole log: error curves over time, rollouts, TV. It
+                 describes the flight, including the takeoff from the
+                 ground pose, which is different in every flight.
+    maneuvers/   the flight split by manoeuvre: takeoff, hold, landing, and
+                 maneuvers/step/ for the step response. The comparison is
+                 made here: every number refers to a window identified from
+                 the reference.
+    tables/      the CSV files, including params.csv with the cuts used.
 
-Si applica alle cartelle che contengono DUE voli -- PPO e SPPO della stessa
-policy -- che inseguono lo STESSO riferimento:
+It applies to the folders with two flights, PPO and SPPO of the same policy
+index, tracking the same reference::
 
     p2p_nominal   p2p_perturbed   rpy_nominal   rpy_perturbed
 
-NATURA DEI DATI  (da tenere a mente leggendo qualunque numero prodotto qui)
---------------------------------------------------------------------------
-Un volo per cella: 2 traiettorie x 2 algoritmi x 2 condizioni = 8 voli.
-Sono CASI DI STUDIO, non un campione. Le fasi di una missione non sono
-campioni indipendenti -- vengono dallo stesso volo -- quindi contarle come
-tali sarebbe pseudo-replicazione. Di conseguenza qui non si calcola nessun
-test statistico, nessun p-value, nessuna banda di incertezza: solo valori
-singoli, da riportare in tesi con linguaggio descrittivo.
+Nature of the data
+------------------
+One flight per cell: 2 missions x 2 algorithms x 2 conditions = 8 flights.
+These are case studies. The phases of a mission come from the same flight
+and are not independent samples, so no statistical test, p-value or
+uncertainty band is computed here: only single values.
 
-DIFFERENZE RISPETTO ALLA CAMPAGNA DI HOVERING
----------------------------------------------
-  * Un volo per algoritmo, non 15 policy appaiate: niente medie fra policy,
-    niente bande +/- sigma, niente p-value.
-  * Il riferimento NON e' costante: cambia a gradino a ogni fase della
-    missione. Il volo va quindi SEZIONATO, non croppato a un orizzonte fisso.
-    I confini si rilevano dal riferimento; le finestre di staging fra
-    publish_absolute_setpoint e /policy/start vengono assorbite nel decollo o
-    nell'atterraggio.
-  * Oltre all'RMSE sull'intero volo, le metriche sono calcolate PER FASE
-    separando transitorio e regime.
-
-FASI NON CONFRONTABILI NEL TRANSITORIO
+Differences with the hovering campaign
 --------------------------------------
-Il drone non puo' essere riposizionato a terra esattamente nello stesso punto
-a ogni volo, quindi il gradino che porta al primo setpoint di missione ha
-ampiezza leggermente diversa fra PPO e SPPO (nei dati: 1.35 vs 1.53 m). Su un
-gradino piu' lungo il picco di errore e' piu' grande per costruzione, non per
-merito del controllore: il transitorio di quella fase NON e' confrontabile.
+  * One flight per algorithm: no averages over policies, no +/- sigma bands,
+    no p-values.
+  * The reference changes in steps at every phase of the mission, so the
+    flight is split into phases. The boundaries are detected from the
+    reference; the staging windows between publish_absolute_setpoint and
+    /policy/start are merged into the takeoff or the landing.
+  * Besides the RMSE over the whole flight, the metrics are computed per
+    phase, separating transient and steady state.
 
-Lo script se ne accorge da solo -- confronta l'ampiezza del comando in
-ingresso a ogni fase fra i due voli -- e per le fasi che risultano diverse:
-  * azzera (n.c.) RMSE sull'intera fase, RMSE di transitorio, picco, tempo di
-    assestamento e TV di fase, nei valori ASSOLUTI;
-  * tiene l'errore A REGIME, che dipende dal setpoint finale (identico) e non
-    dal cammino percorso per arrivarci;
-  * ESCLUDE quella finestra di transitorio dalle metriche globali sull'intero
-    volo, che altrimenti la conterrebbero.
-Le curve restano disegnate per intero: si esclude dal CONTO, non dal grafico.
+Phases with different steps
+---------------------------
+The vehicle cannot be put down at exactly the same point before every
+flight, so the step into the first setpoint of the mission has a slightly
+different amplitude for PPO and SPPO (1.35 vs 1.53 m in the data). A longer
+step gives a larger error peak regardless of the controller, so the
+transient of that phase cannot be compared in absolute terms.
 
-TRANSITORIO NORMALIZZATO
-------------------------
-Buttare il transitorio pero' costa informazione, e il controllo classico ha una
-risposta migliore: si divide l'errore per l'ampiezza del gradino. In un sistema
-lineare la risposta al gradino scala con l'ampiezza, quindi e(t)/Delta non
-dipende da Delta -- e' lo stesso motivo per cui la sovraelongazione si riporta
-in percentuale e non in metri, e per cui tempo di salita e di assestamento sono
-specifiche indipendenti dall'ampiezza.
+The script compares the amplitude of the command entering each phase in the
+two flights, and for the phases where it differs:
 
-Lo script calcola quindi, accanto ai valori assoluti, le versioni normalizzate
-(picco / Delta, RMSE di transitorio / Delta, IAE / Delta), che restano
-confrontabili anche sulle fasi marcate non confrontabili in assoluto.
+  * the absolute RMSE over the phase, transient RMSE, peak, settling time and
+    phase TV are left blank (n.c.);
+  * the steady-state error is kept, since it depends on the final setpoint,
+    which is the same;
+  * that transient window is excluded from the global metrics over the
+    whole flight.
 
-LIMITE DA DICHIARARE IN TESI: l'invarianza rispetto all'ampiezza vale nel
-regime lineare. Con gli attuatori in saturazione un gradino piu' lungo degrada
-di piu' anche in rapporto. Qui la saturazione e' marginale e i gradini
-differiscono di poco, quindi l'approssimazione regge -- ma e' un'assunzione,
-e va scritta. Per questo la normalizzazione AFFIANCA il regime, non lo
-sostituisce: il regime non assume nulla, e se le due letture concordano la
-conclusione non dipende dalla metrica scelta (analisi di sensibilita').
+The curves are still drawn in full.
 
-La normalizzazione si applica solo dove il transitorio e' davvero una risposta
-al gradino, cioe' alle fasi di hold raggiunte da un salto del riferimento.
-Decollo e atterraggio sono RAMPE: il loro salto in ingresso e' ~0 e dividere
-per quello darebbe numeri enormi e privi di senso.
+Normalised transient
+--------------------
+The transient is also reported divided by the step amplitude. For a linear
+system the step response scales with the amplitude, so e(t)/Delta does not
+depend on Delta, as for the overshoot in percent or the rise and settling
+times. Next to the absolute values the script computes peak / Delta,
+transient RMSE / Delta and IAE / Delta, which remain comparable on the phases
+flagged above.
 
-ASSUNZIONI SUL FORMATO DEI DATI (le stesse di analyze_campaign.py)
-------------------------------------------------------------------
-  * data['action'] contiene 6 FORZE in NEWTON, una per rotore.
-  * data['quat'] e data['quat_ref'] sono in convenzione WXYZ.
-    >>> Se cambia il nodo di logging, ricontrolla qui: lo script produrrebbe
-    >>> numeri sbagliati in silenzio.
+The invariance holds in the linear regime: with saturated actuators a longer
+step degrades more also in relative terms. Here saturation is marginal and
+the steps differ little, and the steady-state values, which need no such
+assumption, are reported next to the normalised ones.
 
-Definizioni di errore identiche a quelle della campagna:
-  e_p = pos - pos_ref                 |e_p| invariante rispetto al frame
-  e_b = R_ref^-1 (pos - pos_ref)      componenti nel frame del riferimento
-  e_R = rotvec(R_ref^-1 R_act)        log-map nel frame del RIFERIMENTO;
-                                      |e_R| e' geodetica, quindi invariante
+The normalisation applies only where the transient is a step response, that
+is to the hold phases reached through a jump of the reference. Takeoff and
+landing are ramps, with an entering jump close to zero.
 
-Le componenti nel frame MONDO non compaiono: lo yaw di riferimento cambia
-fra le fasi, quindi e_x, e_y, e_z non sono confrontabili per asse.
+Data format (as in analyze_campaign.py)
+---------------------------------------
+  * data['action'] holds the 6 rotor forces in newtons, one per rotor.
+  * data['quat'] and data['quat_ref'] are in WXYZ order.
 
-ATTENZIONE al significato di e_b: e' l'errore nel frame del RIFERIMENTO, non
-del corpo. Dove il riferimento ruota durante la missione -- p.es. lo scenario
-di assetto, dove lo yaw comandato passa da 0 a 40 gradi -- gli assi x, y di
-e_b ruotano con lui, e la metrica globale per asse somma componenti misurate
-lungo direzioni fisiche diverse. Il confronto fra due voli resta valido (stesso
-frame per entrambi), ma 'errore in X' non e' una direzione fissa dello spazio:
-per il confronto fra scenari usare la norma |e_p|, che e' invariante.
+Error definitions, the same as in the hovering campaign::
 
-Lo script e' AUTONOMO: non richiede nessun altro file.
+  e_p = pos - pos_ref                 |e_p| independent of the frame
+  e_b = R_ref^-1 (pos - pos_ref)      components in the reference frame
+  e_R = rotvec(R_ref^-1 R_act)        log map in the reference frame;
+                                      |e_R| is the geodesic distance
 
-Uso:
-    python analyze_trajectory.py --input plots/p2p_nominal
-    python analyze_trajectory.py --input plots/rpy_perturbed --t-ss 2.5
+The world-frame components are not used: the reference yaw changes between
+phases, so e_x, e_y, e_z would not be comparable axis by axis.
+
+e_b is the error in the REFERENCE frame. Where the reference rotates during
+the mission (in the attitude mission the commanded yaw goes from 0 to 40
+degrees) the x and y axes of e_b rotate with it, and the global metric per
+axis sums components along different physical directions. The comparison
+between the two flights holds (same frame for both); across missions the
+norm ``|e_p|`` is used.
+
+Usage::
+
+    python analyze_trajectory.py --input p2p_nominal
+    python analyze_trajectory.py --input rpy_perturbed --t-ss 2.5
 """
 
 import argparse
@@ -124,24 +111,22 @@ import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D          # noqa: F401  (registra il 3d)
+from mpl_toolkits.mplot3d import Axes3D          # noqa: F401  (registers the 3d projection)
 from scipy.spatial.transform import Rotation
 
-# --------------------------------------------------------------- costanti
-CF = 12.0e-4                   # coefficiente di spinta [N / (rad/s)^2]
-F_MIN, F_MAX = 0.3072, 12.0    # limiti di forza per rotore [N]
-# NB: i log delle missioni toccano esattamente 0.3072 e 12.0000 N, quindi
-# questi SONO i limiti reali dell'attuatore per questi voli. I valori
-# precedenti (0.288 / 11.25 / 11.25e-4, tuttora in analyze_campaign.py)
-# venivano dalla campagna di hovering e qui tagliavano comandi veri.
+# --------------------------------------------------------------- constants
+CF = 12.0e-4                   # thrust coefficient [N / (rad/s)^2]
+F_MIN, F_MAX = 0.3072, 12.0    # force limits per rotor [N]
+# The mission logs reach exactly 0.3072 and 12.0000 N: these are the
+# actuator limits of these flights.
 N_ROTORS = 6
 
-C_PPO, C_SPPO = '#ff7f0e', '#1f77b4'  # arancione / blu, come export_campaign.py
+C_PPO, C_SPPO = '#ff7f0e', '#1f77b4'  # orange / blue
 C_REF = '#222222'
 COL = {'PPO': C_PPO, 'SPPO': C_SPPO}
-# Tratteggi sfalsati per le curve di riferimento: i due riferimenti
-# coincidono da SETPOINT 1 in poi, e con lo stesso tratteggio uno
-# nasconderebbe l'altro. Cosi' restano visibili entrambi.
+# Offset dashes for the two reference curves: the references coincide
+# from SETPOINT 1 on, and with the same dash pattern one would hide
+# the other.
 DASH_REF = [(0, (7, 4)), (4, (7, 4))]
 GROUPS = ('PPO', 'SPPO')
 
@@ -150,21 +135,20 @@ _ESC_SPACE = "\\ "
 
 
 def tex(s):
-    """'Position Error X' -> 'Position\\ Error\\ X'. Il backslash sta fuori
-    dall'f-string: dentro e' sintassi valida solo da Python 3.12 (PEP 701)."""
+    """'Position Error X' -> 'Position\\ Error\\ X'. Done outside the f-strings,
+    which accept a backslash only from Python 3.12."""
     return s.replace(" ", _ESC_SPACE)
 
 
 def nan_to_blank(v):
-    """nan -> '' nei CSV: una cella vuota si legge come 'non calcolabile',
-    la stringa 'nan' si legge come un bug."""
+    """nan -> '' in the CSV files: an empty cell reads as 'not computable'."""
     return '' if isinstance(v, float) and v != v else v
 
 
 # ===========================================================================
-# Metriche tracciate nel tempo.  (chiave, etichetta y, titolo, nome file)
+# Metrics plotted over time.
 # ===========================================================================
-#   chiave, simbolo (senza modulo, senza unita'), unita', titolo, nome file
+# key, symbol (without norm and unit), unit, title, file name
 METRICS = [
     ('e_bx',       r'e_x^{\,r}',   'm',     'Position Error X (ref frame)', '1_err_bx'),
     ('e_by',       r'e_y^{\,r}',   'm',     'Position Error Y (ref frame)', '2_err_by'),
@@ -178,76 +162,73 @@ METRICS = [
     ('w_norm',     r'\|\omega\|',  'rad/s', 'Angular Velocity Norm',        '10_avel'),
 ]
 
-# metriche il cui riferimento e' nullo SOLO a regime: durante una transizione
-# il drone deve muoversi, quindi li' un valore alto non e' un errore
+# metrics whose reference is zero only in steady state: during a transition
+# the vehicle has to move, so a high value there is not an error
 MOTION_METRICS = {'v_norm', 'w_norm'}
 
-# titolo lungo -> simbolo, per l'asse x dei riepiloghi. Dieci nomi per esteso
-# ruotati di 35 gradi occupano meta' figura e non si leggono comunque.
+# long title -> symbol, for the x axis of the summaries
 SHORT = {t: rf'${s}$' for _k, s, _u, t, _f in METRICS}
 
-# campi di phase_metrics che dipendono dal transitorio IN VALORE ASSOLUTO: per
-# una fase con gradino di ampiezza diversa fra i due voli non sono
-# confrontabili. I corrispettivi normalizzati (suffisso _norm) NON sono in
-# questa lista: sono proprio quelli che restano validi.
+# fields of phase_metrics that depend on the transient in ABSOLUTE value:
+# they are not comparable for a phase entered with steps of different
+# amplitude. The normalised counterparts (suffix _norm) stay valid and
+# are not in this list.
 TRANSIENT_FIELDS = ('rmse_pos_all', 'rmse_pos_transient', 'peak_pos',
                     'iae_pos', 'settle_pos_s', 'rmse_att_all',
                     'rmse_att_transient', 'peak_att', 'iae_att',
                     'settle_att_s', 'tv_total')
 
-# ampiezza minima del gradino sotto la quale non ha senso normalizzare
+# minimum step amplitude for the normalisation
 MIN_STEP_NORM = 0.05         # [m]
 
 
 # ===========================================================================
-# RILEVAMENTO DELLE FASI DI MISSIONE
+# DETECTION OF THE MISSION PHASES
 #
-# Le missioni sono definite in policy_control_node_tilthex.py:
+# The missions are defined in policy_control_node_tilthex.py:
 #
 #   point-to-point  (--takeoff-zero-point-land)
-#       FASE 1  takeoff (rampa)                                wait_s
-#       FASE 2  primo punto   [0, 0, takeoff_z]                wait_s
-#       FASE 3  secondo punto [x, y, takeoff_z + z]            wait_s
-#       FASE 4  landing (rampa)                                wait_s
+#       PHASE 1  takeoff (ramp)                                wait_s
+#       PHASE 2  first point  [0, 0, takeoff_z]                wait_s
+#       PHASE 3  second point [x, y, takeoff_z + z]            wait_s
+#       PHASE 4  landing (ramp)                                wait_s
 #
 #   attitude manoeuvre (--takeoff-zero-attitude-zero-land)
-#       FASE 1  takeoff (rampa)                                wait_s
-#       FASE 2  zero point, assetto nullo                      wait_s
-#       FASE 3  assetto target [roll, pitch, yaw]              wait_s
-#       FASE 4  zero point con yaw target                      wait_s
-#       FASE 5  landing (rampa)                                wait_s
+#       PHASE 1  takeoff (ramp)                                wait_s
+#       PHASE 2  zero point, level attitude                    wait_s
+#       PHASE 3  target attitude [roll, pitch, yaw]            wait_s
+#       PHASE 4  zero point with the target yaw                wait_s
+#       PHASE 5  landing (ramp)                                wait_s
 #
-# Il sezionamento NON e' a tempo fisso: i confini si leggono dal riferimento.
-# Due tipi di evento, da trattare separatamente:
-#   * SALTO A GRADINO: publish_absolute_setpoint cambia il setpoint da un
-#     campione all'altro. Dura un campione solo, quindi un filtro basato sulla
-#     durata lo cancellerebbe: va rilevato sull'incremento fra campioni
-#     consecutivi.
-#   * RAMPA sostenuta: decollo e atterraggio usano set_ramp_rate, quindi il
-#     riferimento varia con continuita' per alcuni secondi.
+# The boundaries are read from the reference. Two kinds of events:
+#   * STEP: publish_absolute_setpoint changes the setpoint from one
+#     sample to the next. It lasts one sample, so it is detected on the
+#     increment between consecutive samples.
+#   * RAMP: takeoff and landing use set_ramp_rate, so the reference
+#     changes continuously for a few seconds.
 # ===========================================================================
 
-V_THR = 1e-3                 # [m/s]   sopra questa il riferimento "si muove"
+V_THR = 1e-3                 # [m/s]   above this the reference is "moving"
 W_THR = 1e-3                 # [rad/s]
-MIN_BLOCK = 0.25             # [s]     rampe piu' corte assorbite nel vicino
-STEP_POS = 0.02              # [m]     salto su un singolo campione
+MIN_BLOCK = 0.25             # [s]     shorter ramps are merged into the neighbour
+STEP_POS = 0.02              # [m]     jump within a single sample
 STEP_ANG = np.deg2rad(2.0)   # [rad]
 
-# soglie oltre le quali il comando in ingresso a una fase e' considerato
-# DIVERSO fra i due voli, e quindi il transitorio non confrontabile
+# thresholds above which the command entering a phase is considered
+# DIFFERENT between the two flights, so that the transient is not comparable
 STEP_TOL_POS = 0.02          # [m]
 STEP_TOL_ANG = 2.0           # [deg]
 
 
 def to_scipy_quat(q_wxyz):
-    """wxyz (formato dei log) -> xyzw (formato che vuole scipy)."""
+    """wxyz (log order) -> xyzw (scipy order)."""
     q = np.asarray(q_wxyz, dtype=float)
     return np.column_stack([q[:, 1], q[:, 2], q[:, 3], q[:, 0]])
 
 
 def _blocks(mask, t, min_dur):
-    """mask booleana -> lista di (start, end, value), con i blocchi piu' corti
-    di min_dur assorbiti nel precedente."""
+    """Boolean mask -> list of (start, end, value), with the blocks shorter
+    than min_dur merged into the previous one."""
     idx = np.flatnonzero(np.diff(mask.astype(int))) + 1
     edges = np.concatenate([[0], idx, [len(mask)]])
     raw = [(edges[i], edges[i + 1], bool(mask[edges[i]])) for i in range(len(edges) - 1)]
@@ -268,30 +249,30 @@ def _blocks(mask, t, min_dur):
 
 
 def detect_phases(f, cfg):
-    """Rileva le fasi dal riferimento. Ritorna una lista di dict con tipo
-    ('hold'/'move'), indici, tempi, durata, bersaglio e (per le rampe)
-    spostamento comandato."""
+    """Detect the phases from the reference. Return a list of dicts with type
+    ('hold'/'move'), indices, times, duration, target and, for the ramps, the
+    commanded displacement."""
     t = f['t']
     dt = np.diff(t)
     R = f['R_ref']
 
-    d_pos = np.linalg.norm(np.diff(f['pos_ref'], axis=0), axis=1)   # [m] per campione
-    d_ang = (R[:-1].inv() * R[1:]).magnitude()                      # [rad] per campione
+    d_pos = np.linalg.norm(np.diff(f['pos_ref'], axis=0), axis=1)   # [m] per sample
+    d_ang = (R[:-1].inv() * R[1:]).magnitude()                      # [rad] per sample
     v_ref, w_ref = d_pos / dt, d_ang / dt
 
     steps = np.flatnonzero((d_pos > cfg['step_pos']) | (d_ang > cfg['step_ang'])) + 1
 
     moving = (v_ref > cfg['v_thr']) | (w_ref > cfg['w_thr'])
     moving = np.concatenate([[moving[0]], moving])
-    moving[steps] = False                       # il gradino non e' una rampa
+    moving[steps] = False                       # a step is not a ramp
     ramp_edges = [b[0] for b in _blocks(moving, t, cfg['min_block'])]
 
     bounds = sorted({0, len(t)} | set(int(i) for i in steps) | set(ramp_edges))
     phases = []
     for a, b in zip(bounds[:-1], bounds[1:]):
-        # il segmento arriva al campione PRIMA del confine successivo: l'indice
-        # di confine porta gia' il setpoint nuovo, e includerlo farebbe
-        # risultare "in movimento" una fase di hold
+        # the segment ends at the sample BEFORE the next boundary: the boundary
+        # index already carries the new setpoint, and including it would make a
+        # hold phase look like a moving one
         e_ = min(b - 1, len(t) - 1)
         if e_ <= a:
             continue
@@ -302,8 +283,8 @@ def detect_phases(f, cfg):
               't0': float(t[a]), 't1': float(t[e_]), 'dur': float(t[e_] - t[a])}
         if is_move:
             ph['d_pos'] = f['pos_ref'][e_] - f['pos_ref'][a]
-            # bersaglio a fine fase: serve alle metriche, che trattano hold e
-            # rampe allo stesso modo
+            # target at the end of the phase, used by the metrics, which treat
+            # holds and ramps in the same way
             ph['pos'] = f['pos_ref'][e_].copy()
             ph['rpy_deg'] = np.rad2deg(f['rpy_ref'][e_])
         else:
@@ -321,12 +302,11 @@ def detect_phases(f, cfg):
         if phases[i1]['d_pos'][2] < -0.05 and i1 >= len(phases) - 2:
             phases[i1]['label'] = 'LANDING'
 
-    # Hold brevissimi adiacenti a decollo o atterraggio: sono la finestra di
-    # staging del nodo (0.5 + 0.2 s fra publish_absolute_setpoint e
-    # /policy/start), in cui il riferimento e' ancora la verticale del punto di
-    # posa. Non sono fasi a se': vengono ASSORBITE nel decollo o
-    # nell'atterraggio, cosi' le fasi risultano esattamente quelle della
-    # missione -- decollo, i setpoint, atterraggio -- senza frammenti spuri.
+    # Very short holds next to takeoff or landing are the staging window of
+    # the node (0.5 + 0.2 s between publish_absolute_setpoint and
+    # /policy/start), where the reference is still above the ground pose.
+    # They are merged into the takeoff or the landing, so that the phases
+    # are exactly those of the mission: takeoff, the setpoints, landing.
     hold_durs = [p['dur'] for p in phases if p['type'] == 'hold']
     if hold_durs:
         typ = float(np.median(hold_durs))
@@ -337,9 +317,9 @@ def detect_phases(f, cfg):
             prev_lab = phases[i - 1].get('label') if i > 0 else None
             next_lab = phases[i + 1].get('label') if i + 1 < len(phases) else None
             if prev_lab in ('TAKEOFF', 'LANDING'):
-                absorb.append((i, i - 1))       # fondi nella rampa precedente
+                absorb.append((i, i - 1))       # merge into the previous ramp
             elif next_lab in ('TAKEOFF', 'LANDING'):
-                absorb.append((i, i + 1))       # fondi nella rampa seguente
+                absorb.append((i, i + 1))       # merge into the next ramp
         for idx, host in sorted(absorb, reverse=True):
             h, q = phases[host], phases[idx]
             a = min(h['i0'], q['i0'])
@@ -363,29 +343,23 @@ def detect_phases(f, cfg):
 
 
 def setpoint_phases(phases):
-    """Solo i setpoint comandati, senza decollo e atterraggio.
-
-    Si chiamava mission_phases: il nome veniva dalla finestra di 'missione',
-    che non esiste piu'. La funzione non c'entrava con quella finestra --
-    seleziona le fasi a riferimento costante -- quindi resta, col nome giusto.
-    """
+    """Only the commanded setpoints, without takeoff and landing."""
     return [p for p in phases if p['label'].startswith('SETPOINT')]
 
 
 def analysed_phases(phases):
-    """Tutte le fasi su cui si calcolano le metriche: decollo, i setpoint,
-    atterraggio. La policy pilota anche decollo e atterraggio, quindi sono
-    prestazioni sue a tutti gli effetti -- e sono le fasi piu' severe.
-    Restano fuori solo eventuali frammenti non classificati."""
+    """All the phases where the metrics are computed: takeoff, the setpoints,
+    landing. The policy also flies the takeoff and the landing, which are the
+    most demanding phases. Unclassified fragments are left out."""
     return [p for p in phases
             if p['label'] in ('TAKEOFF', 'LANDING')
             or p['label'].startswith('SETPOINT')]
 
 
 def step_into(f, sp, j):
-    """Ampiezza del comando che porta NELLA fase j: (spostamento [m], rotazione
-    [deg]). Per la prima fase, che e' una rampa da terra, vale lo spostamento
-    comandato dalla rampa stessa."""
+    """Amplitude of the command entering phase j: (displacement [m], rotation
+    [deg]). For the first phase, a ramp from the ground, it is the displacement
+    commanded by the ramp."""
     ph = sp[j]
     if j == 0:
         if ph['type'] != 'move':
@@ -399,15 +373,14 @@ def step_into(f, sp, j):
 
 
 def flag_comparability(flights, cfg):
-    """Marca ogni fase come confrontabile o no nel TRANSITORIO.
+    """Flag each phase as comparable or not in the TRANSIENT.
 
-    Criterio: se il comando che porta nella fase ha ampiezza diversa fra i due
-    voli (oltre le tolleranze), il transitorio non e' confrontabile -- un
-    gradino piu' lungo produce un picco piu' grande per costruzione. Il regime
-    invece dipende solo dal setpoint finale, che e' identico, e resta valido.
+    When the command entering the phase has a different amplitude in the two
+    flights (beyond the tolerances), the transient is not comparable: a longer
+    step gives a larger peak. The steady state depends only on the final
+    setpoint, which is the same, and stays valid.
 
-    Nessuna fase e' scritta a mano nel codice: chi non e' confrontabile lo
-    decidono i dati, volo per volo, cartella per cartella.
+    The flags come from the data, flight by flight and folder by folder.
     """
     per = []
     for f in flights:
@@ -433,8 +406,8 @@ def flag_comparability(flights, cfg):
 
 # ===========================================================================
 def process_log(npz_path: Path, cfg):
-    """Ritorna (res, None) oppure (None, motivo_dello_scarto).
-    Nessun file sparisce in silenzio: ogni scarto finisce nel manifest."""
+    """Return (res, None), or (None, reason) when the file is discarded.
+    Every discarded file is listed in the manifest."""
     try:
         data = np.load(npz_path, allow_pickle=True)
     except Exception as e:
@@ -443,14 +416,14 @@ def process_log(npz_path: Path, cfg):
     keys = set(data.files)
     need = {'t', 'pos', 'pos_ref', 'quat', 'quat_ref'}
     if not need <= keys:
-        return None, f"mancano {sorted(need - keys)}"
+        return None, f"missing {sorted(need - keys)}"
 
     t = np.asarray(data['t'], dtype=float)
     if t.size < 3:
-        return None, "serie temporale troppo corta"
+        return None, "time series too short"
     t = t - t[0]
     if np.any(np.diff(t) <= 0):
-        return None, "tempi non monotoni"
+        return None, "time stamps not increasing"
 
     folder = npz_path.parent.name
     pname = str(data['policy_name']) if 'policy_name' in keys else ""
@@ -460,7 +433,7 @@ def process_log(npz_path: Path, cfg):
     elif "PPO" in tag:
         group = "PPO"
     else:
-        return None, "gruppo non riconosciuto (ne' PPO ne' SPPO)"
+        return None, "unknown group (neither PPO nor SPPO)"
 
     pos = np.asarray(data['pos'], float)
     pos_ref = np.asarray(data['pos_ref'], float)
@@ -488,11 +461,11 @@ def process_log(npz_path: Path, cfg):
     if 'vel' in keys:
         res['v_norm'] = np.linalg.norm(np.asarray(data['vel'], float), axis=1)
     else:
-        res['warnings'].append("manca 'vel'")
+        res['warnings'].append("missing 'vel'")
     if 'avel' in keys:
         res['w_norm'] = np.linalg.norm(np.asarray(data['avel'], float), axis=1)
     else:
-        res['warnings'].append("manca 'avel'")
+        res['warnings'].append("missing 'avel'")
     if 'inf_time' in keys:
         it = np.asarray(data['inf_time'], float)
         res['inf_time_mean_ms'] = float(np.mean(it) * 1e3)
@@ -501,24 +474,24 @@ def process_log(npz_path: Path, cfg):
     if 'action' in keys:
         a = np.atleast_2d(np.asarray(data['action'], float))
         if a.shape[0] != t.size:
-            res['warnings'].append(f"action {a.shape} non allineata con t ({t.size})")
+            res['warnings'].append(f"action {a.shape} not aligned with t ({t.size})")
         elif a.shape[1] < N_ROTORS:
-            res['warnings'].append(f"action ha {a.shape[1]} canali, attesi {N_ROTORS}")
+            res['warnings'].append(f"action has {a.shape[1]} channels, {N_ROTORS} expected")
         else:
-            # forze salvate GREZZE: il clip serve solo dentro la sqrt
+            # raw forces: the clip is applied only inside the square root
             res['forces'] = a[:, :N_ROTORS]
             res['sat_frac'] = float(np.mean((a[:, :N_ROTORS] <= F_MIN * 1.001) |
                                             (a[:, :N_ROTORS] >= F_MAX * 0.999)))
     else:
-        res['warnings'].append("manca 'action': nessuna Total Variation")
+        res['warnings'].append("missing 'action': no total variation")
     return res, None
 
 
 def compute_tv(f, mask):
-    """TV della velocita' di rotore sui campioni selezionati, normalizzata sul
-    tempo. La maschera puo' avere buchi (le finestre escluse dal confronto):
-    la variazione si somma DENTRO ogni tratto contiguo, mai a cavallo di un
-    buco, altrimenti il salto artificiale fra i due bordi entrerebbe nel conto.
+    """Total variation of the rotor speed over the selected samples, divided by
+    the time span. The mask may have gaps (the windows excluded from the
+    comparison): the variation is summed within each contiguous stretch, never
+    across a gap, where the jump between the two edges would be artificial.
     """
     if 'forces' not in f:
         return None
@@ -536,31 +509,29 @@ def compute_tv(f, mask):
 
 
 def rms(x):
-    """RMS su un insieme di valori SENZA tempo: serve per aggregare scalari
-    (p.es. un bias per sotto-blocco), non serie temporali."""
+    """RMS of a set of values without time: used to aggregate scalars (e.g. a
+    bias per sub-block), not time series."""
     x = np.asarray(x, float)
     return float(np.sqrt(np.mean(x ** 2))) if x.size else float('nan')
 
 
-# numpy >= 2.0 la chiama trapezoid, prima trapz
+# numpy >= 2.0 calls it trapezoid, older versions trapz
 _TRAPZ = getattr(np, 'trapezoid', None) or np.trapz
 
 
 def seg_mean_t(t, y, mask=None):
-    """MEDIA TEMPORALE di y: integrale per trapezi diviso per la durata.
+    """TIME AVERAGE of y: trapezoidal integral divided by the duration.
 
-    Perche' non la media sui campioni. Il periodo del loop di logging non e'
-    esattamente costante ne' identico fra i voli (qui 9.998-10.032 ms), quindi
-    una media sui campioni pesa piu' i tratti campionati piu' densamente e due
-    voli finiscono confrontati con pesi diversi. L'integrale nel tempo diviso
-    per la durata e' la definizione che non dipende da come sono distribuiti i
-    campioni, ed e' la prassi delle cifre di merito del controllo (IAE, ISE).
+    The logging period is not exactly constant nor the same in every flight
+    (9.998-10.032 ms here), so a mean over the samples would weight the
+    densely sampled stretches more and compare two flights with different
+    weights. The time integral divided by the duration does not depend on how
+    the samples are spread, and is the usual definition of the control
+    figures of merit (IAE, ISE).
 
-    La maschera puo' avere buchi -- le finestre escluse dal confronto: si
-    integra DENTRO ogni tratto contiguo e si sommano numeratore e durata, mai
-    a cavallo di un buco, altrimenti il trapezio fra i due bordi inventerebbe
-    area su un intervallo che non e' stato misurato. Stessa regola di
-    compute_tv().
+    The mask may have gaps (the windows excluded from the comparison): the
+    integral is taken within each contiguous stretch and numerators and
+    durations are summed, never across a gap, as in compute_tv().
     """
     t = np.asarray(t, float)
     y = np.asarray(y, float)
@@ -573,42 +544,40 @@ def seg_mean_t(t, y, mask=None):
             continue
         num += float(_TRAPZ(y[blk], t[blk]))
         den += float(t[blk[-1]] - t[blk[0]])
-    if den <= 0:                      # finestra degenere: resta la media
+    if den <= 0:                      # degenerate window: plain mean
         return float(np.mean(y[idx]))
     return num / den
 
 
 def rms_t(t, x, mask=None):
-    """RMS nel tempo: sqrt( (1/T) * integrale di x^2 dt )."""
+    """RMS over time: sqrt( (1/T) * integral of x^2 dt )."""
     v = seg_mean_t(t, np.asarray(x, float) ** 2, mask)
     return float(np.sqrt(v)) if v == v and v >= 0 else float('nan')
 
 
 def mae_t(t, x, mask=None):
-    """Errore assoluto medio nel tempo: (1/T) * integrale di |x| dt."""
+    """Mean absolute error over time: ``(1/T) * integral of |x| dt``."""
     return seg_mean_t(t, np.abs(np.asarray(x, float)), mask)
 
 
 def settling_time(t, e, t0, tol, smooth_s=0.25):
-    """Tempo di assestamento: primo istante dopo t0 oltre il quale lo scarto
-    passato in `e` resta sotto `tol`.
+    """Settling time: first instant after t0 after which the deviation `e`
+    stays below `tol`.
 
-    Chi chiama passa lo scarto dal VALORE FINALE, non l'errore assoluto: una
-    policy feed-forward non ha azione integrale e si assesta su un errore a
-    regime non nullo, quindi una banda centrata su zero non viene mai
-    raggiunta e il tempo di assestamento uscirebbe nan sempre. La banda
-    centrata sul valore finale e' anche la convenzione del controllo classico
-    (stepinfo). L'errore viene prima lisciato con una media mobile
-    di smooth_s: sul segnale grezzo un singolo picco di rumore a fine fase
-    farebbe risultare un assestamento pari all'intera durata della fase, che e'
-    un artefatto del rumore e non un comportamento del controllore."""
-    if len(t) < 3 or tol != tol:       # banda nan: la fase non ha gradino
-        return float('nan')              # in questo canale, non c'e' nulla da
-    dt = float(np.median(np.diff(t)))    # misurare
+    The caller passes the deviation from the FINAL value. The policy has no
+    integral action and settles on a nonzero steady-state error, so a band
+    centred on zero might never be reached; the band centred on the final
+    value is also the convention of classical control (stepinfo). The error
+    is first smoothed with a moving average over smooth_s, so that a single
+    noise spike at the end of the phase does not set the settling time to
+    the whole phase."""
+    if len(t) < 3 or tol != tol:       # nan band: no step in this
+        return float('nan')              # channel, nothing to
+    dt = float(np.median(np.diff(t)))    # measure
     k = max(1, int(round(smooth_s / max(dt, 1e-6))))
     if k > 1:
         es = np.convolve(e, np.ones(k) / k, mode='same')
-        es[:k], es[-k:] = e[:k], e[-k:]        # i bordi restano grezzi
+        es[:k], es[-k:] = e[:k], e[-k:]        # the edges stay raw
     else:
         es = e
     below = es <= tol
@@ -622,40 +591,36 @@ def settling_time(t, e, t0, tol, smooth_s=0.25):
 
 
 def phase_metrics(f, sp, j, cfg):
-    """Metriche di una singola fase. Se il transitorio non e' confrontabile
-    (gradino di ampiezza diversa fra i due voli) tutti i campi che ne dipendono
-    escono nan: meglio una cella vuota che un numero che non significa quello
-    che sembra."""
+    """Metrics of a single phase. When the transient is not comparable (step of
+    different amplitude in the two flights) every field that depends on it is
+    nan, written as an empty cell."""
     ph = sp[j]
     i0, i1 = ph['i0'], ph['i1']
     sl = slice(i0, i1 + 1)
     t = f['t'][sl]
     ep, ea = f['e_pos_norm'][sl], f['e_att_norm'][sl]
 
-    ss = t >= (t[-1] - cfg['t_ss'])            # regime: ultimi t_ss secondi
-    tr = ~ss                                   # transitorio: il resto
+    ss = t >= (t[-1] - cfg['t_ss'])            # steady state: last t_ss seconds
+    tr = ~ss                                   # transient: the rest
 
     d_pos, d_ang = step_into(f, sp, j)
     ph_mask = np.zeros(f['n_samples'], dtype=bool)
     ph_mask[i0:i1 + 1] = True
     tv = compute_tv(f, ph_mask)
 
-    # BANDA DI ASSESTAMENTO, centrata sul valore finale della fase stessa.
+    # SETTLING BAND, centred on the final value of the phase.
     #
-    # Il tempo di assestamento esiste solo se in QUEL canale c'e' davvero un
-    # gradino: in una rotazione pura il riferimento di posizione non si muove,
-    # e "quanto ci mette la posizione ad assestarsi" non e' una domanda -- la
-    # risposta uscirebbe 0 s, che si legge come un assestamento istantaneo e
-    # non lo e'. Stesse condizioni della normalizzazione qui sotto: fase di
-    # hold raggiunta da un salto del riferimento sopra la soglia minima.
+    # The settling time is defined only when THAT channel has a step: in a
+    # pure rotation the position reference does not move, and the settling
+    # time of the position would come out as 0 s. Same conditions as the
+    # normalisation below: a hold phase reached through a jump of the
+    # reference above the minimum threshold.
     #
-    # Ampiezza della banda: frazione del gradino, come nel controllo classico.
-    # Nessuna soglia legata al rumore del singolo volo: la renderebbe diversa
-    # fra i due voli e il piu' rumoroso verrebbe giudicato con un criterio
-    # piu' severo. Con un gradino confrontabile l'ampiezza e' identica fra i
-    # voli per costruzione, quindi la banda lo e' di conseguenza. Se la banda
-    # e' piu' stretta del rumore l'errore non ci resta dentro e il tempo esce
-    # nan: una cella vuota, non un numero deciso dal rumore.
+    # Band width: a fraction of the step, as in classical control. A
+    # threshold tied to the noise of each flight would differ between the
+    # two flights. With a comparable step the band is the same in both
+    # flights. When the band is narrower than the noise the error never
+    # stays inside and the time is nan.
     e_ss_pos, e_ss_att = float(np.mean(ep[ss])), float(np.mean(ea[ss]))
     nan_ = float('nan')
     is_hold = ph['type'] == 'hold'
@@ -669,21 +634,18 @@ def phase_metrics(f, sp, j, cfg):
 
     m = {
         'run': f['run'], 'group': f['group'], 'phase': ph['label'],
-        # 4 decimali, non 2: compare_trajectory.py apre la finestra di
-        # missione a questo t0 letto dal CSV, e a 100 Hz un arrotondamento a
-        # 10 ms sposta la finestra di un campione -- abbastanza per far
-        # divergere i due script nella quinta cifra sulle stesse serie.
+        # 6 decimals: compare_trajectory.py opens the mission window at this
+        # t0 read from the CSV, and at 100 Hz a rounding to 10 ms would move
+        # the window by one sample.
         't0': round(ph['t0'], 6), 't1': round(ph['t1'], 6), 'dur': round(ph['dur'], 2),
         'comparable_transient': int(bool(ph.get('comparable', True))),
         'step_pos_m': round(d_pos, 4), 'step_ang_deg': round(d_ang, 2),
-        # Spostamento VERTICALE comandato dalla rampa, per decollo e
-        # atterraggio. Non e' ricavabile da step_pos_m, che per una rampa
-        # misura il salto IN INGRESSO alla fase (~0): qui serve la lunghezza
-        # della rampa stessa. Il drone non viene riposizionato a terra alla
-        # stessa quota a ogni volo, quindi questa lunghezza cambia da volo a
-        # volo ed e' il confondente che rende la categoria 'Land' non
-        # confrontabile fra due cartelle. Senza scriverla nel CSV,
-        # compare_trajectory non ha modo di accorgersene.
+        # VERTICAL displacement commanded by the ramp, for takeoff and
+        # landing. step_pos_m measures the jump ENTERING the phase (about 0
+        # for a ramp), while here the length of the ramp is needed. The
+        # vehicle does not start from the same height in every flight, so
+        # this length changes between flights, and compare_trajectory uses it
+        # to decide whether the 'Land' category is comparable.
         'ramp_dz_m': (round(float(ph['d_pos'][2]), 4)
                       if ph.get('type') == 'move' else ''),
         'ref_x': round(float(ph['pos'][0]), 3), 'ref_y': round(float(ph['pos'][1]), 3),
@@ -695,8 +657,8 @@ def phase_metrics(f, sp, j, cfg):
         'rmse_pos_transient': round(rms_t(t, ep, tr), 5),
         'rmse_pos_steady': round(rms_t(t, ep, ss), 5),
         'peak_pos': round(float(ep.max()), 5),
-        # iae_*: errore assoluto MEDIO nel tempo, non l'integrale grezzo --
-        # cosi' resta in metri e confrontabile fra fasi di durata diversa
+        # iae_*: mean absolute error over time, not the raw integral, so that
+        # it stays in metres and is comparable across phases of different length
         'iae_pos': round(mae_t(t, ep), 5),
         'rmse_att_all': round(rms_t(t, ea), 5),
         'rmse_att_transient': round(rms_t(t, ea, tr), 5),
@@ -711,23 +673,21 @@ def phase_metrics(f, sp, j, cfg):
         'settle_band_att_rad': round(band_att, 5),
         'tv_total': round(float(np.sum(tv)), 2) if tv is not None else float('nan'),
     }
-    # ||v|| e ||omega||: il riferimento di velocita' e' zero solo a REGIME
+    # ||v|| and ||omega||: the velocity reference is zero only in steady state
     for k, name in (('v_norm', 'v_norm_steady'), ('w_norm', 'w_norm_steady')):
         if k in f:
             m[name] = round(rms_t(t, f[k][sl], ss), 5)
 
     # ---------------------------------------------------------------------
-    # TRANSITORIO NORMALIZZATO sull'ampiezza del gradino.
-    # Un gradino piu' lungo produce un errore piu' grande per costruzione:
-    # dividendo per l'ampiezza il transitorio torna confrontabile anche fra
-    # voli partiti da posizioni a terra diverse (vedi docstring, compreso il
-    # limite di validita' in saturazione).
-    # Solo per le fasi di hold raggiunte da un vero salto del riferimento:
-    # decollo e atterraggio sono rampe, il loro salto in ingresso e' ~0.
-    # L'assetto si normalizza sullo STESSO gradino di posizione: in una fase
-    # di pura traslazione l'errore di assetto e' accoppiamento indotto dalla
-    # traslazione, quindi il rapporto e' un guadagno [rad per metro comandato]
-    # -- non e' adimensionale e va letto per quello che e'.
+    # TRANSIENT NORMALISED by the step amplitude.
+    # A longer step gives a larger error: dividing by the amplitude makes
+    # the transient comparable between flights that started from different
+    # ground positions (see the module docstring for the validity limits).
+    # Only for the hold phases reached through a jump of the reference:
+    # takeoff and landing are ramps, with an entering jump close to zero.
+    # The attitude is normalised by the same position step: in a pure
+    # translation the attitude error is coupling induced by the motion, so
+    # the ratio is a gain [rad per commanded metre].
     # ---------------------------------------------------------------------
     nan = float('nan')
     norm_ok = (ph['type'] == 'hold' and d_pos == d_pos
@@ -744,26 +704,23 @@ def phase_metrics(f, sp, j, cfg):
                                     if norm_ok else nan)
 
     # ---------------------------------------------------------------------
-    # TRANSITORIO NORMALIZZATO sulla DISTANZA REALE DA COPRIRE.
+    # TRANSIENT NORMALISED by the ACTUAL DISTANCE TO COVER.
     #
-    # Normalizzare sull'ampiezza comandata toglie un confondente e ne lascia
-    # uno piu' sotto: all'istante del gradino il drone non e' sul setpoint
-    # precedente, ci sta con il suo errore a regime, e quell'errore si somma o
-    # si sottrae alla strada da fare. Sul secondo setpoint di p2p il comando e'
-    # 0.7348 m per entrambi i voli, ma la distanza vera da coprire e' 0.6984 m
-    # per uno e 0.7220 m per l'altro: il 3.4% in piu', che e' esattamente lo
-    # scarto di RMSE che si misura nel primo mezzo secondo.
+    # At the instant of the step the vehicle is not exactly on the previous
+    # setpoint but carries its steady-state error, which adds to or
+    # subtracts from the distance to cover. On the second setpoint of p2p
+    # the command is 0.7348 m for both flights, while the actual distance
+    # is 0.6984 m for one and 0.7220 m for the other (3.4% more).
     #
-    # Dividendo per la distanza vera il confondente cade alla radice, senza
-    # tagliare campioni e senza scegliere soglie. E vale per TUTTI i gradini,
-    # anche quelli con ampiezza comandata diversa: la normalizzazione assorbe
-    # sia l'ampiezza sia l'errore a regime precedente. Per questo queste
-    # colonne NON entrano in TRANSIENT_FIELDS e sopravvivono alle fasi non
-    # confrontabili.
+    # Dividing by the actual distance removes this effect without cutting
+    # samples or choosing thresholds, and holds for every step, including
+    # those with a different commanded amplitude. For this reason these
+    # columns are not in TRANSIENT_FIELDS and are kept for the phases that
+    # are not comparable.
     #
-    # NB: le metriche di stepinfo (sovraelongazione, salita, assestamento)
-    # erano gia' immuni, perche' step_response() normalizza l'avanzamento
-    # sull'escursione effettiva [p0, p_fin] -- e p0 e' proprio questo scarto.
+    # The stepinfo metrics (overshoot, rise, settling) normalise the
+    # progress on the actual range [p0, p_fin] in step_response(), where
+    # p0 is this same offset.
     # ---------------------------------------------------------------------
     if j > 0:
         i_prev = sp[j - 1]['i1']
@@ -772,11 +729,9 @@ def phase_metrics(f, sp, j, cfg):
             (f['R_ref'][i0].inv() * f['R_act'][i_prev]).as_rotvec()))
     else:
         d_real = a_real = nan
-    # Condizionato al gradino COMANDATO, non alla distanza reale: in una fase
-    # di sola rotazione il comando di posizione e' nullo e la distanza reale e'
-    # solo l'errore residuo con cui il drone arriva -- normalizzare su quello
-    # darebbe rapporti enormi e privi di significato, e con la soglia applicata
-    # per volo tornerebbe anche l'asimmetria fra i due gruppi.
+    # Conditioned on the COMMANDED step: in a pure rotation the position
+    # command is zero and the actual distance is only the residual error,
+    # which would give meaningless ratios.
     real_ok = (ph['type'] == 'hold' and d_real == d_real and d_real > 1e-6
                and d_pos == d_pos and d_pos > cfg['min_step_norm'])
     real_ok_a = (ph['type'] == 'hold' and a_real == a_real and a_real > 1e-6
@@ -786,16 +741,16 @@ def phase_metrics(f, sp, j, cfg):
     m['norm_real_deg'] = round(float(np.rad2deg(a_real)), 3) if real_ok_a else nan
     m['rmse_pos_transient_real'] = (round(m['rmse_pos_transient'] / d_real, 5)
                                     if real_ok else nan)
-    # NB: peak/d vale 1 per costruzione -- il picco della norma dell'errore
-    # E' la distanza iniziale -- quindi non si riporta. Al suo posto l'IAE,
-    # che e' la metrica che discrimina fra "arriva e resta" e "si trascina".
+    # peak/d is 1 by construction (the peak of the error norm is the
+    # initial distance), so the IAE is reported instead: it tells "reaches
+    # and stays" from "drags".
     m['iae_pos_real'] = (round(m['iae_pos'] / d_real, 5) if real_ok else nan)
     m['rmse_att_transient_real'] = (round(m['rmse_att_transient'] / a_real, 5)
                                     if real_ok_a else nan)
     m['iae_att_real'] = (round(m['iae_att'] / a_real, 5) if real_ok_a else nan)
 
-    # I valori ASSOLUTI del transitorio cadono se la fase non e' confrontabile.
-    # I normalizzati restano: sono calcolati qui sopra, prima di questa riga.
+    # The ABSOLUTE transient values are dropped when the phase is not
+    # comparable; the normalised ones, computed above, are kept.
     if not ph.get('comparable', True):
         for k in TRANSIENT_FIELDS:
             m[k] = nan
@@ -803,7 +758,7 @@ def phase_metrics(f, sp, j, cfg):
 
 
 def _smooth(t, y, win_s):
-    """Media mobile su win_s secondi, bordi lasciati grezzi."""
+    """Moving average over win_s seconds, edges left raw."""
     if win_s <= 0 or y.size < 3:
         return y
     dt = float(np.median(np.diff(t)))
@@ -816,39 +771,36 @@ def _smooth(t, y, win_s):
 
 
 def step_response(f, sp, j, cfg, kind, smooth_s=0.10):
-    """stepinfo di una fase: sovraelongazione, salita 10-90%, assestamento.
+    """stepinfo of a phase: overshoot, 10-90% rise time, settling time.
 
-    L'errore viene PROIETTATO sulla direzione del comando. E' l'unico modo di
-    vedere la sovraelongazione: sulla norma ||e|| non si vede, perche' la norma
-    parte da Delta e scende, quindi il suo massimo E' Delta per costruzione e
-    'picco/Delta' vale ~0.96 in ogni volo senza dire nulla sul controllore.
+    The error is PROJECTED on the direction of the command. The overshoot is
+    not visible on the norm ||e||, which starts from Delta and decreases, so
+    that its maximum is Delta by construction.
 
-    Sulla direzione del comando la variabile di avanzamento
+    Along the command direction the progress variable
 
         p(t) = (e(t) . u + Delta) / Delta
 
-    vale 0 all'istante del gradino e 1 sul bersaglio. p > 1 significa che il
-    drone ha SUPERATO il bersaglio: quella e' la sovraelongazione vera.
+    is 0 at the instant of the step and 1 on the target; p > 1 means that the
+    vehicle went past the target, which is the overshoot.
 
-    kind: 'pos' (gradino di posizione) o 'att' (rotazione comandata).
-    Ritorna None se in quel canale la fase non ha un gradino.
+    kind: 'pos' (position step) or 'att' (commanded rotation).
+    Return None when the phase has no step in that channel.
     """
     ph = sp[j]
     if j == 0 or ph['type'] != 'hold':
         return None
     prev = sp[j - 1]
     i0, i1 = ph['i0'], ph['i1']
-    # La finestra parte UN CAMPIONE PRIMA dell'inizio fase, cioe' dall'ultimo
-    # campione in cui vale ancora il riferimento vecchio: e' l'istante del
-    # gradino. Partendo da i0 il rilevamento della fase puo' cadere uno o due
-    # campioni dopo il salto, e su una rotazione rapida (11 deg in 0.14 s, 14
-    # campioni) l'avanzamento e' gia' oltre il 10% al primo campione -- da cui
-    # un t10 pari a zero, che e' un artefatto della griglia, non una risposta
-    # istantanea.
+    # The window starts ONE SAMPLE BEFORE the phase, at the last sample
+    # with the old reference: the instant of the step. The phase detection
+    # may fall one or two samples after the jump, and on a fast rotation
+    # (11 deg in 0.14 s, 14 samples) the progress would already be past 10%
+    # at the first sample, giving t10 = 0.
     #
-    # E il bersaglio e' il riferimento NUOVO tenuto fisso, non quello campione
-    # per campione: dentro una fase di hold sono la stessa cosa, ma sul
-    # campione prima del salto solo il primo dei due da' p = 0.
+    # The target is the NEW reference held fixed: within a hold phase this
+    # is the same as the sampled reference, and on the sample before the
+    # jump it gives p = 0.
     i_s = max(prev['i1'], 0)
     sl = slice(i_s, i1 + 1)
     t = f['t'][sl]
@@ -871,22 +823,21 @@ def step_response(f, sp, j, cfg, kind, smooth_s=0.10):
         sgn = rv @ (dr / amp)
         unit, amp_out = 'rad', amp
 
-    prog = (sgn + amp) / amp                     # 0 all'inizio, 1 sul bersaglio
+    prog = (sgn + amp) / amp                     # 0 at the start, 1 on the target
     ps = _smooth(t, prog, smooth_s)
 
     ss = t >= (t[-1] - cfg['t_ss'])
     p_fin = float(np.mean(prog[ss])) if ss.any() else float('nan')
 
-    over = float(np.max(ps)) - 1.0                # >0 = ha superato il bersaglio
+    over = float(np.max(ps)) - 1.0                # >0 = went past the target
 
-    # TEMPO DI SALITA sull'escursione EFFETTIVA, non su [0, 1].
-    # Il drone non parte dal setpoint precedente: ci sta con un errore a
-    # regime, e quell'errore puo' coprire da solo una parte del gradino
-    # successivo. In rpy SETPOINT 3 il residuo di 3.3 deg su un comando di
-    # 11.2 deg vale il 30%: misurando il 10% su [0, 1] la soglia cadrebbe
-    # dentro la condizione iniziale e t10 uscirebbe zero. Normalizzando su
-    # [p0, p_fin] il 10-90% torna a misurare la salita, come si fa per una
-    # risposta al gradino con condizione iniziale non nulla.
+    # RISE TIME on the ACTUAL range [p0, p_fin].
+    # The vehicle starts from the previous setpoint with a steady-state
+    # error, which may cover part of the next step. In rpy SETPOINT 3 the
+    # residual of 3.3 deg on a command of 11.2 deg is 30%: with the 10%
+    # level on [0, 1] the threshold would fall inside the initial condition
+    # and t10 would be zero. On [p0, p_fin] the 10-90% measures the rise,
+    # as for a step response with a nonzero initial condition.
     p0 = float(np.mean(ps[:3])) if ps.size >= 3 else float(ps[0])
     span = p_fin - p0
     if abs(span) > 1e-9:
@@ -899,8 +850,8 @@ def step_response(f, sp, j, cfg, kind, smooth_s=0.10):
     else:
         t10 = t90 = rise = float('nan')
 
-    # assestamento nella banda del 5% di Delta attorno al valore finale:
-    # sulla variabile di avanzamento la banda e' proprio cfg['settle_band']
+    # settling within 5% of Delta around the final value: on the progress
+    # variable the band is cfg['settle_band']
     settle = settling_time(t, np.abs(prog - p_fin), t[0], cfg['settle_band'])
 
     return {'phase': ph['label'], 'group': f['group'], 'kind': kind,
@@ -916,11 +867,10 @@ def step_response(f, sp, j, cfg, kind, smooth_s=0.10):
 
 
 def touchdown_metrics(f, sp, cfg, tail_s=0.20):
-    """Errore all'istante in cui la rampa di atterraggio si ferma.
+    """Error at the instant the landing ramp stops.
 
-    Non a fine log: dopo che il riferimento smette di scendere il drone e' a
-    terra e si misura dove lo tiene il suolo. Media sugli ultimi tail_s della
-    rampa, perche' un singolo campione e' rumore.
+    After the reference stops descending the vehicle is on the ground, so the
+    end of the log is not used. Mean over the last tail_s of the ramp.
     """
     lan = [p_ for p_ in f['phases'] if p_['label'] == 'LANDING']
     if not lan:
@@ -945,12 +895,11 @@ def touchdown_metrics(f, sp, cfg, tail_s=0.20):
 
 
 def coupling_metrics(f, sp, j, cfg):
-    """Accoppiamento assetto -> posizione in una fase di SOLA rotazione.
+    """Attitude -> position coupling in a phase of PURE rotation.
 
-    Il riferimento di posizione non si muove, quindi tutto l'errore di
-    posizione che compare li' e' indotto dalla rotazione comandata. E' l'unica
-    metrica del transitorio immune al confondente dell'ampiezza: il gradino di
-    posizione e' zero per costruzione in entrambi i voli.
+    The position reference does not move, so all the position error in the
+    phase is induced by the commanded rotation. The position step is zero in
+    both flights, so this transient metric is always comparable.
     """
     ph = sp[j]
     if j == 0 or ph['type'] != 'hold':
@@ -995,14 +944,13 @@ def set_style():
         "axes.axisbelow": True,
         "grid.alpha": 0.4,
         "grid.linestyle": "--",
-        # minimal: niente cornice sui quattro lati, restano gli assi che
-        # portano i numeri
+        # minimal frame: only the axes that carry the numbers
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.edgecolor": "#333333",
         "savefig.bbox": "tight",
-        # cmr10 non ha il peso bold: con fontweight='bold' matplotlib stampa
-        # "findfont: Failed to find font weight bold" a ogni titolo
+        # cmr10 has no bold weight: a bold title makes matplotlib print
+        # "findfont: Failed to find font weight bold" for every figure
         "axes.titleweight": "normal",
     })
 
@@ -1014,10 +962,10 @@ def save(fig, path, pad_inches=None):
 
 
 def tight_x(ax, lo, hi):
-    """Niente margine orizzontale: la traccia attacca all'asse.
+    """No horizontal margin: the trace starts at the axis.
 
-    I limiti si passano espliciti, non si deducono dalle linee gia' disegnate:
-    axhline e axvline hanno xdata in coordinate d'assi e falserebbero il conto.
+    The limits are passed explicitly: axhline and axvline have xdata in axes
+    coordinates and would distort limits inferred from the drawn lines.
     """
     if hi > lo:
         ax.set_xlim(lo, hi)
@@ -1025,60 +973,57 @@ def tight_x(ax, lo, hi):
 
 
 def mark_phases(ax, ref, lw=0.9):
-    """Linee verticali ai confini di fase. Nessuna ombreggiatura: si guarda
-    il volo intero, decollo e atterraggio inclusi."""
+    """Vertical lines at the phase boundaries, over the whole flight."""
     for p in analysed_phases(ref['phases'])[1:]:
         ax.axvline(p['t0'], color='#999', lw=lw, ls=':')
 
 
 # ===========================================================================
-# CATEGORIE DI COMPITO DI CONTROLLO
+# CONTROL TASK CATEGORIES
 # ===========================================================================
-# Sezione ex analyze_categories.py, accorpata qui. Invece di dividere il volo
-# nelle fasi della missione lo divide in categorie che dicono che
-# problema di controllo il drone sta risolvendo in quell'istante:
+# Besides the mission phases, the flight is split into categories that
+# describe the control problem the vehicle is solving at each instant:
 #
-#    Takeoff    rampa verticale in decollo
-#    Step       transitori di risposta al gradino
-#    Hover      mantenimento a punto fisso (anche con assetto non nullo)
-#    Land       rampa verticale in atterraggio
+#    Takeoff    vertical ramp at takeoff
+#    Step       step response transients
+#    Hover      hold at a fixed point (also with a nonzero attitude)
+#    Land       vertical ramp at landing
 #
-# Le righe sono le stesse in tutti gli scenari, quindi si confrontano fra loro.
+# The rows are the same in every mission, so they can be compared.
 #
-# COME NASCONO I BLOCCHI
-#   Ogni fase rilevata sopra viene classificata dal RIFERIMENTO:
-#     - riferimento in movimento (decollo, atterraggio) -> rampa, presa
-#       dall'inizio fino a quando il riferimento si ferma; la coda in cui il
-#       drone e' fermo in cima alla rampa o gia' posato resta FUORI;
-#     - riferimento a gradino -> i primi DELTA secondi sono transitorio, il
-#       resto e' mantenimento a punto fisso (Hover).
-#   Il taglio e' ancorato al RIFERIMENTO, non all'arrivo del drone.
+# HOW THE BLOCKS ARE BUILT
+#   Each detected phase is classified from the REFERENCE:
+#     - moving reference (takeoff, landing) -> ramp, taken from the start
+#       until the reference stops; the tail where the vehicle waits at the
+#       top of the ramp or is already on the ground is left out;
+#     - step of the reference -> the first DELTA seconds are transient,
+#       the rest is hold at a fixed point (Hover).
+#   The cut is anchored to the REFERENCE, not to the arrival of the vehicle.
 #
-# ACCORPAMENTO
-#   Le metriche RMSE accorpano i CAMPIONI delle finestre della stessa
-#   categoria, non le RMSE. Il bias vettoriale no: la media dell'errore di due
-#   hover in punti diversi punta in direzioni diverse e si cancellerebbe.
+# POOLING
+#   The RMSE metrics pool the SAMPLES of the windows of the same category,
+#   not the RMSE values. The vector bias is not pooled: the mean errors of
+#   two holds at different points point in different directions.
 #
-# GRADINI NON CONFRONTABILI
-#   Nella categoria 'Step' un sotto-blocco entra nelle metriche ASSOLUTE
-#   (rmse_pos, rmse_att, err_xy, err_z, tv) solo se la fase da cui viene e'
-#   marcata confrontabile da flag_comparability, cioe' se l'ampiezza comandata
-#   coincide fra i voli entro tolleranza. Un gradino piu' lungo produce un
-#   errore piu' grande per costruzione, e accorparlo agli altri sposta la media
-#   di una quantita' che non dipende dal controllore. Le colonne NORMALIZZATE
-#   (peak_n, rmse_n, att_peak_n) restano calcolate su TUTTI i sotto-blocchi:
-#   sono valide proprio perche' dividono per l'ampiezza. Stessa regola di
-#   phase_metrics, dove i campi in TRANSIENT_FIELDS cadono a nan.
+# STEPS THAT ARE NOT COMPARABLE
+#   In the 'Step' category a sub-block enters the ABSOLUTE metrics
+#   (rmse_pos, rmse_att, err_xy, err_z, tv) only when its phase is flagged
+#   comparable by flag_comparability, i.e. when the commanded amplitude is
+#   the same in the two flights within tolerance. A longer step gives a
+#   larger error, which does not depend on the controller. The NORMALISED
+#   columns (peak_n, rmse_n, att_peak_n) use ALL the sub-blocks, since they
+#   divide by the amplitude. Same rule as phase_metrics, where the fields
+#   in TRANSIENT_FIELDS become nan.
 
-REF_MOVE_TOL = 1e-3         # [m/campione] sotto cui il riferimento e' fermo
+REF_MOVE_TOL = 1e-3         # [m/sample] below this the reference is still
 C_INK, C_MUTED = "#222222", "#9a9a9a"
 
 CATEGORIES = ["Takeoff", "Step", "Hover", "Land"]
-KIND = {"Takeoff": "rampa", "Land": "rampa", "Step": "gradino", "Hover": "hold"}
+KIND = {"Takeoff": "ramp", "Land": "ramp", "Step": "step", "Hover": "hold"}
 
-# Nomi di fase specifici per missione, Tabelle 5.5/5.6 della tesi: il bucket
-# 'Hover' generico viene rietichettato con il nome della fase (SETPOINT k) a
-# cui corrisponde, per missione. 'Takeoff'/'Step'/'Land' restano generici.
+# Mission-specific phase names (Tables 5.5/5.6 of the thesis): the
+# generic 'Hover' bucket is relabelled with the name of the phase
+# (SETPOINT k) it corresponds to. 'Takeoff'/'Step'/'Land' stay generic.
 HOLD_PHASES = {
     "p2p": {"SETPOINT 1": "Origin", "SETPOINT 2": "Point-to-point"},
     "rpy": {"SETPOINT 1": "Origin", "SETPOINT 2": "Tilt", "SETPOINT 3": "Level"},
@@ -1111,7 +1056,7 @@ CAT_UNITS = {"rmse_pos": "m", "rmse_att": "rad", "lag_z": "m", "err_xy": "m",
 
 
 def cellf(s):
-    """Cella di CSV o valore gia' numerico -> float; non numerico -> nan."""
+    """CSV cell or number -> float; non-numeric -> nan."""
     try:
         return float(s)
     except (TypeError, ValueError):
@@ -1119,10 +1064,9 @@ def cellf(s):
 
 
 def cat_view(f):
-    """Adatta il dizionario di volo di process_log a quello che si aspetta la
-    sezione categorie. NON ricalcola nessun errore: e_pos, e_att e le
-    componenti sono quelle gia' definite sopra, cosi' resta una sola
-    definizione di errore in tutto il file."""
+    """Adapt the flight dictionary of process_log to the category section.
+    No error is recomputed: e_pos, e_att and the components are those defined
+    above, so there is a single error definition in the file."""
     e_w = f['pos'] - f['pos_ref']
     dref = np.linalg.norm(np.diff(f['pos_ref'], axis=0), axis=1)
     return {
@@ -1132,8 +1076,8 @@ def cat_view(f):
         'e_pos': f['e_pos_norm'], 'e_att': f['e_att_norm'],
         'e_yaw': np.abs(f['e_yaw']),
         'e_rp': np.hypot(f['e_roll'], f['e_pitch']),
-        # componenti singole, le stesse delle cartelle RMSE/ e Rollouts/:
-        # posizione nel frame del RIFERIMENTO, assetto come rotation vector
+        # single components, as in the RMSE/ and Rollouts/ folders: position
+        # in the REFERENCE frame, attitude as a rotation vector
         'e_b': np.column_stack([f['e_bx'], f['e_by'], f['e_bz']]),
         'rv': np.column_stack([f['e_roll'], f['e_pitch'], f['e_yaw']]),
         'avel': f.get('w_norm'), 'v': f.get('v_norm'),
@@ -1143,15 +1087,13 @@ def cat_view(f):
 
 
 def tv_rotor(t_blk, forces):
-    """Total Variation della velocita' di rotore su una finestra contigua,
-    sommata sui sei rotori.
+    """Total variation of the rotor speed over a contiguous window, summed over
+    the six rotors.
 
-    La durata e' il TEMPO TRASCORSO nella finestra, t[-1] - t[0], non
-    (n-1)*dt_medio: il periodo del loop non e' costante (9.998-10.032 ms), e
-    le due formule davano numeri diversi allo 0.5% sulla stessa finestra --
-    abbastanza da spostare un confronto fra due policy che ne distano meno.
-    Stessa convenzione di compute_tv(), che e' quella che finisce nelle
-    tabelle."""
+    The duration is the ELAPSED TIME of the window, t[-1] - t[0]: the loop
+    period is not constant (9.998-10.032 ms), and (n-1)*mean_dt would differ by
+    0.5% on the same window. Same convention as compute_tv(), used in the
+    tables."""
     if forces is None or forces.shape[0] < 2:
         return float("nan")
     w = np.sqrt(np.clip(forces, F_MIN, F_MAX) / CF)
@@ -1160,11 +1102,10 @@ def tv_rotor(t_blk, forces):
 
 
 def build_blocks(f, phase_rows, delta, mission=None):
-    """[(categoria, etichetta, t0, t1, info)] per un volo.
+    """[(category, label, t0, t1, info)] for one flight.
 
-    'mission' e' 'p2p' o 'rpy': seleziona il rietichettamento di HOLD_PHASES
-    per il bucket di mantenimento. None (o missione non riconosciuta) lascia
-    il nome generico 'Hover'."""
+    'mission' is 'p2p' or 'rpy' and selects the HOLD_PHASES names for the hold
+    bucket. None (or an unknown mission) keeps the generic name 'Hover'."""
     t = f["t"]
     out = []
     for r in phase_rows:
@@ -1174,26 +1115,26 @@ def build_blocks(f, phase_rows, delta, mission=None):
         moving = np.flatnonzero(inside & f["ref_moving"])
         ramp_frac = float((inside & f["ref_moving"]).sum() / max(inside.sum(), 1))
 
-        if ramp_frac > 0.5:                       # fase di rampa
+        if ramp_frac > 0.5:                       # ramp phase
             t_stop = t[moving[-1]] if moving.size else t1
             cat = "Takeoff" if cellf(r["ref_z"]) > f["pos_ref"][inside][0][2] else "Land"
-            # piu' robusto: il segno dello spostamento verticale comandato
+            # the sign of the commanded vertical displacement
             dz = f["pos_ref"][min(moving[-1], len(t) - 1)][2] - f["pos_ref"][moving[0]][2] \
                 if moving.size else 0.0
             cat = "Takeoff" if dz > 0 else "Land"
             out.append((cat, lab, t0, t_stop, {"ramp_dz": dz}))
             continue
 
-        # fase di gradino: transitorio + mantenimento
+        # step phase: transient + hold
         step_pos = cellf(r.get("step_pos_m", "nan"))
         step_ang = cellf(r.get("step_ang_deg", "nan"))
-        # il transitorio e' confrontabile solo se lo e' la fase da cui viene:
-        # il flag lo decide flag_comparability sui dati, non il codice
+        # the transient is comparable only if its phase is: the flag comes
+        # from flag_comparability, on the data
         cmp_flag = cellf(r.get("comparable_transient", "1"))
         cmp_flag = True if cmp_flag != cmp_flag else bool(cmp_flag)
-        # l'errore a regime della fase serve al tempo di salita: la finestra
-        # 'Step' e' il solo transitorio e non contiene il regime, che finisce
-        # in 'Hover', quindi il valore finale va passato da qui
+        # the steady-state error of the phase is needed for the rise time: the
+        # 'Step' window holds only the transient, while the steady state is in
+        # 'Hover', so the final value is passed from here
         out.append(("Step", lab, t0, min(t0 + delta, t1),
                     {"step_pos_m": step_pos, "step_ang_deg": step_ang,
                      "comparable": cmp_flag,
@@ -1211,15 +1152,15 @@ def window(f, t0, t1):
     return m
 
 
-# soglia minima di distanza sotto cui non si normalizza (m). Stesso valore di
-# --min-step-norm: metrics_for_category non riceve cfg, quindi vive qui.
+# minimum distance below which no normalisation is done (m). Same value
+# as --min-step-norm: metrics_for_category does not receive cfg.
 cfg_min_step = MIN_STEP_NORM
-# analogo angolare: sotto ~2 deg di angolo da coprire il rapporto e' rumore.
+# angular counterpart: below ~2 deg the ratio is noise.
 cfg_min_step_ang = float(np.deg2rad(2.0))   # [rad]
 
 
 def metrics_for_category(f, blocks, cat):
-    """dict metrica -> valore, per una categoria di un volo."""
+    """dict metric -> value, for one category of one flight."""
     sel = [b for b in blocks if b[0] == cat]
     if not sel:
         return None
@@ -1231,17 +1172,16 @@ def metrics_for_category(f, blocks, cat):
     if n < 10:
         return None
 
-    # Maschera per le metriche ASSOLUTE: esclude i sotto-blocchi il cui
-    # gradino non e' confrontabile fra i voli (vedi GRADINI NON CONFRONTABILI
-    # nella docstring di sezione). Per le categorie che non sono gradini
-    # coincide con allm, quindi nulla cambia altrove.
+    # Mask for the ABSOLUTE metrics: it excludes the sub-blocks whose step
+    # is not comparable between the flights (see STEPS THAT ARE NOT
+    # COMPARABLE above). For the other categories it equals allm.
     sel_cmp = [(b, m) for b, m in zip(sel, masks)
                if b[4].get("comparable", True)]
     absm = np.zeros_like(allm)
     for _b, m in sel_cmp:
         absm |= m
     n_abs = int(absm.sum())
-    if n_abs < 10:                       # niente gradino confrontabile
+    if n_abs < 10:                       # no comparable step
         absm = np.zeros_like(allm)
         n_abs = 0
 
@@ -1249,42 +1189,37 @@ def metrics_for_category(f, blocks, cat):
          "n_samples_abs": n_abs, "n_subblocks_abs": len(sel_cmp),
          "dur_s": round(float(sum(b[3] - b[2] for b in sel)), 2)}
 
-    # --- intestazione comune: le due grandezze che finiscono in figura
+    # --- common header: the two quantities shown in the figures
     M["rmse_pos"] = rms_t(f["t"], f["e_pos"], absm) if n_abs else float("nan")
     M["rmse_att"] = rms_t(f["t"], f["e_att"], absm) if n_abs else float("nan")
-    # decomposizione dell'errore di posizione: vale sempre
+    # decomposition of the position error, which always satisfies
     #     rmse_pos^2 = err_xy^2 + err_z^2
-    # L'orizzontale e la verticale hanno cause diverse -- deriva contro
-    # ritardo di quota / errore di spinta -- e sommarle nella norma le nasconde.
+    # Horizontal and vertical errors have different causes (drift against
+    # height lag or thrust error).
     M["err_xy"] = (rms_t(f["t"], np.linalg.norm(f["e_w"][:, :2], axis=1), absm)
                    if n_abs else float("nan"))
     M["err_z"] = rms_t(f["t"], f["e_w"][:, 2], absm) if n_abs else float("nan")
 
     kind = KIND[cat]
 
-    if kind == "rampa":
-        # il riferimento si muove in verticale: separo ritardo e deriva
-        # solo per le rampe: il ritardo di quota CON SEGNO, che dice se il
-        # drone e' rimasto indietro o e' andato avanti rispetto alla rampa
+    if kind == "ramp":
+        # vertical reference: signed height lag, which tells whether the
+        # vehicle fell behind or went ahead of the ramp
         M["lag_z"] = float(np.mean(f["e_w"][allm][:, 2]))
 
-        # NORMALIZZAZIONE SULLA DISTANZA COMANDATA DALLA RAMPA.
+        # NORMALISATION BY THE DISTANCE COMMANDED BY THE RAMP.
         #
-        # Il drone non viene riposato a terra alla stessa quota a ogni volo,
-        # quindi la rampa di atterraggio non e' lunga uguale: 0.83 m in una
-        # cartella e 0.78 m in un'altra, cioe' una finestra di 4.71 s contro
-        # una di 4.44 s. Confrontare i due errori assoluti mette a confronto
-        # due manovre diverse, ed e' lo stesso confondente che per i gradini
-        # si risolve dividendo per l'ampiezza: qui il denominatore e' il
-        # dislivello che la rampa comanda.
+        # The vehicle does not land at the same height in every flight, so the
+        # landing ramp has a different length: 0.83 m in one folder and
+        # 0.78 m in another, a window of 4.71 s against one of 4.44 s. As for
+        # the steps, the error is divided by the amplitude, here the height
+        # difference commanded by the ramp.
         #
-        # Le colonne hanno gli stessi nomi di quelle dei gradini
-        # (*_pooled_n_*, *_pooled_den) perche' hanno lo stesso significato --
-        # errore normalizzato campione per campione, poi un solo integrale --
-        # e cosi' chi legge, qui o in compare_trajectory, non deve sapere se
-        # la categoria era una rampa o un gradino per trattarla nel modo
-        # giusto. L'assetto non ha un comando su una rampa verticale: resta
-        # nan, e la figura d'assetto di Takeoff/Land resta in valore assoluto.
+        # The columns have the same names as those of the steps
+        # (*_pooled_n_*, *_pooled_den) and the same meaning: error normalised
+        # sample by sample, then a single integral. The attitude has no command
+        # on a vertical ramp: it stays nan, and the attitude figure of
+        # Takeoff/Land stays in absolute value.
         num_sq = num_ab = dur = wd = 0.0
         for b, m in zip(sel, masks):
             if m.sum() < 5:
@@ -1314,24 +1249,18 @@ def metrics_for_category(f, blocks, cat):
             M[f"att_pooled_n_{st}"] = float("nan")
         M["att_pooled_den"] = float("nan")
 
-    elif kind == "gradino":
-        # Anche le colonne normalizzate girano sui soli sotto-blocchi
-        # confrontabili. Non e' ridondante con il filtro sugli assoluti: la
-        # guardia di ampiezza (sp > 0.02, sa > 1.0) e' per volo, quindi su un
-        # gradino di ampiezza diversa fra i voli puo' passare in un gruppo e
-        # non nell'altro, e le due medie finirebbero calcolate su insiemi di
-        # manovre diversi. 'comparable' invece e' deciso confrontando i voli,
-        # quindi rende gli insiemi simmetrici per costruzione. Resta il caso
-        # in cui normalizzare serve davvero: piu' gradini confrontabili di
-        # ampiezza diversa fra loro, che accorpati in valore assoluto
-        # darebbero la media di manovre incommensurabili.
-        # NORMALIZZAZIONE SULLA DISTANZA VERA, su TUTTI i sotto-blocchi.
-        # E' l'unica sotto cui anche i gradini di ampiezza comandata diversa
-        # sono confrontabili: divide per la distanza che il drone aveva
-        # davvero davanti all'istante del gradino, quindi assorbe sia
-        # l'ampiezza comandata sia l'errore a regime che si porta dentro dal
-        # setpoint precedente. Gira su 'sel', non su 'sel_cmp': e' il motivo
-        # per cui questa colonna esiste.
+    elif kind == "step":
+        # The normalised columns also use only the comparable sub-blocks. The
+        # amplitude guard (sp > 0.02, sa > 1.0) is per flight, so on a step of
+        # different amplitude it could pass in one group and fail in the
+        # other; 'comparable' is decided by comparing the flights, so the sets
+        # are symmetric. This handles several comparable steps of different
+        # amplitude.
+        # NORMALISATION BY THE ACTUAL DISTANCE, on ALL the sub-blocks.
+        # It divides by the distance the vehicle had to cover at the instant
+        # of the step, so it absorbs both the commanded amplitude and the
+        # steady-state error carried from the previous setpoint. It runs on
+        # 'sel', not on 'sel_cmp'.
         rm_r, iae_r, dr_l = [], [], []
         rm_ra, iae_ra, dr_la = [], [], []
         for b, m in zip(sel, masks):
@@ -1339,51 +1268,43 @@ def metrics_for_category(f, blocks, cat):
                 continue
             tt = f["t"][m]
             info = b[4]
-            # il gate e' sul gradino COMANDATO, non sulla distanza vera: se il
-            # riferimento non fa un gradino su quella grandezza (in rpy la
-            # posizione resta ferma), la "distanza da coprire" e' solo errore
-            # residuo, e dividere un errore per un altro errore premia chi
-            # inseguiva peggio. E' l'artefatto che questa colonna doveva
-            # togliere, non reintrodurre.
-            # e non basta che il gradino comandato esista: il denominatore deve
-            # essere DOMINATO dal comando, non dall'errore residuo. Se la
-            # distanza vera e' meno di meta' dell'ampiezza comandata, quel
-            # rapporto sta misurando l'errore precedente, non la manovra.
+            # The gate is on the COMMANDED step: when the reference has no step in
+            # that quantity (in rpy the position does not move), the distance to
+            # cover is only residual error, and dividing an error by another error
+            # would reward the worse tracking.
+            # The denominator must also be dominated by the command: when the
+            # actual distance is less than half of the commanded amplitude, the
+            # ratio measures the previous error.
             sp = info.get("step_pos_m", float("nan"))
             sa = info.get("step_ang_deg", float("nan"))
             sa_r = float(np.deg2rad(sa)) if sa == sa else float("nan")
             ep = f["e_pos"][m]
-            d_real = float(ep[0])          # distanza da coprire all'istante
+            d_real = float(ep[0])          # distance to cover at the instant of the step
             if (sp == sp and sp > cfg_min_step
                     and d_real > max(cfg_min_step, 0.5 * sp)):
                 rm_r.append(rms_t(tt, ep) / d_real)
                 iae_r.append(mae_t(tt, ep) / d_real)
                 dr_l.append(d_real)
             ea = f["e_att"][m]
-            a_real = float(ea[0])          # angolo da coprire all'istante
+            a_real = float(ea[0])          # angle to cover at the instant of the step
             if (sa_r == sa_r and sa > 5.0
                     and a_real > max(cfg_min_step_ang, 0.5 * sa_r)):
                 rm_ra.append(rms_t(tt, ea) / a_real)
                 iae_ra.append(mae_t(tt, ea) / a_real)
                 dr_la.append(a_real)
-        # --- la stessa normalizzazione, ma AGGREGATA COME L'ASSOLUTO.
-        # Le colonne *_n_real sopra sono medie di rapporti, un sotto-blocco
-        # conta uno; la barra assoluta invece mette in un unico RMS tutti i
-        # campioni. Per sostituire la barra assoluta serve la forma pooled:
-        # si normalizza l'errore CAMPIONE PER CAMPIONE sulla distanza che quel
-        # gradino aveva da coprire, poi si fa un solo RMS (o MAE) su tutti i
-        # campioni di tutti i gradini -- SETPOINT 1 compreso, che e' il motivo
-        # per cui questa colonna esiste: normalizzato, torna confrontabile.
-        # Resta adimensionale; la riscalatura a una distanza comune, che serve
-        # solo per disegnarla su un asse in metri, si fa in export_categories
-        # dove si vedono entrambi i voli.
+        # --- the same normalisation, POOLED LIKE THE ABSOLUTE VALUE.
+        # The *_n_real columns above are means of ratios, one per sub-block;
+        # the absolute bar puts all the samples in a single RMS. The pooled
+        # form normalises the error SAMPLE BY SAMPLE by the distance of its
+        # step, then takes one RMS (or MAE) over all the samples of all the
+        # steps, SETPOINT 1 included. It is dimensionless; the rescaling to a
+        # common distance, for an axis in metres, is done in compare_trajectory,
+        # where both flights are available.
         for fld, ser, den, gate, dmin in (
                 ("pos", "e_pos", "step_pos_m", cfg_min_step, cfg_min_step),
                 ("att", "e_att", "step_ang_deg", 5.0, cfg_min_step_ang)):
-            # l'aggregazione e' sugli INTEGRALI, non sui campioni concatenati:
-            # concatenare e integrare di seguito aggiungerebbe un trapezio
-            # spurio nel salto fra la fine di un gradino e l'inizio del
-            # successivo, pesato dal buco temporale fra i due.
+            # the pooling is on the INTEGRALS, not on concatenated samples, which
+            # would add a spurious trapezoid across the gap between two steps.
             num_sq = num_ab = dur = wd = 0.0
             for b, m in zip(sel, masks):
                 if m.sum() < 5:
@@ -1433,13 +1354,10 @@ def metrics_for_category(f, blocks, cat):
                 pk.append(float(ep.max()) / sp)
                 rm.append(rms_t(tt, ep) / sp)
                 amp.append(sp)
-                # TEMPO DI SALITA, sullo scarto dal VALORE FINALE.
-                # Sull'errore assoluto questo numero non misura la velocita':
-                # una policy feed-forward si assesta su un errore a regime non
-                # nullo, e quando quell'errore supera la soglia (il 10% del
-                # gradino) la condizione non si verifica mai e il tempo esce
-                # pari alla finestra intera -- cioe' il volo con piu' errore a
-                # regime risulta piu' lento anche se e' arrivato prima.
+                # RISE TIME, on the deviation from the FINAL VALUE.
+                # The policy settles on a nonzero steady-state error: on the absolute
+                # error, when that error exceeds the threshold (10% of the step) the
+                # condition is never met and the time equals the whole window.
                 e_ss = info.get("e_ss_pos", float("nan"))
                 dev = np.abs(ep - e_ss) if e_ss == e_ss else ep
                 above = np.flatnonzero(dev > 0.10 * sp)
@@ -1455,8 +1373,7 @@ def metrics_for_category(f, blocks, cat):
 
     elif kind == "hold":
         M["e_mean"] = seg_mean_t(f["t"], f["e_pos"], allm)
-        # e_std resta una dispersione sui campioni: non e' una media nel
-        # tempo, e pesarla darebbe una grandezza senza un nome riconoscibile
+        # e_std is a dispersion over the samples, not a time average
         M["e_std"] = float(np.std(f["e_pos"][allm]))
         bias = [float(np.linalg.norm(f["e_w"][m].mean(axis=0)))
                 for m in masks if m.sum() > 5]
@@ -1467,11 +1384,11 @@ def metrics_for_category(f, blocks, cat):
         if f["avel"] is not None:
             M["w_norm"] = rms_t(f["t"], f["avel"], allm)
 
-    # --- sforzo di controllo, per ogni categoria: somma pesata sui sotto-blocchi
+    # --- control effort, for every category: weighted sum over the sub-blocks
     if f["forces"] is not None:
-        # la TV e' uno sforzo assoluto: un gradino piu' lungo ne richiede di
-        # piu', quindi segue la stessa maschera delle altre metriche assolute
-        tv_masks = [m for _b, m in sel_cmp] if kind == "gradino" else masks
+        # the TV is an absolute effort: a longer step needs more, so it uses
+        # the same mask as the other absolute metrics
+        tv_masks = [m for _b, m in sel_cmp] if kind == "step" else masks
         tvs, ws = [], []
         for m in tv_masks:
             idx = np.flatnonzero(m)
@@ -1485,26 +1402,25 @@ def metrics_for_category(f, blocks, cat):
 
 
 def _scale_limit(cat_max, factor=2.5):
-    """Limite y quando UNA CATEGORIA domina le altre.
+    """y limit when ONE CATEGORY dominates the others.
 
-    Il confronto va fatto fra i massimi PER CATEGORIA, non fra i singoli
-    valori: guardando i valori sciolti, una distribuzione continua senza veri
-    outlier finisce per far tagliare mezzo grafico. Si taglia solo se la
-    categoria piu' alta supera di `factor` la seconda."""
+    The comparison is between the maxima PER CATEGORY: on the single values a
+    continuous distribution without outliers would cut half of the plot. The
+    axis is cut only when the highest category exceeds the second by `factor`."""
     v = sorted((x for x in cat_max if x == x), reverse=True)
     if len(v) < 2 or v[1] <= 0:
         return None
     return v[1] * 1.35 if v[0] > factor * v[1] else None
 
 
-# Una figura per grandezza e per statistica d'errore. Le componenti
-# orizzontale e verticale (err_xy / err_z) restano nel CSV ma non si disegnano
-# piu': al loro posto ci sono le sei componenti singole, definite come nelle
-# cartelle RMSE/ e Rollouts/, piu' le due norme.
+# One figure per quantity and per error statistic. The horizontal and
+# vertical components (err_xy / err_z) are in the CSV only: the figures
+# show the six single components, defined as in the RMSE/ and Rollouts/
+# folders, and the two norms.
 #
-# DUE STATISTICHE, DUE DOMANDE DIVERSE
-#   RMSE  quanto e' grande l'errore, pesando i picchi
-#   MAE   quanto e' grande l'errore tipico, senza pesare i picchi
+# TWO STATISTICS
+#   RMSE  size of the error, weighting the peaks
+#   MAE   size of the typical error, without weighting the peaks
 
 CAT_SERIES = [
     ("e_x",     lambda f: f["e_b"][:, 0], r"$e_x^{\,r}$",    "m",   "1_err_bx",    "{:.3f}"),
@@ -1515,13 +1431,12 @@ CAT_SERIES = [
     ("e_yaw",   lambda f: f["rv"][:, 2],  r"$e_{yaw}$",      "rad", "6_err_yaw",   "{:.4f}"),
     ("e_p",     lambda f: f["e_pos"],     r"$\|e_p\|$",      "m",   "7_err_pos",   "{:.3f}"),
     ("e_R",     lambda f: f["e_att"],     r"$\|e_R\|$",      "rad", "8_err_att",   "{:.4f}"),
-    # moto: NON sono errori. In Takeoff, Step e Landing il riferimento si
-    # muove per costruzione, quindi un valore alto e' atteso, non un difetto.
+    # motion, not errors: in Takeoff, Step and Landing the reference
+    # moves, so a high value is expected.
     ("v_norm",  lambda f: f["v"],         r"\|v\|",          "m/s", "9_vel",       "{:.3f}"),
     ("w_norm",  lambda f: f["avel"],      r"\|\omega\|",     "rad/s", "10_avel",   "{:.3f}"),
 ]
-# Testo delle FIGURE in inglese: sono quelle che finiscono in tesi. L'output
-# a console resta in italiano, e' lo strumento di lavoro.
+# Figure titles
 CAT_TITLE = {"e_x": "Position error X (reference frame)",
              "e_y": "Position error Y (reference frame)",
              "e_z": "Position error Z (reference frame)",
@@ -1534,17 +1449,17 @@ CAT_TITLE = {"e_x": "Position error X (reference frame)",
              "w_norm": "Angular velocity norm"}
 CAT_MOTION = ("v_norm", "w_norm")
 
-# Le due statistiche d'errore. Firma (t, v, mask): sono medie TEMPORALI, non
-# sui campioni -- vedi seg_mean_t per il perche'.
+# The two error statistics, with signature (t, v, mask): TIME averages,
+# see seg_mean_t.
 STATS = (("RMSE", rms_t),
          ("MAE",  mae_t))
 
 
 def category_series_stats(f, blocks, cats):
-    """{statistica: {categoria: {grandezza: valore}}} per un volo.
+    """{statistic: {category: {quantity: value}}} for one flight.
 
-    Come metrics_for_category: i sotto-blocchi con gradino non confrontabile
-    restano fuori, perche' RMSE e MAE di queste serie sono valori assoluti."""
+    As in metrics_for_category, the sub-blocks with a non-comparable step are
+    left out, since RMSE and MAE of these series are absolute values."""
     out = {st: {} for st, _fn in STATS}
     for cat in cats:
         sel = [b for b in blocks
@@ -1558,7 +1473,7 @@ def category_series_stats(f, blocks, cats):
             continue
         for key, get, _sym, _u, _fn, _fmt in CAT_SERIES:
             ser = get(f)
-            if ser is None:                       # 'vel'/'avel' assenti dal log
+            if ser is None:                       # 'vel'/'avel' missing from the log
                 continue
             v = np.asarray(ser, float)
             for st, agg in STATS:
@@ -1567,13 +1482,13 @@ def category_series_stats(f, blocks, cats):
 
 
 def cat_bar_figure(cats, stats, groups, key, stat, out_path, clip=False):
-    """Una grandezza e una statistica: le manovre sull'asse x, una barra per
-    gruppo.
+    """One quantity and one statistic: the manoeuvres on the x axis, one bar per
+    group.
 
-    Nessuna manovra viene esclusa. Dove una domina le altre -- tipicamente
-    Step, con errori 5 volte piu' grandi -- con --cat-clip l'asse resta tarato
-    sulle barre piccole e quella fuori scala viene TAGLIATA, con il suo valore
-    scritto sopra. Di default invece le proporzioni restano vere."""
+    Every manoeuvre is shown. Where one dominates the others (typically Step,
+    with errors five times larger) --cat-clip keeps the axis on the small bars
+    and CUTS the bar out of scale, writing its value above it. By default the
+    proportions are kept."""
     spec = next(x for x in CAT_SERIES if x[0] == key)
     _k, _get, sym, unit, _fname, fmt = spec
     vals = [stats[g][stat].get(c, {}).get(key, float("nan"))
@@ -1581,7 +1496,7 @@ def cat_bar_figure(cats, stats, groups, key, stat, out_path, clip=False):
     finite = [v for v in vals if v == v]
     if not finite:
         return False
-    signed = min(finite) < 0                      # solo il ME puo' esserlo
+    signed = min(finite) < 0                      # only the mean error can be negative
 
     if signed:
         m = max(abs(v) for v in finite) * 1.32
@@ -1616,7 +1531,7 @@ def cat_bar_figure(cats, stats, groups, key, stat, out_path, clip=False):
 
 
 def cat_bar_figure_pair(cats, stats, groups, stat, out_path, clip=False):
-    """Griglia 1x2: Posizione (e_p) e Assetto (e_R) affiancate."""
+    """1x2 grid: position (e_p) and attitude (e_R) side by side."""
     keys = ["e_p", "e_R"]
     specs = [next(x for x in CAT_SERIES if x[0] == k) for k in keys]
 
@@ -1662,7 +1577,7 @@ def cat_bar_figure_pair(cats, stats, groups, stat, out_path, clip=False):
 
 
 def export_categories(flights, rows, dirs, folder_name, cfg):
-    """Scrive tables/category_metrics.csv e categories/paired_categories.pdf."""
+    """Write tables/category_metrics.csv and the category figures."""
     if not rows or len(flights) < 2:
         return
     mission = ("p2p" if folder_name.startswith("p2p") else
@@ -1677,10 +1592,10 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
         return
 
     print('=' * 94)
-    print('CATEGORIE DI COMPITO DI CONTROLLO'
+    print('CONTROL TASK CATEGORIES'
           f"   (Delta = {cfg['cat_delta']} s)")
     print('=' * 94)
-    print(f"  {'categoria':16s}{'fase':12s}"
+    print(f"  {'category':16s}{'phase':12s}"
           + ''.join(f"{g + '  t0-t1':>16s}{'dur':>7s}" for g in groups))
     for cat in cats_all:
         per_g = [[b for b in blocks[g] if b[0] == cat] for g in groups]
@@ -1697,22 +1612,22 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
                 data[g][cat] = m
     cats = [c for c in cats_all if all(c in data[g] for g in groups)]
     if not cats:
-        print("  nessuna categoria in comune fra i voli: sezione saltata.\n")
+        print("  no category in common between the flights: section skipped.\n")
         return
 
     a_, b_ = groups[0], groups[1]
-    print(f"\n{'-'*94}\nMETRICHE  (delta = {b_} rispetto a {a_}; "
-          f"negativo = {b_} meglio)\n{'-'*94}")
+    print(f"\n{'-'*94}\nMETRICS  (delta = {b_} with respect to {a_}; "
+          f"negative = {b_} better)\n{'-'*94}")
     rows_csv = []
     for cat in cats:
         nb = data[a_][cat]['n_subblocks']
         nba = data[a_][cat].get('n_subblocks_abs', nb)
         print(f"\n  [{cat}]   {data[a_][cat]['dur_s']:.1f} s, "
-              f"{nb} sotto-blocco/hi, "
-              f"{data[a_][cat]['n_samples']} campioni"
+              f"{nb} sub-block(s), "
+              f"{data[a_][cat]['n_samples']} samples"
               + ("" if nba == nb else
-                 f"  --  {nba}/{nb} confrontabile/i: le metriche assolute "
-                 f"usano solo quello/i, {data[a_][cat].get('n_samples_abs', 0)} campioni"))
+                 f"  --  {nba}/{nb} comparable: the absolute metrics "
+                 f"use only those, {data[a_][cat].get('n_samples_abs', 0)} samples"))
         for k in [k for k in data[a_][cat]
                   if k not in ('n_samples', 'n_subblocks', 'dur_s',
                                'n_samples_abs', 'n_subblocks_abs')]:
@@ -1738,22 +1653,21 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
         nb = data[a_]['Step']['n_subblocks']
         nba = data[a_]['Step'].get('n_subblocks_abs', nb)
         if nba < nb:
-            print(f"\n  GRADINI  {nb - nba} sotto-blocco/hi di 'Step' ha ampiezza "
-                  f"diversa fra i voli ed e' escluso dalle metriche assolute.")
+            print(f"\n  STEPS  {nb - nba} sub-block(s) of 'Step' with a different amplitude "
+                  f"in the two flights, excluded from the absolute metrics.")
             if nba == 0:
-                print("  Nessun gradino confrontabile: rmse_pos, rmse_att, err_xy, "
-                      "err_z e tv di 'Step' escono vuote.")
-                print("  Restano peak_n, rmse_n e att_peak_n, normalizzate "
-                      "sull'ampiezza e calcolate su tutti i sotto-blocchi.")
+                print("  No comparable step: rmse_pos, rmse_att, err_xy, "
+                      "err_z and tv of 'Step' are empty.")
+                print("  peak_n, rmse_n and att_peak_n are kept, normalised "
+                      "by the amplitude and computed on all the sub-blocks.")
         if aa == aa and bb == bb and aa and abs(bb - aa) / aa > 1e-3:
-            print(f"\n  NOTA  ampiezza media dei gradini (tutti i sotto-blocchi): "
+            print(f"\n  NOTE  mean step amplitude (all sub-blocks): "
                   f"{a_} {aa:.3f} m, {b_} {bb:.3f} m  ({(bb-aa)/aa*100:+.1f}%).")
-            print("  Vale per le colonne normalizzate; gli assoluti sono gia' filtrati.")
+            print("  It applies to the normalised columns; the absolute ones are already filtered.")
 
-    # Le statistiche d'errore si calcolano dai campioni, non dal CSV: il MAE
-    # non e' ricavabile dall'RMSE. Vanno anche nel CSV, marcate nella colonna
-    # 'stat', perche' compare_trajectory legge da li' e altrimenti potrebbe
-    # produrre solo le figure RMSE.
+    # The error statistics are computed from the samples (the MAE cannot be
+    # derived from the RMSE). They also go into the CSV, flagged in the
+    # 'stat' column, because compare_trajectory reads them from there.
     stats = {g: category_series_stats(views[g], blocks[g], cats)
              for g in groups}
     for g in groups:
@@ -1774,24 +1688,24 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
                                            'n_samples', 'n_subblocks'])
         w.writeheader()
         w.writerows(rows_csv)
-    print(f"\n  scritto {csv_path}")
+    print(f"\n  written {csv_path}")
 
     shown = [c for c in cats if c not in cfg['cat_exclude']]
     if not shown:
-        print("  --cat-exclude ha escluso tutte le categorie: figure saltate.")
+        print("  --cat-exclude removed every category: figures skipped.")
         return
     if len(shown) < len(cats):
-        print(f"  figura senza: {', '.join(c for c in cats if c not in shown)}"
-              f"  (restano nel CSV)")
-    # maneuvers/ e' la tassonomia della MISSIONE: decollo, mantenimento,
-    # atterraggio. Il gradino non e' una manovra della missione ma un
-    # esperimento sul controllore: ha una sua unita' di lettura -- l'errore
-    # normalizzato sulla distanza da percorrere -- e i suoi tre numeri,
-    # salita, sovraelongazione, assestamento. Sta in maneuvers/step/, da solo.
-    shown_man = [c for c in shown if KIND.get(c) != 'gradino']
-    shown_step = [c for c in shown if KIND.get(c) == 'gradino']
+        print(f"  figure without: {', '.join(c for c in cats if c not in shown)}"
+              f"  (still in the CSV)")
+    # maneuvers/ follows the MISSION: takeoff, hold, landing. The step is
+    # an experiment on the controller rather than a manoeuvre of the
+    # mission, with its own reading (the error normalised by the distance
+    # to cover) and its three numbers (rise, overshoot, settling), so it
+    # is in maneuvers/step/.
+    shown_man = [c for c in shown if KIND.get(c) != 'step']
+    shown_step = [c for c in shown if KIND.get(c) == 'step']
 
-    # ------------------------------------- maneuvers/: una grandezza, una figura
+    # ------------------------------------- maneuvers/: one quantity, one figure
     for stat, _agg in STATS:
         d = dirs['man_' + stat]
         n_fig = 0
@@ -1804,9 +1718,9 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
                                d / "pos_att_pair.pdf", clip=cfg['cat_clip']):
             n_fig += 1
 
-        print(f"  {n_fig} figure scritte in {d}")
+        print(f"  {n_fig} figures written in {d}")
 
-    # --- maneuvers/propellers: lo sforzo di controllo PER FASE.
+    # --- maneuvers/propellers: control effort PER PHASE.
     tvcat = {}
     for g in groups:
         v = views[g]
@@ -1860,7 +1774,7 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
         fig.tight_layout()
         save(fig, dirs['man_tv'] / "summary_tv.pdf")
         n_fig += 1
-        print(f"  {n_fig} figure scritte in {dirs['man_tv']}")
+        print(f"  {n_fig} figures written in {dirs['man_tv']}")
 
     with open(dirs['tables'] / 'tv_maneuvers.csv', 'w', newline='') as fh:
         w = csv.writer(fh)
@@ -1873,7 +1787,7 @@ def export_categories(flights, rows, dirs, folder_name, cfg):
 
 def _bars_on_ax(ax, labels, vals, title, ylabel, hatch_flags=None,
                 fmt='{:.3f}', zero_line=False, legend=True):
-    """Barre PPO/SPPO affiancate su un asse dato, una coppia per etichetta."""
+    """PPO/SPPO bars side by side on a given axis, one pair per label."""
     have = [g for g in GROUPS if g in vals and any(v == v for v in vals[g])]
     if not labels or not have:
         return False
@@ -1908,7 +1822,7 @@ def _bars_on_ax(ax, labels, vals, title, ylabel, hatch_flags=None,
 
 
 def _panel_figure(out_path, suptitle, panels, labels):
-    """Una figura, piu' pannelli affiancati sulle stesse etichette."""
+    """One figure, several panels side by side on the same labels."""
     panels = [q for q in panels
               if any(v == v for g in q['vals'] for v in q['vals'][g])]
     if not labels or not panels:
@@ -1926,12 +1840,12 @@ def _panel_figure(out_path, suptitle, panels, labels):
 
 
 def _slug(label):
-    """'SETPOINT 2' -> 'SETPOINT_2'. Nome file, non etichetta."""
+    """'SETPOINT 2' -> 'SETPOINT_2', for file names."""
     return "_".join(str(label).split())
 
 
 def _step_profile_ax(ax, per, label, finals=True, bands=True, title=True):
-    """Il profilo di avanzamento di UNA fase, PPO contro SPPO."""
+    """Progress profile of ONE phase, PPO against SPPO."""
     drawn = False
     for g in GROUPS:
         if (label, g) not in per:
@@ -1954,7 +1868,7 @@ def _step_profile_ax(ax, per, label, finals=True, bands=True, title=True):
 
 
 def _step_table_figure(out_path, per, label, kind, tag, cfg):
-    """Tabella dei tre numeri della risposta al gradino, PPO contro SPPO."""
+    """Table of the step response numbers, PPO against SPPO."""
     have = {g: per[(label, g)] for g in GROUPS if (label, g) in per}
     if len(have) < 2:
         return 0
@@ -1998,10 +1912,10 @@ def _step_table_figure(out_path, per, label, kind, tag, cfg):
     for (i, j), c in tb.get_celld().items():
         c.set_linewidth(0.9)
         c.set_edgecolor(C_INK)
-        if i == 0:                                                           # intestazione: filetti
+        if i == 0:                                                           # header: rules only
             c.visible_edges = 'TB'
             c.set_facecolor('#f2f2f2')
-            if j in (1, 2):                                                  # PPO / SPPO nel loro colore
+            if j in (1, 2):                                                  # PPO / SPPO in their colours
                 c.get_text().set_color(COL[GROUPS[j - 1]])
         else:
             c.visible_edges = 'B' if i == len(body) else ''
@@ -2014,11 +1928,11 @@ def _step_table_figure(out_path, per, label, kind, tag, cfg):
 
 
 def export_assets(flights, dirs, cfg, phase_rows=()):
-    """Metriche specifiche della manovra. Per fase, PPO contro SPPO."""
+    """Manoeuvre-specific metrics, per phase, PPO against SPPO."""
     rows = []
     n_fig = 0
 
-    # ---------------------------------------------- risposta al gradino
+    # ---------------------------------------------- step response
     for kind, tag, unit_amp, amp_fmt in (('pos', 'position', 'm', '{:.3f}'),
                                          ('att', 'attitude', 'deg', '{:.1f}')):
         per = {}
@@ -2080,7 +1994,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
                              'metric': k, 'value': r[k],
                              'comparable': r['comparable']})
 
-    # ------------------------- transitorio normalizzato sulla distanza vera
+    # ------------------------- transient normalised by the actual distance
     for kind, pre, base, ttl in (('pos', 5, 'norm_real_m', 'position'),
                                  ('att', 6, 'norm_real_deg', 'attitude')):
         keys = (('rmse_pos_transient_real', 'iae_pos_real') if kind == 'pos'
@@ -2089,7 +2003,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
         for r in phase_rows:
             if not r['phase'].startswith('SETPOINT'):
                 continue
-            if r.get(base) != r.get(base):          # nan: niente gradino qui
+            if r.get(base) != r.get(base):          # nan: no step here
                 continue
             per[(r['phase'], r['group'])] = r
         labels = list(dict.fromkeys(k[0] for k in per))
@@ -2114,7 +2028,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
                              'group': g, 'metric': k, 'value': r[k],
                              'comparable': 1})
 
-    # ------------------------------ sforzo di controllo DENTRO la fase
+    # ------------------------------ control effort WITHIN the phase
     tvph = {}
     for f in flights:
         if 'forces' not in f:
@@ -2158,7 +2072,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
                              'metric': f'tv_rotor_{i+1}', 'value': float(v),
                              'comparable': 1})
 
-    # ---------------------------------------------- atterraggio
+    # ---------------------------------------------- landing
     td = {}
     for f in flights:
         r = touchdown_metrics(f, analysed_phases(f['phases']), cfg)
@@ -2171,7 +2085,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
                              'group': g, 'metric': k, 'value': r[k],
                              'comparable': 1})
 
-    # ---------------------------------------------- accoppiamento
+    # ---------------------------------------------- coupling
     cp = {}
     for f in flights:
         sp = analysed_phases(f['phases'])
@@ -2194,7 +2108,7 @@ def export_assets(flights, dirs, cfg, phase_rows=()):
             w.writeheader()
             for r in rows:
                 w.writerow({**r, 'value': nan_to_blank(r['value'])})
-    print(f"\n  {n_fig} figure scritte in maneuvers/step")
+    print(f"\n  {n_fig} figures written in maneuvers/step")
     return rows
 
 
@@ -2220,11 +2134,11 @@ def export_analysis(input_dir: Path, cfg):
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
 
-    print(f"Scansione di data.npz in: {input_dir} ...")
+    print(f"Scanning data.npz files in: {input_dir} ...")
     npz_files = sorted(input_dir.rglob("data.npz"))
-    print(f"  {len(npz_files)} file trovati.\n")
+    print(f"  {len(npz_files)} files found.\n")
 
-    # ----------------------------------------------------- lettura + manifest
+    # ----------------------------------------------------- reading + manifest
     flights, manifest = [], []
     for p in npz_files:
         res, why = process_log(p, cfg)
@@ -2238,21 +2152,21 @@ def export_analysis(input_dir: Path, cfg):
         flights.append(res)
 
     if not flights:
-        print("Nessun volo leggibile."); return
+        print("No readable flight."); return
     flights.sort(key=lambda f: (f['group'] != 'PPO', f['run']))
 
     for f in flights:
         print(f"  {f['group']:<5} {f['run']:<34} {f['duration']:6.2f} s, "
-              f"{f['n_samples']} campioni ({f['n_samples']/f['duration']:.1f} Hz), "
-              f"{len(setpoint_phases(f['phases']))} setpoint di missione")
+              f"{f['n_samples']} samples ({f['n_samples']/f['duration']:.1f} Hz), "
+              f"{len(setpoint_phases(f['phases']))} mission setpoints")
 
     ref = flights[0]
 
-    # ------------------------------------------------------- fasi rilevate
-    print(f"\n{'='*78}\nFASI RILEVATE DAL RIFERIMENTO\n{'='*78}")
+    # ------------------------------------------------------- detected phases
+    print(f"\n{'='*78}\nPHASES DETECTED FROM THE REFERENCE\n{'='*78}")
     for f in flights:
         print(f"\n  --- {f['group']}  {f['run']} ---")
-        print(f"  {'fase':<14}{'t0':>7}{'t1':>7}{'dur':>7}   riferimento")
+        print(f"  {'phase':<14}{'t0':>7}{'t1':>7}{'dur':>7}   reference")
         for ph in f['phases']:
             if ph['type'] == 'hold':
                 info = (f"pos=[{ph['pos'][0]:+.2f},{ph['pos'][1]:+.2f},"
@@ -2267,22 +2181,22 @@ def export_analysis(input_dir: Path, cfg):
         sp = setpoint_phases(f['phases'])
         if sp:
             durs = [p['dur'] for p in sp]
-            print(f"      setpoint di missione: {', '.join(f'{d:.2f}' for d in durs)} s"
+            print(f"      mission setpoints: {', '.join(f'{d:.2f}' for d in durs)} s"
                   f"   ->  wait_s ~ {np.median(durs) - 0.7:.1f} s "
-                  f"(tolti 0.7 s di staging)")
+                  f"(minus 0.7 s of staging)")
 
     same_ref = True
     if len(flights) >= 2:
-        print(f"\n{'='*78}\nCONTROLLO: STESSO RIFERIMENTO PER I DUE VOLI?\n{'='*78}")
+        print(f"\n{'='*78}\nCHECK: SAME REFERENCE IN THE TWO FLIGHTS?\n{'='*78}")
         fa, fb = flights[0], flights[1]
         pa, pb = setpoint_phases(fa['phases']), setpoint_phases(fb['phases'])
         if len(pa) != len(pb):
             same_ref = False
-            print(f"  !! numero di setpoint diverso: {len(pa)} vs {len(pb)}.")
-            print("     Il confronto fase per fase NON e' valido.")
+            print(f"  !! different number of setpoints: {len(pa)} vs {len(pb)}.")
+            print("     The phase-by-phase comparison is not valid.")
         else:
-            print(f"  {'setpoint':<12}{'scarto pos':>12}{'scarto rpy':>12}"
-                  f"{'sfasamento':>12}")
+            print(f"  {'setpoint':<12}{'pos diff':>12}{'rpy diff':>12}"
+                  f"{'time shift':>12}")
             worst_p = worst_r = worst_t = 0.0
             for x, y in zip(pa, pb):
                 dp = float(np.max(np.abs(x['pos'] - y['pos'])))
@@ -2293,20 +2207,20 @@ def export_analysis(input_dir: Path, cfg):
                 print(f"  {x['label']:<12}{dp*1000:>9.1f} mm{dr:>9.2f} deg"
                       f"{dt_:>9.2f} s")
             if worst_p < 0.01 and worst_r < 1.0:
-                print("  -> i setpoint di missione coincidono: confronto a parita'")
-                print("     di riferimento.")
+                print("  -> the mission setpoints coincide: the comparison is on the")
+                print("     same reference.")
             else:
                 same_ref = False
-                print("  -> !! i setpoint NON coincidono: il confronto non e' a parita'")
-                print("        di riferimento.")
+                print("  -> !! the setpoints differ: the comparison is not on the")
+                print("        same reference.")
             if worst_t > 0.5:
-                print("  -> !! fasi sfasate di oltre 0.5 s: confronta per fase, non a")
-                print("        tempo assoluto.")
+                print("  -> !! phases shifted by more than 0.5 s: compare by phase, not by")
+                print("        absolute time.")
 
         ma = [p for p in fa['phases'] if p['label'] in ('TAKEOFF', 'LANDING')]
         mb = [p for p in fb['phases'] if p['label'] in ('TAKEOFF', 'LANDING')]
         if ma and len(ma) == len(mb):
-            print(f"\n  {'manovra':<12}{fa['group']:>26}{fb['group']:>26}")
+            print(f"\n  {'manoeuvre':<12}{fa['group']:>26}{fb['group']:>26}")
             for x, y in zip(ma, mb):
                 print(f"  {x['label']:<12}"
                       f"   dpos=[{x['d_pos'][0]:+.2f},{x['d_pos'][1]:+.2f},"
@@ -2316,42 +2230,42 @@ def export_analysis(input_dir: Path, cfg):
             dmax = max(float(np.max(np.abs(x['d_pos'] - y['d_pos'])))
                        for x, y in zip(ma, mb))
             if dmax < 0.02:
-                print(f"  -> stessa manovra comandata (scarto max {dmax*1000:.1f} mm):")
-                print("     decollo e atterraggio sono confrontabili.")
+                print(f"  -> same commanded manoeuvre (max difference {dmax*1000:.1f} mm):")
+                print("     takeoff and landing are comparable.")
             else:
-                print(f"  !! spostamenti comandati diversi (scarto max {dmax*1000:.0f} mm):")
-                print("     il confronto su decollo e atterraggio va preso con cautela.")
+                print(f"  !! different commanded displacements (max difference {dmax*1000:.0f} mm):")
+                print("     the takeoff and landing comparison is indicative only.")
 
     bad, steps_per_flight = flag_comparability(flights, cfg)
-    print(f"\n{'='*78}\nCONFRONTABILITA' DEI TRANSITORI\n{'='*78}")
-    print(f"  {'fase':<14}" + "".join(f"{f['group']:>12}" for f in flights)
-          + f"{'scarto':>10}   esito")
+    print(f"\n{'='*78}\nCOMPARABILITY OF THE TRANSIENTS\n{'='*78}")
+    print(f"  {'phase':<14}" + "".join(f"{f['group']:>12}" for f in flights)
+          + f"{'spread':>10}   result")
     for lab in [p['label'] for p in analysed_phases(ref['phases'])]:
         vals = [d.get(lab, (float('nan'),))[0] for d in steps_per_flight]
         if not all(v == v for v in vals):
             continue
         spread = max(vals) - min(vals)
-        verdict = ("SOLO REGIME" if lab in bad else "ok")
+        verdict = ("STEADY ONLY" if lab in bad else "ok")
         print(f"  {lab:<14}" + "".join(f"{v:>10.3f} m" for v in vals)
               + f"{spread*1000:>7.0f} mm   {verdict}")
     if bad:
-        print("\n  Le fasi marcate SOLO REGIME hanno un gradino di ampiezza diversa")
-        print("  fra i due voli: il drone non puo' essere riposizionato a terra nello")
-        print("  stesso identico punto. Su un gradino piu' lungo il picco di errore e'")
-        print("  piu' grande PER COSTRUZIONE, quindi transitorio, picco, assestamento,")
-        print("  RMSE di fase e TV di fase non sono confrontabili e vengono lasciati")
-        print("  vuoti. Resta l'errore A REGIME, che dipende dal setpoint finale --")
-        print("  identico -- e non dal cammino percorso per arrivarci. La stessa")
-        print("  finestra e' esclusa anche dalle metriche globali sull'intero volo.")
+        print("\n  The phases flagged STEADY ONLY have a step of different amplitude")
+        print("  in the two flights: the vehicle cannot be put down at exactly the")
+        print("  same point. On a longer step the error peak is larger by")
+        print("  construction, so transient, peak, settling time, phase RMSE")
+        print("  and phase TV are not comparable and are left blank. The")
+        print("  STEADY-STATE error is kept: it depends on the final setpoint,")
+        print("  which is the same, and not on the path to reach it. The same")
+        print("  window is also excluded from the global metrics of the flight.")
     else:
-        print("\n  Tutte le fasi hanno lo stesso comando in ingresso nei due voli:")
-        print("  transitori confrontabili, nessuna esclusione.")
+        print("\n  Every phase has the same entering command in the two flights:")
+        print("  transients comparable, nothing excluded.")
 
-    print(f"\n  Analisi sull'intero volo: decollo, setpoint e atterraggio sono")
-    print(f"  tutti pilotati dalla policy, quindi sono tutte prestazioni sue.")
-    print(f"  Le fasi vengono valutate una per una: un RMSE unico mediarebbe")
-    print(f"  inseguimento di rampa, risposta al gradino e reiezione a punto")
-    print(f"  fisso, con pesi dati dalle durate scelte in fase di missione.")
+    print(f"\n  Whole-flight analysis: takeoff, setpoints and landing are all")
+    print(f"  flown by the policy.")
+    print(f"  The phases are evaluated one by one: a single RMSE would average")
+    print(f"  ramp tracking, step response and disturbance rejection at a")
+    print(f"  fixed point, weighted by the durations chosen for the mission.")
 
     for f in flights:
         m = np.ones(f['n_samples'], dtype=bool)
@@ -2391,7 +2305,7 @@ def export_analysis(input_dir: Path, cfg):
             w.writerow([k, '' if v is None or v != v else v])
     warned = [m for m in manifest if m['included'] and m['note']]
     if warned:
-        print(f"  !! {len(warned)} voli con avvisi (vedi tables/manifest.csv)")
+        print(f"  !! {len(warned)} flights with warnings (see tables/manifest.csv)")
 
     # ====================================================== RMSE + Rollouts
     per_flight_rows = []
@@ -2402,7 +2316,7 @@ def export_analysis(input_dir: Path, cfg):
 
     for key, sym, unit, title, fname in METRICS:
         if not any(key in f for f in flights):
-            print(f"  [skip] metrica '{key}': assente in tutti i voli.")
+            print(f"  [skip] metric '{key}': missing in every flight.")
             continue
 
         for stat, agg in STATS:
@@ -2625,7 +2539,7 @@ def export_analysis(input_dir: Path, cfg):
     tv_rows = []
 
     def tv_bars(per_motor, out_dir_key, wname):
-        """Sei figure per motore piu' il riepilogo, su una finestra."""
+        """Six figures, one per motor, and the summary, on one window."""
         if not all(g in per_motor and per_motor[g] is not None
                    for g in (f['group'] for f in flights[:2])):
             return 0
@@ -2673,7 +2587,7 @@ def export_analysis(input_dir: Path, cfg):
         n_tv = 0
         n_tv += tv_bars({f['group']: compute_tv(f, np.ones(f['n_samples'], bool))
                          for f in flights}, 'flight_tv', 'flight')
-        print(f"\n  {n_tv} figure di TV scritte in flight/propellers")
+        print(f"\n  {n_tv} TV figures written in flight/propellers")
 
         for f in flights[:2]:
             for i in range(N_ROTORS):
@@ -2684,12 +2598,12 @@ def export_analysis(input_dir: Path, cfg):
                             'channel': 'TOTAL',
                             'tv': f"{float(np.sum(f['tv_per_motor'])):.4f}"})
 
-        print(f"  TV (somma {N_ROTORS} propeller)"
-              + (", transitori non confrontabili esclusi:" if bad else ":"))
+        print(f"  TV (sum over {N_ROTORS} propellers)"
+              + (", non-comparable transients excluded:" if bad else ":"))
         for f in flights[:2]:
             print(f"    {f['group']:<5} {float(np.sum(f['tv_per_motor'])):8.2f}")
 
-    # ============================================ metriche per fase
+    # ============================================ metrics per phase
     rows = []
     for f in flights:
         sp = analysed_phases(f['phases'])
@@ -2703,12 +2617,12 @@ def export_analysis(input_dir: Path, cfg):
 
     if rows:
         print(f"\n{'='*94}")
-        print(f"METRICHE PER FASE   (regime = ultimi {cfg['t_ss']:.1f} s; "
-              f"tolleranze {cfg['tol_pos']*100:.0f} cm / {cfg['tol_att_deg']:.0f} deg)")
-        print("  '--' = non confrontabile (gradino di ampiezza diversa fra i voli)")
+        print(f"METRICS PER PHASE   (steady state = last {cfg['t_ss']:.1f} s; "
+              f"tolerances {cfg['tol_pos']*100:.0f} cm / {cfg['tol_att_deg']:.0f} deg)")
+        print("  '--' = not comparable (step of different amplitude in the two flights)")
         print('=' * 94)
-        print(f"  {'fase':<12}{'grp':<6}{'RMSE pos':>10}{'regime':>9}{'picco':>8}"
-              f"{'set.[s]':>9}{'RMSE att':>10}{'regime':>9}{'picco':>8}{'set.[s]':>9}")
+        print(f"  {'phase':<12}{'grp':<6}{'RMSE pos':>10}{'steady':>9}{'peak':>8}"
+              f"{'set.[s]':>9}{'RMSE att':>10}{'steady':>9}{'peak':>8}{'set.[s]':>9}")
         print(f"  {'':<12}{'':<6}{'[m]':>10}{'[m]':>9}{'[m]':>8}{'':>9}"
               f"{'[rad]':>10}{'[rad]':>9}{'[rad]':>8}{'':>9}")
         for ph in dict.fromkeys(r['phase'] for r in rows):
@@ -2727,16 +2641,16 @@ def export_analysis(input_dir: Path, cfg):
     norm_rows = [r for r in rows if r['norm_base_m'] == r['norm_base_m']]
     if norm_rows:
         print(f"{'='*94}")
-        print("TRANSITORIO NORMALIZZATO SULL'AMPIEZZA DEL GRADINO")
-        print("  Un gradino piu' lungo produce un errore piu' grande per")
-        print("  costruzione. Dividendo per l'ampiezza il transitorio torna")
-        print("  confrontabile: in regime lineare la risposta al gradino scala")
-        print("  con l'ampiezza, quindi e(t)/Delta non dipende da Delta.")
-        print("  Vale finche' gli attuatori non saturano: assunzione DA")
-        print("  DICHIARARE in tesi. Affianca l'errore a regime, non lo sostituisce.")
+        print("TRANSIENT NORMALISED BY THE STEP AMPLITUDE")
+        print("  A longer step gives a larger error by construction. Divided")
+        print("  by the amplitude the transient becomes comparable: in the")
+        print("  linear regime the step response scales with the amplitude,")
+        print("  so e(t)/Delta does not depend on Delta.")
+        print("  This holds while the actuators do not saturate; the")
+        print("  steady-state error is reported next to it.")
         print('=' * 94)
-        print(f"  {'fase':<12}{'grp':<6}{'gradino':>10}{'picco/D':>10}"
-              f"{'RMSEtr/D':>10}{'IAE/D':>10}{'piccoAtt/D':>12}")
+        print(f"  {'phase':<12}{'grp':<6}{'step':>10}{'peak/D':>10}"
+              f"{'RMSEtr/D':>10}{'IAE/D':>10}{'peakAtt/D':>12}")
         print(f"  {'':<12}{'':<6}{'[m]':>10}{'[-]':>10}{'[-]':>10}{'[-]':>10}"
               f"{'[rad/m]':>12}")
         for ph in dict.fromkeys(r['phase'] for r in norm_rows):
@@ -2763,12 +2677,12 @@ def export_analysis(input_dir: Path, cfg):
     export_categories(flights, rows, dirs, input_dir.name, cfg)
 
     print('=' * 94)
-    print("MANOVRE  -  risposta al gradino, atterraggio, accoppiamento"
-          "   (atterraggio e accoppiamento: solo tables/assets.csv)")
+    print("MANOEUVRES  -  step response, landing, coupling"
+          "   (landing and coupling: tables/assets.csv only)")
     print('=' * 94)
     asset_rows = export_assets(flights, dirs, cfg, rows)
     if asset_rows:
-        print(f"  {'sezione':14s}{'fase':13s}{'metrica':20s}"
+        print(f"  {'section':14s}{'phase':13s}{'metric':20s}"
               + "".join(f"{g:>12s}" for g in GROUPS))
         seen = []
         for r in asset_rows:
@@ -2823,12 +2737,12 @@ def export_analysis(input_dir: Path, cfg):
             w.writeheader(); w.writerows(tv_rows)
 
     with open(dirs['tables'] / "results.tex", "w") as fh:
-        fh.write(f"% {input_dir.name}: un volo per algoritmo, stesso riferimento.\n")
-        fh.write(f"% Regime = ultimi {cfg['t_ss']:.1f} s di ciascuna fase.\n")
-        fh.write("% Valori singoli, non stime con incertezza: n = 1 per condizione.\n")
+        fh.write(f"% {input_dir.name}: one flight per algorithm, same reference.\n")
+        fh.write(f"% Steady state = last {cfg['t_ss']:.1f} s of each phase.\n")
+        fh.write("% Single values: n = 1 per condition.\n")
         if bad:
-            fh.write("% '--': transitorio non confrontabile (ampiezza del gradino\n")
-            fh.write("%       diversa fra i due voli). Fasi: "
+            fh.write("% '--': transient not comparable (step amplitude\n")
+            fh.write("%       different in the two flights). Phases: "
                      + ", ".join(sorted(bad)) + "\n")
         fh.write("\\begin{tabular}{llcccc}\n\\toprule\n")
         fh.write("Phase & Policy & RMSE $\\|e_p\\|$ [m] & peak [m] & "
@@ -2846,13 +2760,13 @@ def export_analysis(input_dir: Path, cfg):
 
     if norm_rows:
         with open(dirs['tables'] / "results_transient_norm.tex", "w") as fh:
-            fh.write(f"% {input_dir.name}: transitorio normalizzato "
-                     "sull'ampiezza del gradino.\n")
-            fh.write("% e(t)/Delta e' invariante rispetto all'ampiezza del "
-                     "gradino nel regime\n")
-            fh.write("% lineare: assunzione da dichiarare nel testo. "
-                     "Solo fasi raggiunte da un gradino\n")
-            fh.write("% (decollo e atterraggio sono rampe ed escono).\n")
+            fh.write(f"% {input_dir.name}: transient normalised "
+                     "by the step amplitude.\n")
+            fh.write("% e(t)/Delta does not depend on the step amplitude "
+                     "in the linear\n")
+            fh.write("% regime. "
+                     "Only phases reached through a step\n")
+            fh.write("% (takeoff and landing are ramps).\n")
             fh.write("\\begin{tabular}{llccccc}\n\\toprule\n")
             fh.write("Phase & Policy & $\\Delta$ [m] & peak/$\\Delta$ [-] & "
                      "RMSE$_{tr}$/$\\Delta$ [-] & IAE/$\\Delta$ [-] & "
@@ -2871,8 +2785,8 @@ def export_analysis(input_dir: Path, cfg):
 
     if len(flights) == 2 and same_ref and rows:
         a, b = flights[0]['group'], flights[1]['group']
-        print(f"{'='*78}\n{b} RISPETTO A {a}\n{'='*78}")
-        print("  errore a regime, per fase:")
+        print(f"{'='*78}\n{b} WITH RESPECT TO {a}\n{'='*78}")
+        print("  steady-state error, per phase:")
         for ph in phases_l:
             ra = next((r for r in rows if r['phase'] == ph and r['group'] == a), None)
             rb = next((r for r in rows if r['phase'] == ph and r['group'] == b), None)
@@ -2880,9 +2794,9 @@ def export_analysis(input_dir: Path, cfg):
                 continue
             dp = (rb['rmse_pos_steady'] - ra['rmse_pos_steady']) / ra['rmse_pos_steady'] * 100
             da = (rb['rmse_att_steady'] - ra['rmse_att_steady']) / ra['rmse_att_steady'] * 100
-            print(f"    {ph:<12} posizione {dp:+6.1f}%   assetto {da:+6.1f}%")
-        print("\n  sull'intero volo (RMSE, decollo e coda a terra compresi:")
-        print("  descrive, non confronta -- il confronto sta in maneuvers/):")
+            print(f"    {ph:<12} position {dp:+6.1f}%   attitude {da:+6.1f}%")
+        print("\n  over the whole flight (RMSE, takeoff and ground tail included;")
+        print("  descriptive only, the comparison is in maneuvers/):")
         for t_ in dict.fromkeys(r['metric'] for r in flight_rows):
             g = {r['group']: r['rmse'] for r in flight_rows
                  if r['metric'] == t_ and r['stat'] == 'RMSE'}
@@ -2892,60 +2806,59 @@ def export_analysis(input_dir: Path, cfg):
     itm = {f['group']: f.get('inf_time_mean_ms') for f in flights}
     if itm and all(v is not None for v in itm.values()):
         dt_ms = np.mean([f['dt_mean'] for f in flights]) * 1e3
-        print("\n  Tempo di inferenza: "
+        print("\n  Inference time: "
               + ", ".join(f"{g} {v:.3f} ms" for g, v in itm.items())
-              + f"  (periodo di controllo {dt_ms:.2f} ms)")
+              + f"  (control period {dt_ms:.2f} ms)")
 
-    print("\n  NB: un volo per condizione. Questi sono valori singoli, non stime")
-    print("      con incertezza: in tesi vanno riportati come tali, senza medie,")
-    print("      bande o p-value. Le fasi non sono campioni indipendenti.")
-    print(f"\nAnalisi completata. Output in: {out_dir}")
-    print(f"  tabelle e manifest -> {dirs['tables']}")
+    print("\n  One flight per condition: single values, without averages,")
+    print("      bands or p-values. The phases are not independent samples.")
+    print(f"\nAnalysis done. Output in: {out_dir}")
+    print(f"  tables and manifest -> {dirs['tables']}")
 
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser(
-        description="Analisi missioni di traiettoria TiltHex: PPO vs SPPO.")
+        description="Tilthex trajectory missions: PPO vs SPPO.")
     p.add_argument("--input", type=str, required=True,
-                   help="cartella dei log (es. plots/p2p_nominal)")
+                   help="mission folder (e.g. p2p_nominal)")
     p.add_argument("--t-ss", type=float, default=2.0,
-                   help="durata [s] della finestra di regime a fine fase")
+                   help="duration [s] of the steady-state window at the end of each phase")
     p.add_argument("--tol-pos", type=float, default=0.05,
-                   help="tolleranza di posizione [m] per il tempo di assestamento")
+                   help="position tolerance [m] for the settling time")
     p.add_argument("--settle-band", type=float, default=0.05,
-                   help="semiampiezza della banda di assestamento, frazione "
-                        "del gradino in ingresso (default %(default)s)")
+                   help="half-width of the settling band, as a fraction "
+                        "of the entering step (default %(default)s)")
     p.add_argument("--settle-min-ang-deg", type=float, default=5.0,
-                   help="rotazione comandata sotto la quale non si misura "
-                        "l'assestamento d'assetto (default %(default)s)")
+                   help="commanded rotation below which the attitude settling "
+                        "time is not measured (default %(default)s)")
     p.add_argument("--tol-att-deg", type=float, default=5.0,
-                   help="tolleranza di assetto [deg] per il tempo di assestamento")
+                   help="attitude tolerance [deg] for the settling time")
     p.add_argument("--step-tol-pos", type=float, default=STEP_TOL_POS,
-                   help="scarto [m] oltre il quale il gradino di una fase e' "
-                        "considerato diverso fra i due voli")
+                   help="difference [m] above which the step of a phase is "
+                        "considered different in the two flights")
     p.add_argument("--step-tol-ang-deg", type=float, default=STEP_TOL_ANG,
-                   help="idem, per la parte angolare [deg]")
+                   help="same, for the angular part [deg]")
     p.add_argument("--min-step-norm", type=float, default=MIN_STEP_NORM,
-                   help="ampiezza minima [m] del gradino sotto la quale non si "
-                        "normalizza il transitorio")
+                   help="minimum step amplitude [m] for the normalisation "
+                        "of the transient")
     p.add_argument("--v-thr", type=float, default=V_THR)
     p.add_argument("--w-thr", type=float, default=W_THR)
     p.add_argument("--min-block", type=float, default=MIN_BLOCK)
     p.add_argument("--step-pos", type=float, default=STEP_POS)
     p.add_argument("--step-ang-deg", type=float, default=2.0)
     p.add_argument("--delta", type=float, default=2.5, metavar="S",
-                   help="secondi di transitorio dopo un gradino, per la "
-                        "sezione categorie (default %(default)s)")
+                   help="seconds of transient after a step, for the "
+                        "category section (default %(default)s)")
     p.add_argument("--cat-clip", action="store_true",
-                   help="taglia l'asse y nella figura per categoria quando una "
-                        "categoria domina le altre")
+                   help="cut the y axis of the category figure when one "
+                        "category dominates the others")
     p.add_argument("--cat-exclude", nargs="*", default=[], metavar="CAT",
-                   help="categorie da togliere dalla figura (restano nel CSV)")
+                   help="categories removed from the figure (kept in the CSV)")
     args = p.parse_args()
 
     input_path = Path(args.input)
     if not input_path.is_dir():
-        print(f"Errore: cartella '{input_path}' non trovata.")
+        print(f"Error: folder '{input_path}' not found.")
         raise SystemExit(1)
 
     export_analysis(input_path, {

@@ -1,20 +1,19 @@
-# Default configuration for SPPO-VS-Estimation-Aug
+# Entry point of the Hydra configuration: default method and environment.
 hydra:
   job:
-    chdir: False       # Keeps the fix for JAX cache
+    chdir: False       # Stay in the launch directory (JAX cache paths are relative)
   run:
-    dir: .             # Runs in current directory
-  output_subdir: null  # Disables .hydra folder creation     
+    dir: .
+  output_subdir: null  # No .hydra folder
   
 defaults:
   - method: ppo
   - env: tilthex_v1
-  - override hydra/job_logging: none  # Correct way to disable job logging
-  - override hydra/hydra_logging: none  # Correct way to disable hydra logging
+  - override hydra/job_logging: none
+  - override hydra/hydra_logging: none
   - _self_
 
-# Override any method/env settings below if needed
-# Random seed
+# Values below override the method and environment files
 SEED: 30
 
 # Optional path to a saved policy_params.msgpack for actor warm-start

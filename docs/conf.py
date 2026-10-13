@@ -8,6 +8,7 @@ copyright = "2026, Marco Maffeo"
 extensions = [
     "myst_parser",        # Markdown pages (the README files of the repository)
     "autoapi.extension",  # API reference read from the source code, without importing it
+    "sphinx.ext.napoleon",  # Google-style docstrings (Args:, Returns:)
 ]
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -24,7 +25,6 @@ autoapi_dirs = [
 autoapi_ignore = [
     "*tk3-tilthex-control*",  # interactive console script, not a module
     "*/.pixi/*",
-    "*/benchmark/*",
 ]
 autoapi_options = [
     "members",
@@ -40,7 +40,10 @@ autoapi_member_order = "groupwise"
 # --- Markdown -----------------------------------------------------------------
 myst_heading_anchors = 3
 # Links in the README files point to folders of the repository, not to pages of this site.
-suppress_warnings = ["myst.xref_missing", "myst.header", "autoapi.python_import_resolution"]
+suppress_warnings = [
+    "myst.xref_missing", "myst.header", "autoapi.python_import_resolution",
+    "ref.python",  # same attribute name in several environments
+]
 
 # --- HTML ----------------------------------------------------------------------
 html_theme = "furo"

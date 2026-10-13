@@ -1,4 +1,5 @@
 # @package _global_
+# Tilthex environment (the one of the thesis)
 
 ENV_NAME: "tilthex_v1"
 
@@ -11,7 +12,7 @@ ACTIVATION: "tanh"
 ANNEAL_LR: true
 GRU_HIDDEN_SIZE: 64
 
-# Overrides RL parameters
+# RL parameters
 SEED: 14
 LR: 0.001
 UPDATE_EPOCHS: 5

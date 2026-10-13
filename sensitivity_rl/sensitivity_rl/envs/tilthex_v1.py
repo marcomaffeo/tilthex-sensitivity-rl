@@ -1,6 +1,4 @@
-"""Tilthex-Sensitivity 
-JAX implementation of Tilthex OpenAI gym environment with added
-parametric sensitivity metric optimization."""
+"""Tilthex environment in JAX, with the parametric sensitivity used by SPPO."""
 
 from functools import partial
 from typing import Any, List
@@ -122,7 +120,7 @@ class EnvParams(environment.EnvParams):
 
 
 class TilthexV1(environment.Environment):
-    """JAX Compatible version of Tilthex-v1 target approaching."""
+    """Tilthex reaching a target position and attitude."""
 
     def __init__(self):
         self.type = ""
@@ -219,7 +217,7 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> tuple[jax.Array, EnvState, jax.Array, jax.Array, dict[Any, Any]]:
-        """Integrate pendulum ODE and return transition."""
+        """Integrate the Tilthex dynamics and return the transition."""
 
         key_step, key_noise, key_obs = jax.random.split(key, 3)
 
@@ -309,7 +307,7 @@ class TilthexV1(environment.Environment):
         action: int | float | jax.Array,
         params: EnvParams,
     ) -> ModelState:
-        """Core tilthex dynamics model with CoM placed at the geometric center."""
+        """Tilthex rigid-body dynamics; the CoM offset enters through the allocation matrix."""
 
         u = jnp.clip(action, params.min_input, params.max_input)
    
@@ -354,13 +352,10 @@ class TilthexV1(environment.Environment):
     def reset_env(
         self, key: jax.Array, params: EnvParams
     ) -> tuple[jax.Array, EnvState]:
-        """Reset environment state by sampling theta, theta_dot.
-            key_pos: drone initial position
-            key_att: drone initial attitude
-            key_vel: drone initial velocity
-            key_omega: drone initial angular velocity
-            key_target_pos: target position
-            key_target_att: target attitude
+        """Reset the environment by sampling the initial state and the target.
+
+        Separate keys are drawn for the initial position, attitude, linear and
+        angular velocity, the target position and attitude, and the observation noise.
         """
         key, key_pos, key_att, key_vel, key_omega, key_target_pos, key_target_att, key_obs = jax.random.split(key, 8)
         

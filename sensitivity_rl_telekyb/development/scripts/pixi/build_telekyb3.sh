@@ -5,11 +5,6 @@ set -e
 cd $CONDA_PREFIX
 cd src
 
-# TODO:
-# compiler options ? will include them in binaries packaques
-# ${CFLAGS:=-g -O3 -Wall}
-# ${CXXFLAGS:=${CFLAGS}}
-
 # openrobots-idl: common genom IDL
 echo "=========================================="
 echo "Starting build of openrobots-idl ..."
@@ -52,6 +47,9 @@ autoreconf -vif
 mkdir -p build && cd build
 ../configure --prefix=$CONDA_PREFIX
 make install -j${CPU_COUNT}
+
+# The middleware and the components below are installed with robotpkg
+# (see the README); the commented blocks build them from source instead.
 
 # # pocolibs middleware
 # echo "=========================================="

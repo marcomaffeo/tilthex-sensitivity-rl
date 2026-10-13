@@ -7,15 +7,14 @@ import jax.numpy as jnp
 class TanhTransformedNormal:
     """Gaussian policy with tanh squashing for bounded action spaces.
 
-    Samples are drawn as a = tanh(u), u ~ N(loc, scale), giving a ∈ (-1, 1)^d.
-    The log-probability is corrected for the change of variables:
+    Samples are a = tanh(u) with u ~ N(loc, scale), so a lies in (-1, 1)^d.
+    The log-probability includes the change of variables:
 
-        log π(a) = log N(arctanh(a); loc, scale) - Σ_i log(1 - a_i²)
+        log pi(a) = log N(arctanh(a); loc, scale) - sum_i log(1 - a_i^2)
 
-    Attributes:
-        loc  : pre-tanh mean μ — kept as an attribute for sensitivity Jacobians
-               that need d(tanh(μ))/dθ via jax.jacfwd over the network.
-        scale: per-dimension standard deviations σ.
+    ``loc`` is the pre-tanh mean mu, kept as an attribute for the sensitivity
+    Jacobians, which differentiate tanh(mu) through the network; ``scale`` holds
+    the per-dimension standard deviations sigma.
     """
 
     def __init__(self, loc: jax.Array, scale: jax.Array):
@@ -32,7 +31,7 @@ class TanhTransformedNormal:
         eps = 1e-6
         a_safe = jnp.clip(a, -1.0 + eps, 1.0 - eps)
         u = jnp.arctanh(a_safe)
-        # log N(arctanh(a); loc, scale) - Σ log(1 - a_i²)
+        # log N(arctanh(a); loc, scale) - sum log(1 - a_i^2)
         return self._normal.log_prob(u) - jnp.sum(
             jnp.log(1.0 - a_safe ** 2 + eps), axis=-1
         )
@@ -42,15 +41,15 @@ class TanhTransformedNormal:
         return jnp.tanh(self.loc)
 
     def mean(self) -> jax.Array:
-        """Approximate mean tanh(μ) — exact only when σ → 0."""
+        """Approximate mean tanh(mu), exact in the limit sigma -> 0."""
         return jnp.tanh(self.loc)
 
     def entropy(self) -> jax.Array:
-        """Gaussian entropy H(N(loc, scale)) as a proxy exploration bonus.
+        """Gaussian entropy H(N(loc, scale)), used as the exploration bonus.
 
-        The true entropy H(tanh(N)) = H(N) - E[Σ log(1-tanh²(u_i))] ≤ H(N).
-        Using H(N) is a differentiable upper-bound that preserves the exploration
-        incentive without requiring Monte Carlo estimation.
+        The entropy of the squashed distribution is H(N) - E[sum log(1 - tanh^2(u_i))],
+        which is at most H(N). H(N) is a differentiable upper bound and needs
+        no Monte Carlo estimate.
         """
         return self._normal.entropy()
 

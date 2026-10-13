@@ -1,2 +1,2 @@
 metric,ppo_nom,ppo_pert,D_ppo,sppo_nom,sppo_pert,D_sppo,delta_nom_pct,delta_pert_pct,delta_D_pct,delta_abs_ppo,delta_abs_sppo,win_nom,win_pert,win_D,win_delta
-Total variation - tutti i motori,588.1883,562.0594,0.955577,586.0489,606.6621,1.035173,-0.363727,7.935585,8.329609,-26.1289,20.6132,~,PPO,PPO,SPPO
+Total variation - all motors,588.1883,562.0594,0.955577,586.0489,606.6621,1.035173,-0.363727,7.935585,8.329609,-26.1289,20.6132,~,PPO,PPO,SPPO

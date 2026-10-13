@@ -3,8 +3,8 @@
 Sensitivity-aware reinforcement learning for the robust control of a fully actuated aerial robot.
 
 This repository contains the code and the experimental data of the MSc thesis
-*Sensitivity-aware Reinforcement Learning for robust control of Aerial Robots*
-(MSc in Robotics Engineering, University of Naples Federico II), developed at IRISA, Rennes.
+*Sensitivity-Aware Reinforcement Learning for Fully Actuated Aerial Robot Control*
+(MSc in Automation and Robotics Engineering, University of Naples Federico II), developed at IRISA, Rennes.
 
 The platform is the **Tilthex**, a hexarotor with tilted propellers, which makes it fully actuated.
 Two policies are trained on the nominal model of the vehicle and compared:

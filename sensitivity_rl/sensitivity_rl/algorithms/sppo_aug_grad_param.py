@@ -18,7 +18,6 @@ from envs.wrappers import (
     SensitivityWrapper,
     ComputeSensitivityReward,
     DomainRandomizationWrapper,
-    MujocoSensitivityWrapper,
     ResetEnvWrapper,
     LogWrapper,
     VecEnv,
@@ -40,10 +39,7 @@ def wrap_env(env, config):
         penalty = config.get("CONSTRAINT_PENALTY", 1.0)
         env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
-    if env.type == "mujoco":
-        env = MujocoSensitivityWrapper(env, expose_jacobians=True)
-    else:
-        env = SensitivityWrapper(env, expose_jacobians=True)
+    env = SensitivityWrapper(env, expose_jacobians=True)
     
     # Store W in config so it can be used in the loss function
     config["SENS_W"] = env.W

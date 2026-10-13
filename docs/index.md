@@ -1,7 +1,7 @@
 # Tilthex Sensitivity RL
 
 Documentation of the code of the MSc thesis
-*Sensitivity-aware Reinforcement Learning for robust control of Aerial Robots*.
+*Sensitivity-Aware Reinforcement Learning for Fully Actuated Aerial Robot Control*.
 
 The guides are the README files of the repository; the API reference is generated from the source code.
 

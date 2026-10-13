@@ -101,7 +101,7 @@ class Pendulum(environment.Environment):
 
         done = self.is_terminal(env_state, params)
         return (
-            self._obs_from_model_state(state),
+            self._obs_from_model_state(state_next),
             env_state,
             reward,
             done,

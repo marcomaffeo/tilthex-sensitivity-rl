@@ -20,7 +20,6 @@ from envs.wrappers import (
     ClipAction,
     ResetEnvWrapper,
     SensitivityWrapper,
-    MujocoSensitivityWrapper,
     ConstraintEvalWrapper,
     ConstraintPenaltyWrapper,
 )
@@ -39,10 +38,7 @@ def wrap_env(env, config):
 
     # Optional sensitivity wrapper (for online sensitivity tracking, no policy modification)
     if config.get("SENSITIVITY", False):
-        if getattr(env, "type", "") == "mujoco":
-            env = MujocoSensitivityWrapper(env)
-        else:
-            env = SensitivityWrapper(env)
+        env = SensitivityWrapper(env)
     # if config.get("DOMAIN_RANDOMIZATION", False):
     env = DomainRandomizationWrapper(env, env.default_params)
     # else:

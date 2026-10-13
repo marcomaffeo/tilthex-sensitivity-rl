@@ -146,6 +146,9 @@ Set with `--ros-args -p name:=value`.
 | `frequency_hz` | `100.0` | control frequency |
 | `policy_duration` | `1000.0` | maximum duration of a policy flight [s] |
 | `takeoff_height`, `takeoff_ramp_rate_mps` | `0.5`, `0.2` | takeoff reference and its ramp |
+| `mission_takeoff_xy_ref_enabled`, `mission_takeoff_x_ref`, `mission_takeoff_y_ref` | `false`, `0.0`, `0.0` | fixed x, y of the takeoff reference instead of the pose on the ground |
+| `mission_land_z_ref_enabled`, `mission_land_z_ref` | `false`, `0.0` | fixed landing height instead of the floor height read at arming |
+| `mission_attitude_ref_enabled`, `mission_roll_ref`, `mission_pitch_ref`, `mission_yaw_ref` | `false`, `0.0`, `0.0`, `0.0` | fixed attitude reference for the policy takeoff and landing instead of level with the current yaw |
 | `custom_log_dir` | empty | log folder (default `logs/<policy>_<timestamp>/`) |
 | `enable_action_bias`, `drone_mass_kg`, `tilt_angle_deg` | `false`, `2.950`, `20.0` | optional bias of the actions around the hover thrust |
 | `skip_plots`, `plot_formats` | `false`, `['png']` | plots saved with each flight |

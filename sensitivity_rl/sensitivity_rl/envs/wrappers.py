@@ -489,27 +489,6 @@ class SensitivityWrapper(GymnaxWrapper):
         return jax.flatten_util.ravel_pytree(obs)[0]
 
 
-class MujocoSensitivityWrapper(SensitivityWrapper):
-    def __init__(self, env, config=None, expose_jacobians: bool = False):
-        super().__init__(env, config=config, expose_jacobians=expose_jacobians)
-
-    # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
-    def _step_to_state_wrapped(self, key, env_state, state_flat, action, params_flat):
-        state = self.state_unravel(state_flat)
-        params = self.param_unravel(params_flat)
-        next_state = self._env.step_dynamics(
-            key, env_state.replace(state=state), action, params
-        )
-        return jax.flatten_util.ravel_pytree(next_state)[0]
-
-    def _step_to_obs_wrapped(self, key, env_state, state_flat, action, params_flat):
-        state = self.state_unravel(state_flat)
-        params = self.param_unravel(params_flat)
-        env_state = env_state.replace(state=state)
-        obs = self._env.get_obs(env_state, key, params)
-        return jax.flatten_util.ravel_pytree(obs)[0]
-
-
 class ComputeSensitivityReward(GymnaxWrapper):
     def __init__(self, env):
         super().__init__(env)
@@ -998,25 +977,5 @@ class SensitivityOffWrapper(GymnaxWrapper):
             key, env_state, action, params
         )
         next_state_flat = jax.flatten_util.ravel_pytree(env_state.state)[0]
-        obs_flat = jax.flatten_util.ravel_pytree(obs)[0]
-        return next_state_flat, obs_flat
-
-
-class MujocoSensitivityOffWrapper(SensitivityOffWrapper):
-    def __init__(self, env, regularization_weight=0.0, add_sensitivity_to_info=False):
-        super().__init__(env, regularization_weight, add_sensitivity_to_info)
-
-    # We need to wrap these functions to convert from flat state/param to pytree and differentiate through env.step
-    def _step_to_state_and_obs_wrapped(
-        self, key, env_state, state_flat, action, params_flat
-    ):
-        state = self.state_unravel(state_flat)
-        params = self.param_unravel(params_flat)
-
-        next_state = self._env._step_dynamics(key, state, action, params)
-        dummy_env_state = env_state.replace(state=next_state)
-        obs = self._env.get_obs(dummy_env_state, key, params)
-
-        next_state_flat = jax.flatten_util.ravel_pytree(next_state)[0]
         obs_flat = jax.flatten_util.ravel_pytree(obs)[0]
         return next_state_flat, obs_flat

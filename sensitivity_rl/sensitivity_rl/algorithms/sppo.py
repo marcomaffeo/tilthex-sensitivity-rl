@@ -18,7 +18,6 @@ from envs.wrappers import (
     AddSensitivityToReward,
     ComputeSensitivityReward,
     DomainRandomizationWrapper,
-    MujocoSensitivityWrapper,
     ResetEnvWrapper,
     LogWrapper,
     VecEnv,
@@ -39,10 +38,7 @@ def wrap_env(env, config):
         penalty = config.get("CONSTRAINT_PENALTY", 1.0)
         env = ConstraintPenaltyWrapper(env, penalty=penalty)
 
-    if env.type == "mujoco":
-        env = MujocoSensitivityWrapper(env)
-    else:
-        env = SensitivityWrapper(env)
+    env = SensitivityWrapper(env)
 
     env = ComputeSensitivityReward(env)  # Computes sensitivity norm but does not modify reward
     # env = AddSensitivityToReward(env, config["SENSITIVITY_REGULARIZATION_WEIGHT"])  # Adds sensitivity penalty directly to reward

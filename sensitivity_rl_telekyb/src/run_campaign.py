@@ -11,7 +11,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 TASK_TYPE = "hovering"  # "point_to_point" or "hovering"                   
-POLICY_NAME = "SPPO1"                               
+POLICY_DIR = "SPPO/SPPO_14"   # policy folder, relative to configs/policy/
+POLICY_NAME = "SPPO_14"       # label used in output folder and file names
 TARGET_POSE = [1.0, 0.5, 1.2, 0.0, 0.0, 15.0]      
 TEST_DURATION = 4.0
 
@@ -122,7 +123,7 @@ def run_test(test_name, overrides, target_log_dir, skip_plots=False, npz_name="e
         time.sleep(10) 
 
         print(f"[START] Policy Node ({POLICY_NAME} -> Saving {npz_name} to {target_log_dir})...")
-        policy_dir_path = f"configs/policy/{POLICY_NAME}"
+        policy_dir_path = f"configs/policy/{POLICY_DIR}"
         ros_cmd = [
             "pixi", "run", "policy-control-tilthex", 
             "--ros-args", 

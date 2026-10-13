@@ -553,7 +553,7 @@ def run_rollouts_for_run(run_dir: Path, rcfg: RolloutConfig) -> None:
 
     savez_path = run_dir / "rollout_data.npz"
     np.savez(savez_path, **save_dict)
-    print(f"[rollouts] Dati unificati salvati in -> {savez_path}")
+    print(f"[rollouts] Unified data saved in -> {savez_path}")
 
     # (Opzionale) Plot rapido originale
     if rcfg.plot:

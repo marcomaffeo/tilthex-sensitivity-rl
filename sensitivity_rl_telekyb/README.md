@@ -43,6 +43,9 @@ pixi run checkout     # clones openrobots-idl, genom3, genomix, python-genomix f
 pixi run build
 ```
 
+`pixi run checkout` clones with the `git://` protocol (port 9418), which some institutional networks block;
+in that case run it from another network.
+
 3. **TeleKyb3 components**: follow the official
    [TeleKyb3 installation guide](https://git.openrobots.org/projects/telekyb3/pages/index)
    (*Software – Installation*: installation with robotpkg, then *Environment setup*).
@@ -154,6 +157,15 @@ same as in simulation; `src/tk3_common.py` switches automatically to the Qualisy
 serial link of the flight controller. The address of the motion-capture server and the serial device are
 set in `src/tk3_common.py`.
 
+Before the first flight, on the onboard computer:
+
+- clone this repository and run the [installation](#installation) steps there (pixi resolves the
+  `linux-aarch64` environment, without Gazebo);
+- install the TeleKyb3 `telekyb3` package set with robotpkg (the `simulation` set is not needed);
+- check in `src/tk3_common.py` the address of the Qualisys server and the serial device of the flight
+  controller, which depend on the flight arena and on the vehicle;
+- copy the policy to fly into `configs/policy/`.
+
 Typical session, one SSH terminal each:
 
 1. `pixi run components` — start the components;
@@ -168,14 +180,15 @@ The code flown in the thesis campaign (May 2026) is at the git tag `flight-campa
 `src/run_campaign.py` runs a policy many times in Gazebo, each time on a Tilthex model with randomly perturbed
 parameters (mass, inertia, centre of mass, propeller tilt, thrust coefficient), written into
 `models/mrsim-tilthex-laas/tilthex_laas.sdf` from the template. It starts Gazebo, the components and the node by
-itself. The campaign is set by the constants at the top of the file (`TASK_TYPE`, `POLICY_NAME`,
+itself. The campaign is set by the constants at the top of the file (`TASK_TYPE`, `POLICY_DIR`, `POLICY_NAME`,
 `TARGET_POSE`, `NUM_MC_RUNS`, ranges of the parameters):
 
 ```bash
 pixi run python src/run_campaign.py      # results in campaigns/<policy>_campaign_<timestamp>/
 ```
 
-`POLICY_NAME` is a path relative to `configs/policy/` (for example `SPPO/SPPO_14`).
+`POLICY_DIR` is the policy folder relative to `configs/policy/` (default `SPPO/SPPO_14`); `POLICY_NAME` is the
+label used in the names of the output files.
 
 ## Remote visualisation
 

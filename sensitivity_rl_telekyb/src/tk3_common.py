@@ -20,6 +20,8 @@ def setup_plugin_paths(g):
         paths.append(os.path.join(os.environ['CONDA_PREFIX'], 'lib/genom/pocolibs/plugins'))
         
     paths.append('/opt/openrobots/lib/genom/pocolibs/plugins')
+    # $HOME/openrobots is the robotpkg prefix recommended by the TeleKyb3 installation guide
+    paths.append(os.path.expanduser('~/openrobots/lib/genom/pocolibs/plugins'))
 
     # Fallback paths for the real hardware workspace
     if IS_REAL_ROBOT:
@@ -64,10 +66,10 @@ class TK3Components_tilthex:
         self.rotorcraft.set_imu_filter({'gfc': [20, 20, 20], 'afc': [5, 5, 5], 'mfc': [20, 20, 20]})
         self.rotorcraft.connect_port({'local': 'rotor_input', 'remote': 'nhfc/rotor_input'})
 
-        # 28/09/2026: massa e offset del baricentro allineati al modello CAD
-        # (models/mrsim-tilthex-laas/tilthex_laas.sdf) e all'ambiente di training.
-        # Prima erano mass=2.936 e cx=cy=cz=0. La campagna di voli riportata in tesi
-        # e' stata volata con i valori precedenti.
+        # 28/09/2026: mass and centre-of-mass offset aligned with the CAD model
+        # (models/mrsim-tilthex-laas/tilthex_laas.sdf) and with the training environment.
+        # Before they were mass=2.936 and cx=cy=cz=0; the flights of the thesis used those
+        # values (nhfc is not active while the policy flies, so they did not affect them).
         self.nhfc.set_gtmrp_geom({
             'rotors': 6, 
             'cx': 0.000122973, 'cy': 0.00013006, 'cz': 0.0248586,

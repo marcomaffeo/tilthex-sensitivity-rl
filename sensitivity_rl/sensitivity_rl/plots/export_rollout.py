@@ -189,7 +189,7 @@ def generate_plots(data_dict, output_dir: Path, base_name="plot", nominal_dict=N
     fig_act.savefig(output_dir / f"{base_name}_inputs.{ext}", format=ext, transparent=True) 
 
     plt.close('all') 
-    print(f"[{base_name.upper()}] Plot salvati in: {output_dir}") 
+    print(f"[{base_name.upper()}] Plots saved in: {output_dir}") 
 
 def extract_data_dict(data, suffix):
     """Estrae i dizionari specifici (nom/pert) dal file unificato."""
@@ -213,17 +213,17 @@ if __name__ == "__main__":
 
     data_path = Path(args.data) 
     if not data_path.exists(): 
-        print(f"Errore: File {data_path} non trovato.") 
+        print(f"Error: file {data_path} not found.") 
         exit(1) 
 
-    print(f"Caricamento dati unificati da {data_path}...") 
+    print(f"Loading unified data from {data_path}...") 
     main_data = np.load(data_path, allow_pickle=True) 
     
     base_outdir = data_path.parent / "exported_plots"
     
-    # Estrai dati Nominali
+    # Nominal data
     nom_dict = extract_data_dict(main_data, "nom")
-    # Estrai dati Perturbati
+    # Perturbed data
     pert_dict = extract_data_dict(main_data, "pert")
     
     if nom_dict is not None:
@@ -231,7 +231,7 @@ if __name__ == "__main__":
         print("Generazione plot nominali...")
         generate_plots(nom_dict, out_nom, base_name="nominal", nominal_dict=None, ext=args.format)
     else:
-        print("Dati nominali non trovati nel file .npz.")
+        print("Nominal data not found in the .npz file.")
 
     if pert_dict is not None:
         out_pert = base_outdir / "perturbed"
@@ -239,5 +239,5 @@ if __name__ == "__main__":
         # Passiamo il nom_dict per creare l'overlay arancione nei grafici perturbati
         generate_plots(pert_dict, out_pert, base_name="perturbed", nominal_dict=nom_dict, ext=args.format)
     else:
-        print("Dati perturbati non trovati nel file .npz.")
+        print("Perturbed data not found in the .npz file.")
         

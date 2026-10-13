@@ -88,18 +88,8 @@ class EnvParams(environment.EnvParams):
             0.0025, 0.0025, 0.0025, 0.0025,     # Quaternion (w, x, y, z)
             0.2,  0.2,  0.2,                    # Angular Vel (wx, wy, wz) [rad/s]
             0.0025, 0.0025, 0.0025, 0.0025      # Quaternion Target Error
-        ]) / 3.0                                # Sigma values for observation noise 
+        ]) / 3.0                                # Sigma values for observation noise (zeros: no noise)
     )   
-    # obs_noise_stds: jax.Array = struct.field(
-    #     pytree_node=False, 
-    #     default_factory=lambda: jnp.array([
-    #         0.00, 0.00, 0.00,               # Position (x, y, z) [m]
-    #         0.0, 0.0, 0.0,                   # Velocity (vx, vy, vz) [m/s]
-    #         0.00, 0.00, 0.0, 0.00,     # Quaternion (w, x, y, z)
-    #         0.0,  0.0,  0.0,                    # Angular Vel (wx, wy, wz) [rad/s]
-    #         0.00, 0.00, 0.00, 0.00      # Quaternion Target Error
-    #     ]) / 3.0                                # Sigma values for observation noise 
-    # )                                                                                      
 
     gain_stab: float = struct.field(pytree_node=False, default=0.2)             # reward gain for angular velocity penalty to encourage stability
     gain_att: float = struct.field(pytree_node=False, default=2.0)              # reward gain for attitude error to encourage correct orientation

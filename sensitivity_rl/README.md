@@ -30,7 +30,7 @@ About 3 minutes on a laptop CPU. The evaluation return printed during training g
 
 | Name | Description |
 |---|---|
-| `tilthex_v1` | The Tilthex of the thesis: hexarotor with tilted propellers, fully actuated, six rotor forces as actions, quaternion attitude, sensitivity with respect to mass, inertia, centre of mass, propeller tilt angles, thrust coefficient and actuation delay. Model parameters from the LAAS Tilthex. |
+| `tilthex_v1` | The Tilthex of the thesis: hexarotor with tilted propellers, fully actuated, six rotor forces as actions, quaternion attitude, sensitivity with respect to mass, inertia, centre of mass, propeller tilt angles, thrust coefficient and actuation delay. Gaussian noise on the observations, with the standard deviations in `obs_noise_stds` (`EnvParams` in `envs/tilthex_v1.py`; zeros train without noise). Model parameters from the LAAS Tilthex. |
 | `drone_v3` | Generic quadrotor (Mikrokopter): uncertain mass, inertia and centre of mass, first-order actuator dynamics. |
 | `pendulum` | Pendulum swing-up, the minimal example. |
 
